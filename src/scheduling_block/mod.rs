@@ -3,7 +3,7 @@
 //! A [`SchedulingBlock`] groups related tasks and captures ordering
 //! constraints between them as a directed acyclic graph (DAG).
 //! Nodes carry [`TaskId`]s; edges carry [`Dependency`] labels that
-//! express the "A must be scheduled after B" relation.
+//! express ordering as predecessor -> successor.
 
 pub mod serde;
 pub mod task;
@@ -16,8 +16,6 @@ use rayon::prelude::*;
 use std::collections::HashMap;
 
 /// The only dependency kind: strict ordering.
-///
-/// `DependsOn(A, B)` reads as "task A must be scheduled *after* task B".
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Dependency {
     DependsOn,
@@ -57,7 +55,9 @@ impl SchedulingBlock {
         }
     }
 
-    /// Add an ordering edge `from` -> `to` with label `dep`.
+    /// Add an ordering edge `from -> to`.
+    ///
+    /// The `from` task is the predecessor and must be scheduled before `to`.
     ///
     /// Both tasks are auto-registered if not already present.
     ///

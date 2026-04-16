@@ -135,9 +135,9 @@ fn block_topological_order() {
     block.add_task(a);
     block.add_task(b);
     block.add_task(c);
-    // c depends on b, b depends on a → expected order: a, b, c
-    block.add_dependency(b, a, Dependency::DependsOn).unwrap();
-    block.add_dependency(c, b, Dependency::DependsOn).unwrap();
+    // a -> b -> c → expected order: a, b, c
+    block.add_dependency(a, b, Dependency::DependsOn).unwrap();
+    block.add_dependency(b, c, Dependency::DependsOn).unwrap();
     let order = block.topological_order().unwrap();
     let pos_a = order.iter().position(|&t| t == a).unwrap();
     let pos_b = order.iter().position(|&t| t == b).unwrap();
@@ -278,9 +278,9 @@ fn block_dependency_ordering_respected() {
     let mut block = SchedulingBlock::new(SchedulingBlockId(10));
     block.add_task(TaskId(1));
     block.add_task(TaskId(2));
-    // task 2 depends on task 1: place task 1 first
+    // task 1 must be before task 2
     block
-        .add_dependency(TaskId(2), TaskId(1), Dependency::DependsOn)
+        .add_dependency(TaskId(1), TaskId(2), Dependency::DependsOn)
         .unwrap();
     schedule.add_block(block);
 
@@ -306,9 +306,9 @@ fn block_dependency_ordering_rejected_when_predecessor_unplaced() {
     let mut block = SchedulingBlock::new(SchedulingBlockId(10));
     block.add_task(TaskId(1));
     block.add_task(TaskId(2));
-    // task 2 depends on task 1
+    // task 1 must be before task 2
     block
-        .add_dependency(TaskId(2), TaskId(1), Dependency::DependsOn)
+        .add_dependency(TaskId(1), TaskId(2), Dependency::DependsOn)
         .unwrap();
     schedule.add_block(block);
 
