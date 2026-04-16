@@ -1,14 +1,10 @@
 //! Constraint expression tree.
 
-use crate::error::ScheduleError;
 use crate::task::IcrsTarget;
 use crate::time::{Period, PeriodSet};
 use siderust::coordinates::centers::Geodetic;
 use siderust::coordinates::frames::ECEF;
 use siderust::time::MJD;
-
-/// The outcome of a single constraint check.
-pub type ConstraintResult = Result<PeriodSet<MJD>, ScheduleError>;
 
 /// An atomic, composable scheduling constraint.
 ///
@@ -21,7 +17,7 @@ pub trait Constraint: Send + Sync + std::fmt::Debug {
         timeline: &Period<MJD>,
         location: Option<&Geodetic<ECEF>>,
         target: Option<&IcrsTarget>,
-    ) -> ConstraintResult;
+    ) -> PeriodSet<MJD>;
 }
 
 /// A logical constraint expression tree.
@@ -53,23 +49,22 @@ impl ConstraintExpr {
         timeline: &Period<MJD>,
         location: Option<&Geodetic<ECEF>>,
         target: Option<&IcrsTarget>,
-    ) -> ConstraintResult {
+    ) -> PeriodSet<MJD> {
         match self {
-        location: Option<&Geodetic<ECEF>>,
             ConstraintExpr::Atom(c) => c.check(timeline, location, target),
 
             ConstraintExpr::Union(children) => {
                 let mut out = PeriodSet::new();
                 for child in children {
-                    let set = child.check(timeline, location, target)?;
+                    let set = child.check(timeline, location, target);
                     out = out.union(&set);
                 }
-                Ok(out)
+                out
             }
 
             ConstraintExpr::Intersection(children) => {
                 if children.is_empty() {
-                    return Ok(PeriodSet::from_periods(vec![Period::new(
+                    return PeriodSet::from_periods(vec![Period::new(
                         timeline.start,
                         timeline.end,
                     )]));
@@ -79,17 +74,17 @@ impl ConstraintExpr {
                 let mut out = iter
                     .next()
                     .expect("checked non-empty")
-                    .check(timeline, location, target)?;
+                    .check(timeline, location, target);
 
                 for child in iter {
-                    let set = child.check(timeline, location, target)?;
+                    let set = child.check(timeline, location, target);
                     out = out.intersection(&set);
                     if out.is_empty() {
                         break;
                     }
                 }
 
-                Ok(out)
+                out
             }
         }
     }

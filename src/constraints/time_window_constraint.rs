@@ -1,8 +1,6 @@
-use super::expr::{Constraint, ConstraintResult};
-use crate::period::Period;
-use crate::period_set::PeriodSet;
+use super::expr::Constraint;
 use crate::task::IcrsTarget;
-use crate::time;
+use crate::time::{Period, PeriodSet};
 use siderust::coordinates::centers::Geodetic;
 use siderust::coordinates::frames::ECEF;
 use siderust::time::MJD;
@@ -10,7 +8,7 @@ use siderust::time::MJD;
 /// The candidate interval must be fully contained within `[start, end)`.
 #[derive(Debug, Clone)]
 pub struct TimeConstraint {
-    pub window: time::Period<MJD>,
+    pub window: Period<MJD>,
 }
 
 pub type TimeWindowConstraint = TimeConstraint;
@@ -21,11 +19,11 @@ impl Constraint for TimeConstraint {
         timeline: &Period<MJD>,
         _location: Option<&Geodetic<ECEF>>,
         _target: Option<&IcrsTarget>,
-    ) -> ConstraintResult {
+    ) -> PeriodSet<MJD> {
         if let Some(overlap) = self.window.intersection(timeline) {
-            Ok(PeriodSet::from_periods(vec![overlap]))
+            PeriodSet::from_periods(vec![overlap])
         } else {
-            Ok(PeriodSet::new())
+            PeriodSet::new()
         }
     }
 }

@@ -5,7 +5,10 @@
 //! Nodes are [`TaskId`]s; edges represent the [`Dependency::DependsOn`]
 //! relation ("A depends on B" means B must be placed before A).
 
+pub mod task;
+
 use crate::error::ScheduleError;
+use self::task::Task;
 use petgraph::algo::toposort;
 use petgraph::stable_graph::StableDiGraph;
 use std::collections::HashMap;

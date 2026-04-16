@@ -21,7 +21,7 @@ mod types;
 
 pub use azimuth_constraint::AzimuthConstraint;
 pub use altitude_constraint::AltitudeConstraint;
-pub use expr::{Constraint, ConstraintExpr, ConstraintResult};
+pub use expr::{Constraint, ConstraintExpr};
 pub use moon_altitude_constraint::MoonAltitudeConstraint;
 pub use moon_separation_constraint::MoonSeparationConstraint;
 pub use night_constraint::NightConstraint;

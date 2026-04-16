@@ -1,5 +1,4 @@
-use super::expr::{Constraint, ConstraintResult};
-use crate::error::ScheduleError;
+use super::expr::Constraint;
 use crate::task::IcrsTarget;
 use crate::time::{Period, PeriodSet};
 use siderust::bodies::solar_system::Sun;
@@ -25,17 +24,18 @@ impl Constraint for NightConstraint {
         timeline: &Period<MJD>,
         location: Option<&Geodetic<ECEF>>,
         _target: Option<&IcrsTarget>,
-    ) -> ConstraintResult {
-        let site = location.ok_or_else(|| {
-            ScheduleError::ConstraintViolation(
-                "missing location for night constraint evaluation".into(),
-            )
-        })?;
+    ) -> PeriodSet<MJD> {
+        assert!(
+            location.is_some(),
+            "missing location for night constraint evaluation"
+        );
+
+        let site = location.unwrap();
 
         let window = siderust::time::Interval::new(timeline.start, timeline.end);
         let threshold = qtty::Degrees::from(self.twilight);
         let periods = Sun.below_threshold(*site, window, threshold);
 
-        Ok(PeriodSet::from_periods(periods))
+        PeriodSet::from_periods(periods)
     }
 }
