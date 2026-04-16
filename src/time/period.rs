@@ -1,4 +1,4 @@
-use super::{TempochPeriod, TimeScale};
+use super::{interval, TempochPeriod, TimeScale};
 
 pub type Period<S> = TempochPeriod<S>;
 
@@ -17,12 +17,12 @@ pub trait PeriodExt: Sized {
 impl<S: TimeScale> PeriodExt for Period<S> {
     #[inline]
     fn overlaps(&self, other: &Self) -> bool {
-        self.start < other.end && other.start < self.end
+        interval::overlaps(self, other)
     }
 
     #[inline]
     fn touches(&self, other: &Self) -> bool {
-        self.end == other.start || other.end == self.start
+        interval::touches(self, other)
     }
 
     #[inline]
@@ -32,13 +32,6 @@ impl<S: TimeScale> PeriodExt for Period<S> {
 
     #[inline]
     fn merge(&self, other: &Self) -> Option<Self> {
-        if self.overlaps(other) || self.touches(other) {
-            Some(Period::new(
-                self.start.min(other.start),
-                self.end.max(other.end),
-            ))
-        } else {
-            None
-        }
+        interval::merge_periods(self, other)
     }
 }

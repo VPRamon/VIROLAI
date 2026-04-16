@@ -4,44 +4,28 @@
 //! - a set of [`Task`]s keyed by [`TaskId`]
 //! - a set of [`SchedulingBlock`]s keyed by [`SchedulingBlockId`]
 //! - a set of [`TaskPlacement`]s keyed by [`TaskId`]
-//! - an [`IntervalTree<JD>`](crate::interval_tree::IntervalTree) for fast
+//! - an [`IntervalTree<JD>`](crate::time::IntervalTree) for fast
 //!   overlap queries
 //!
 //! ## Interval index
 //!
-//! The interval index is an [`IntervalTree<JD>`](crate::interval_tree::IntervalTree)
+//! The interval index is an [`IntervalTree<JD>`](crate::time::IntervalTree)
 //! that stores each placed task as a [`Period<JD>`](tempoch::Period) typed
 //! interval.  Overlap queries run in O(log n + k) where k is the number of
 //! results, using binary-search start-pruning and suffix-max-end pruning.
 
+mod task_placement;
+
+pub use task_placement::TaskPlacement;
+
 use crate::error::ScheduleError;
-use crate::interval_tree::IntervalTree;
 use crate::scheduling_block::SchedulingBlock;
 use crate::task::Task;
-use crate::time::{Period, PeriodSet, SchedulingBlockId, TaskId, TimeInterval, TimePoint, JD};
+use crate::time::{IntervalTree, Period, PeriodSet, SchedulingBlockId, TaskId, TimeInterval, JD};
 use siderust::coordinates::centers::Geodetic;
 use siderust::coordinates::frames::ECEF;
 use siderust::time::MJD;
 use std::collections::HashMap;
-
-// ─── TaskPlacement ───────────────────────────────────────────────────────────
-
-/// The concrete scheduled slot for a task.
-#[derive(Debug, Clone)]
-pub struct TaskPlacement {
-    pub task_id: TaskId,
-    pub start: TimePoint,
-    pub end: TimePoint,
-    /// The scheduling block this placement belongs to, if any.
-    pub block_id: Option<SchedulingBlockId>,
-}
-
-impl TaskPlacement {
-    /// Convenience: return the interval `[start, end)` as a [`Period<JD>`].
-    pub fn interval(&self) -> TimeInterval {
-        TimeInterval::new(self.start, self.end)
-    }
-}
 
 // ─── Schedule ────────────────────────────────────────────────────────────────
 

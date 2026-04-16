@@ -1,5 +1,4 @@
-use super::{Period, PeriodExt, Time, TimeScale};
-use std::cmp::Ordering;
+use super::{interval, Period, Time, TimeScale};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct PeriodSet<S: TimeScale> {
@@ -19,7 +18,7 @@ impl<S: TimeScale> PeriodSet<S> {
 
 	pub fn from_periods(periods: Vec<Period<S>>) -> Self {
 		Self {
-			periods: Self::normalize(periods),
+			periods: interval::normalize_periods(periods),
 		}
 	}
 
@@ -45,8 +44,7 @@ impl<S: TimeScale> PeriodSet<S> {
 			return false;
 		}
 
-		let p = self.periods[idx - 1];
-		t < p.end
+		interval::contains_point(&self.periods[idx - 1], t)
 	}
 
 	pub fn overlaps(&self, period: Period<S>) -> bool {
@@ -55,105 +53,25 @@ impl<S: TimeScale> PeriodSet<S> {
 			return false;
 		}
 
-		self.periods[idx - 1].overlaps(&period)
+		interval::overlaps(&self.periods[idx - 1], &period)
 	}
 
 	pub fn insert(&mut self, period: Period<S>) {
 		let mut all = std::mem::take(&mut self.periods);
 		all.push(period);
-		self.periods = Self::normalize(all);
+		self.periods = interval::normalize_periods(all);
 	}
 
 	pub fn intersection(&self, other: &Self) -> Self {
-		let mut out = Vec::new();
-		let mut i = 0;
-		let mut j = 0;
-
-		while i < self.periods.len() && j < other.periods.len() {
-			let a = self.periods[i];
-			let b = other.periods[j];
-
-			if let Some(intersection) = a.intersects(&b) {
-				out.push(intersection);
-			}
-
-			if a.end <= b.end {
-				i += 1;
-			} else {
-				j += 1;
-			}
+		Self {
+			periods: interval::intersection_periods(&self.periods, &other.periods),
 		}
-
-		Self { periods: out }
 	}
 
 	pub fn union(&self, other: &Self) -> Self {
-		let mut out = Vec::with_capacity(self.periods.len() + other.periods.len());
-		let mut i = 0;
-		let mut j = 0;
-
-		while i < self.periods.len() && j < other.periods.len() {
-			let next = if self.periods[i].start <= other.periods[j].start {
-				let p = self.periods[i];
-				i += 1;
-				p
-			} else {
-				let p = other.periods[j];
-				j += 1;
-				p
-			};
-
-			Self::push_merged(&mut out, next);
+		Self {
+			periods: interval::union_periods(&self.periods, &other.periods),
 		}
-
-		while i < self.periods.len() {
-			let p = self.periods[i];
-			i += 1;
-			Self::push_merged(&mut out, p);
-		}
-
-		while j < other.periods.len() {
-			let p = other.periods[j];
-			j += 1;
-			Self::push_merged(&mut out, p);
-		}
-
-		Self { periods: out }
-	}
-
-	fn normalize(mut periods: Vec<Period<S>>) -> Vec<Period<S>> {
-		if periods.is_empty() {
-			return periods;
-		}
-
-		periods.sort_by(|a, b| {
-			let by_start = a.start.partial_cmp(&b.start).unwrap_or(Ordering::Equal);
-			if by_start != Ordering::Equal {
-				return by_start;
-			}
-
-			a.end.partial_cmp(&b.end).unwrap_or(Ordering::Equal)
-		});
-
-		let mut out = Vec::with_capacity(periods.len());
-		for period in periods {
-			Self::push_merged(&mut out, period);
-		}
-
-		out
-	}
-
-	fn push_merged(out: &mut Vec<Period<S>>, period: Period<S>) {
-		if let Some(last) = out.last_mut() {
-			if period.start <= last.end {
-				if period.end > last.end {
-					last.end = period.end;
-				}
-				return;
-			}
-		}
-
-		out.push(period);
 	}
 }
 

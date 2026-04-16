@@ -26,8 +26,7 @@
 //! `JD`, `MJD`, and so on.  [`Schedule`](crate::schedule::Schedule) uses
 //! `IntervalTree<JD>`.
 
-use crate::time::{TaskId, TimeScale};
-use tempoch::Period;
+use crate::time::{interval, Period, TaskId, TimeScale};
 
 /// Interval tree over [`Period<S>`] → [`TaskId`] mappings.
 ///
@@ -129,7 +128,7 @@ impl<S: TimeScale> IntervalTree<S> {
             if self.suffix_max_end[i] <= q_start {
                 break;
             }
-            if self.entries[i].0.end.value() > q_start {
+            if interval::overlaps(&self.entries[i].0, query) {
                 result.push(self.entries[i].1);
             }
         }

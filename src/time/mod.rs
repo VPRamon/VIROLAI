@@ -5,12 +5,15 @@
 //! module.
 
 mod period;
+pub(crate) mod interval;
+mod interval_tree;
 mod period_set;
 
 pub use tempoch;
 pub use tempoch::{JD, MJD, Time, TimeScale};
 
 pub(crate) use tempoch::Period as TempochPeriod;
+pub use interval_tree::IntervalTree;
 pub use period::{Period, PeriodError, PeriodExt};
 pub use period_set::PeriodSet;
 
