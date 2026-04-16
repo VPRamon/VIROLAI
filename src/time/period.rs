@@ -1,4 +1,4 @@
-use super::{interval, TempochPeriod, TimeScale};
+use super::{TempochPeriod, TimeScale, interval};
 
 pub type Period<S> = TempochPeriod<S>;
 

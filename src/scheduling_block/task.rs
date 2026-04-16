@@ -41,7 +41,9 @@ impl Task {
     ) -> Result<Self, ScheduleError> {
         let name = name.into();
         if name.trim().is_empty() {
-            return Err(ScheduleError::InvalidTask("task name must not be empty".into()));
+            return Err(ScheduleError::InvalidTask(
+                "task name must not be empty".into(),
+            ));
         }
         if duration.value() <= 0.0 {
             return Err(ScheduleError::InvalidDuration);

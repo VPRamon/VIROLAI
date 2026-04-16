@@ -62,7 +62,10 @@ pub(crate) fn normalize_periods<S: TimeScale>(mut periods: Vec<Period<S>>) -> Ve
     out
 }
 
-pub(crate) fn union_periods<S: TimeScale>(left: &[Period<S>], right: &[Period<S>]) -> Vec<Period<S>> {
+pub(crate) fn union_periods<S: TimeScale>(
+    left: &[Period<S>],
+    right: &[Period<S>],
+) -> Vec<Period<S>> {
     let mut out = Vec::with_capacity(left.len() + right.len());
     let mut i = 0;
     let mut j = 0;
@@ -96,7 +99,10 @@ pub(crate) fn union_periods<S: TimeScale>(left: &[Period<S>], right: &[Period<S>
     out
 }
 
-pub(crate) fn intersection_periods<S: TimeScale>(left: &[Period<S>], right: &[Period<S>]) -> Vec<Period<S>> {
+pub(crate) fn intersection_periods<S: TimeScale>(
+    left: &[Period<S>],
+    right: &[Period<S>],
+) -> Vec<Period<S>> {
     let mut out = Vec::new();
     let mut i = 0;
     let mut j = 0;
@@ -120,11 +126,11 @@ pub(crate) fn intersection_periods<S: TimeScale>(left: &[Period<S>], right: &[Pe
 }
 
 fn push_merged<S: TimeScale>(out: &mut Vec<Period<S>>, period: Period<S>) {
-    if let Some(last) = out.last_mut() {
-        if let Some(merged) = merge_periods(last, &period) {
-            *last = merged;
-            return;
-        }
+    if let Some(last) = out.last_mut()
+        && let Some(merged) = merge_periods(last, &period)
+    {
+        *last = merged;
+        return;
     }
 
     out.push(period);

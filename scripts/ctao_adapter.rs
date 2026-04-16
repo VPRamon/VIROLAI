@@ -147,8 +147,7 @@ fn convert_block(raw: &Value) -> Result<OutBlock, String> {
     let tc = constraints_root
         .get("time_constraint_")
         .ok_or("missing time_constraint_")?;
-    let duration = get_f64(tc, "requested_duration_sec")
-        .ok_or("missing requested_duration_sec")?;
+    let duration = get_f64(tc, "requested_duration_sec").ok_or("missing requested_duration_sec")?;
     let priority = raw.get("priority").and_then(Value::as_f64);
 
     let time_window = {
@@ -201,16 +200,14 @@ fn convert_block(raw: &Value) -> Result<OutBlock, String> {
 }
 
 fn process_file(path: &Path) -> Result<Vec<OutBlock>, String> {
-    let text = fs::read_to_string(path)
-        .map_err(|e| format!("{}: {}", path.display(), e))?;
-    let ctao: CtaoFile = serde_json::from_str(&text)
-        .map_err(|e| format!("{}: {}", path.display(), e))?;
+    let text = fs::read_to_string(path).map_err(|e| format!("{}: {}", path.display(), e))?;
+    let ctao: CtaoFile =
+        serde_json::from_str(&text).map_err(|e| format!("{}: {}", path.display(), e))?;
 
     ctao.scheduling_block
         .iter()
         .map(|raw| {
-            convert_block(raw)
-                .map_err(|e| format!("{}: block error: {}", path.display(), e))
+            convert_block(raw).map_err(|e| format!("{}: block error: {}", path.display(), e))
         })
         .collect()
 }
@@ -218,10 +215,7 @@ fn process_file(path: &Path) -> Result<Vec<OutBlock>, String> {
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 2 {
-        eprintln!(
-            "Usage: {} <dataset_dir> [output_json]",
-            args[0]
-        );
+        eprintln!("Usage: {} <dataset_dir> [output_json]", args[0]);
         std::process::exit(1);
     }
 
@@ -275,8 +269,7 @@ fn main() {
         std::process::exit(1);
     }
 
-    let json = serde_json::to_string_pretty(&all_blocks)
-        .expect("serialization failed");
+    let json = serde_json::to_string_pretty(&all_blocks).expect("serialization failed");
 
     fs::write(&output_path, &json).unwrap_or_else(|e| {
         eprintln!("Cannot write {}: {}", output_path.display(), e);

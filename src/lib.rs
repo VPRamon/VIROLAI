@@ -5,8 +5,8 @@ pub mod schedule;
 pub mod scheduling_block;
 pub mod time;
 
-pub use time::IntervalTree;
-pub use prescheduler::{preschedule, Prescheduler, TaskPeriodMap};
+pub use prescheduler::{Prescheduler, TaskPeriodMap, preschedule};
 pub use scheduling_block::task;
+pub use time::IntervalTree;
 
 pub use time::{Period, PeriodError, PeriodSet};

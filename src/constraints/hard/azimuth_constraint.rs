@@ -41,10 +41,8 @@ impl Constraint for AzimuthConstraint {
 
         let window = siderust::time::Interval::new(timeline.start, timeline.end);
 
-        let icrs_dir = siderust::coordinates::spherical::direction::ICRS::new(
-            target.azimuth,
-            target.polar,
-        );
+        let icrs_dir =
+            siderust::coordinates::spherical::direction::ICRS::new(target.azimuth, target.polar);
 
         let query = AzimuthQuery {
             observer: *site,

@@ -7,9 +7,9 @@
 
 use qtty::{Degrees, Meter, Quantity, Seconds};
 use scheduler::{
+    Period,
     constraints::{Constraint, ConstraintExpr, TimeWindowConstraint},
     error::ScheduleError,
-    Period,
     schedule::Schedule,
     scheduling_block::{Dependency, SchedulingBlock},
     task::Task,
@@ -49,6 +49,7 @@ fn make_task(id: u64, duration_secs: f64) -> Task {
         sirius_target(),
         Seconds::new(duration_secs),
         ConstraintExpr::Intersection(vec![]),
+        None,
     )
     .expect("task construction must succeed")
 }
@@ -72,6 +73,7 @@ fn task_rejects_empty_name() {
         sirius_target(),
         Seconds::new(600.0),
         ConstraintExpr::Intersection(vec![]),
+        None,
     );
     assert!(matches!(result, Err(ScheduleError::InvalidTask(_))));
 }
@@ -84,6 +86,7 @@ fn task_rejects_zero_duration() {
         sirius_target(),
         Seconds::new(0.0),
         ConstraintExpr::Intersection(vec![]),
+        None,
     );
     assert!(matches!(result, Err(ScheduleError::InvalidDuration)));
 }
@@ -96,6 +99,7 @@ fn task_rejects_negative_duration() {
         sirius_target(),
         Seconds::new(-1.0),
         ConstraintExpr::Intersection(vec![]),
+        None,
     );
     assert!(matches!(result, Err(ScheduleError::InvalidDuration)));
 }
@@ -153,10 +157,13 @@ fn time_window_constraint_accepts_inside() {
     let candidate = interval_at(2_460_000.0 + 100.0 / 86_400.0, 600.0);
 
     let timeline = Period::<MJD>::new(candidate.start.to::<MJD>(), candidate.end.to::<MJD>());
-    let c = TimeWindowConstraint { window };
-    assert!(c
-        .check(&timeline, Some(&task_for_ctx.target), Some(&site))
-        .is_ok());
+    let c = TimeWindowConstraint {
+        window: Period::<MJD>::new(window.start.to::<MJD>(), window.end.to::<MJD>()),
+    };
+    assert!(
+        !c.check(&timeline, Some(&site), Some(&task_for_ctx.target))
+            .is_empty()
+    );
 }
 
 #[test]
@@ -168,10 +175,10 @@ fn time_window_constraint_rejects_outside() {
     let candidate = interval_at(2_460_000.0 + 700.0 / 86_400.0, 600.0);
 
     let timeline = Period::<MJD>::new(candidate.start.to::<MJD>(), candidate.end.to::<MJD>());
-    let c = TimeWindowConstraint { window };
-    let periods = c
-        .check(&timeline, Some(&task_for_ctx.target), Some(&site))
-        .unwrap();
+    let c = TimeWindowConstraint {
+        window: Period::<MJD>::new(window.start.to::<MJD>(), window.end.to::<MJD>()),
+    };
+    let periods = c.check(&timeline, Some(&site), Some(&task_for_ctx.target));
     assert!(periods.is_empty());
 }
 
@@ -185,7 +192,9 @@ fn place_valid_task() {
 
     let site = roque();
     let interval = interval_at(2_460_000.0, 600.0);
-    schedule.place_task(TaskId(1), interval, None, &site).unwrap();
+    schedule
+        .place_task(TaskId(1), interval, None, &site)
+        .unwrap();
 
     assert!(schedule.placements.contains_key(&TaskId(1)));
 }
@@ -214,7 +223,10 @@ fn reject_duration_mismatch() {
     // Give it 300 s instead of the required 600 s.
     let short = interval_at(2_460_000.0, 300.0);
     let result = schedule.place_task(TaskId(1), short, None, &site);
-    assert!(matches!(result, Err(ScheduleError::IntervalDurationMismatch)));
+    assert!(matches!(
+        result,
+        Err(ScheduleError::IntervalDurationMismatch)
+    ));
 }
 
 #[test]
@@ -233,7 +245,9 @@ fn unplace_task() {
 
     let site = roque();
     let interval = interval_at(2_460_000.0, 600.0);
-    schedule.place_task(TaskId(1), interval, None, &site).unwrap();
+    schedule
+        .place_task(TaskId(1), interval, None, &site)
+        .unwrap();
     schedule.unplace_task(TaskId(1)).unwrap();
 
     assert!(!schedule.placements.contains_key(&TaskId(1)));
@@ -249,7 +263,7 @@ fn move_task() {
     let i2 = interval_at(2_460_000.0 + 3600.0 / 86_400.0, 600.0); // 1 hour later
 
     schedule.place_task(TaskId(1), i1, None, &site).unwrap();
-    schedule.move_task(TaskId(1), i2.clone(), None, &site).unwrap();
+    schedule.move_task(TaskId(1), i2, None, &site).unwrap();
 
     let p = schedule.placements.get(&TaskId(1)).unwrap();
     assert!((p.start.value() - i2.start.value()).abs() < 1e-9);
@@ -265,7 +279,9 @@ fn block_dependency_ordering_respected() {
     block.add_task(TaskId(1));
     block.add_task(TaskId(2));
     // task 2 depends on task 1: place task 1 first
-    block.add_dependency(TaskId(2), TaskId(1), Dependency::DependsOn).unwrap();
+    block
+        .add_dependency(TaskId(2), TaskId(1), Dependency::DependsOn)
+        .unwrap();
     schedule.add_block(block);
 
     let site = roque();
@@ -291,7 +307,9 @@ fn block_dependency_ordering_rejected_when_predecessor_unplaced() {
     block.add_task(TaskId(1));
     block.add_task(TaskId(2));
     // task 2 depends on task 1
-    block.add_dependency(TaskId(2), TaskId(1), Dependency::DependsOn).unwrap();
+    block
+        .add_dependency(TaskId(2), TaskId(1), Dependency::DependsOn)
+        .unwrap();
     schedule.add_block(block);
 
     let site = roque();

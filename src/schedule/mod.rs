@@ -21,7 +21,7 @@ pub use task_placement::TaskPlacement;
 use crate::error::ScheduleError;
 use crate::scheduling_block::SchedulingBlock;
 use crate::task::Task;
-use crate::time::{IntervalTree, Period, PeriodSet, SchedulingBlockId, TaskId, TimeInterval, JD};
+use crate::time::{IntervalTree, JD, Period, PeriodSet, SchedulingBlockId, TaskId, TimeInterval};
 use siderust::coordinates::centers::Geodetic;
 use siderust::coordinates::frames::ECEF;
 use siderust::time::MJD;
@@ -98,7 +98,10 @@ impl Schedule {
         site: &Geodetic<ECEF>,
     ) -> Result<(), ScheduleError> {
         // 1. Task must exist.
-        let task = self.tasks.get(&task_id).ok_or(ScheduleError::TaskNotFound)?;
+        let task = self
+            .tasks
+            .get(&task_id)
+            .ok_or(ScheduleError::TaskNotFound)?;
 
         // 2. Duration check: interval length in seconds must match task.duration.
         let interval_days = candidate.end.value() - candidate.start.value();
@@ -115,9 +118,9 @@ impl Schedule {
 
         // 4. Constraint tree.
         let candidate_period = Period::new(candidate.start.to::<MJD>(), candidate.end.to::<MJD>());
-        let hard_task_feasible = task
-            .hard_constraints
-            .check_hard(&candidate_period, Some(&task.target), Some(site))?;
+        let hard_task_feasible =
+            task.hard_constraints
+                .check_hard(&candidate_period, Some(&task.target), Some(site))?;
         let dependency_feasible =
             self.block_dependency_feasible_periods(task_id, candidate, block_id)?;
         let feasible = hard_task_feasible.intersection(&dependency_feasible);

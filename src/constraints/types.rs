@@ -24,10 +24,7 @@ impl Default for ConstraintBlocks {
 }
 
 impl ConstraintBlocks {
-    pub fn new(
-        hard_static: HardConstraintExpr,
-        hard_dynamic: HardConstraintExpr,
-    ) -> Self {
+    pub fn new(hard_static: HardConstraintExpr, hard_dynamic: HardConstraintExpr) -> Self {
         Self {
             hard_static,
             hard_dynamic,

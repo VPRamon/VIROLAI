@@ -13,13 +13,11 @@ mod expr;
 mod soft_expr;
 mod types;
 
-pub use hard::{
-	AltitudeConstraint, AzimuthConstraint, MoonAltitudeConstraint,
-	MoonSeparationConstraint, NightConstraint, TimeConstraint, TimeWindowConstraint,
-};
 pub use expr::{Constraint, ConstraintExpr};
+pub use hard::{
+    AltitudeConstraint, AzimuthConstraint, MoonAltitudeConstraint, MoonSeparationConstraint,
+    NightConstraint, TimeConstraint, TimeWindowConstraint,
+};
 pub use soft::PrioritySoftConstraint;
 pub use soft_expr::{SoftConstraint, SoftConstraintExpr};
-pub use types::{
-	ConstraintBlocks, HardConstraintExpr,
-};
+pub use types::{ConstraintBlocks, HardConstraintExpr};

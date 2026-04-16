@@ -5,8 +5,8 @@
 //! Nodes carry [`TaskId`]s; edges carry [`Dependency`] labels that
 //! express the "A must be scheduled after B" relation.
 
-pub mod task;
 pub mod serde;
+pub mod task;
 
 use crate::error::ScheduleError;
 use crate::time::{SchedulingBlockId, TaskId};

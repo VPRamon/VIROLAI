@@ -75,9 +75,7 @@ impl SoftConstraintExpr {
                 }
                 let mut iter = children.iter();
                 let first = iter.next().unwrap().score(time, location, target);
-                let rest_sum: f64 = iter
-                    .map(|child| child.score(time, location, target))
-                    .sum();
+                let rest_sum: f64 = iter.map(|child| child.score(time, location, target)).sum();
                 first - rest_sum
             }
 

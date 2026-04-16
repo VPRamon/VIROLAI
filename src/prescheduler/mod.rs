@@ -40,9 +40,9 @@ impl Prescheduler {
 
         for task_id in task_ids {
             let task = tasks.get(&task_id).ok_or(ScheduleError::TaskNotFound)?;
-            let feasible = task
-                .hard_constraints
-                .check_hard(timeline, Some(&task.target), Some(location))?;
+            let feasible =
+                task.hard_constraints
+                    .check_hard(timeline, Some(&task.target), Some(location))?;
 
             if out.insert(task_id, feasible).is_some() {
                 return Err(ScheduleError::InvalidTask(format!(

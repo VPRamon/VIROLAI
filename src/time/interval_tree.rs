@@ -26,7 +26,7 @@
 //! `JD`, `MJD`, and so on.  [`Schedule`](crate::schedule::Schedule) uses
 //! `IntervalTree<JD>`.
 
-use crate::time::{interval, Period, TaskId, TimeScale};
+use crate::time::{Period, TaskId, TimeScale, interval};
 
 /// Interval tree over [`Period<S>`] → [`TaskId`] mappings.
 ///
@@ -118,9 +118,7 @@ impl<S: TimeScale> IntervalTree<S> {
         let q_end = query.end.value();
 
         // All entries with start ≥ q_end cannot overlap — skip them.
-        let upper = self
-            .entries
-            .partition_point(|e| e.0.start.value() < q_end);
+        let upper = self.entries.partition_point(|e| e.0.start.value() < q_end);
 
         let mut result = Vec::new();
         for i in 0..upper {
@@ -247,11 +245,7 @@ mod tests {
         tree.insert(p(0.0, 5.0), tid(1));
         tree.insert(p(5.0, 15.0), tid(2));
 
-        let starts: Vec<f64> = tree
-            .entries
-            .iter()
-            .map(|e| e.0.start.value())
-            .collect();
+        let starts: Vec<f64> = tree.entries.iter().map(|e| e.0.start.value()).collect();
         assert_eq!(starts, vec![0.0, 5.0, 10.0]);
     }
 }

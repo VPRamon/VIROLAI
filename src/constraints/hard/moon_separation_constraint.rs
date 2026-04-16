@@ -34,18 +34,12 @@ impl Constraint for MoonSeparationConstraint {
 
         let moon = moon_position_meeus_ch47(mid_jd);
 
-        let moon_dir = Direction::<ICRS>::new_raw(
-            moon.dec.to::<Degree>(),
-            moon.ra.to::<Degree>(),
-        );
+        let moon_dir = Direction::<ICRS>::new_raw(moon.dec.to::<Degree>(), moon.ra.to::<Degree>());
 
         let sep = target.angular_separation(&moon_dir);
 
         if sep >= self.min_separation {
-            PeriodSet::from_periods(vec![Period::new(
-                timeline.start,
-                timeline.end,
-            )])
+            PeriodSet::from_periods(vec![Period::new(timeline.start, timeline.end)])
         } else {
             PeriodSet::new()
         }
