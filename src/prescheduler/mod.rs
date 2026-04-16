@@ -46,7 +46,10 @@ impl Prescheduler {
             .flat_map_iter(SchedulingBlock::iter)
             .collect();
 
-        log::debug!("prescheduler: evaluating {} task ids from blocks", task_ids.len());
+        log::debug!(
+            "prescheduler: evaluating {} task ids from blocks",
+            task_ids.len()
+        );
 
         for task_id in task_ids {
             let task = tasks.get(&task_id).ok_or(ScheduleError::TaskNotFound)?;

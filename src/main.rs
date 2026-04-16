@@ -1,82 +1,10 @@
-use qtty::{Degrees, Meter, Quantity, Seconds};
-use scheduler::constraints::{
-    AltitudeConstraint, AzimuthConstraint, ConstraintExpr, PrioritySoftConstraint,
-    SoftConstraintExpr, TimeConstraint,
-};
-use scheduler::preschedule;
 use scheduler::scheduler::est;
-use scheduler::scheduling_block::{Dependency, SchedulingBlock};
-use scheduler::task::Task;
-use scheduler::time::{MJD, Period, SchedulingBlockId, TaskId, Time};
-use serde::Deserialize;
+use scheduler::time::{MJD, Period, Time};
+use scheduler::{Schedule, SchedulingProblem, preschedule};
 use siderust::coordinates::centers::Geodetic;
-use siderust::coordinates::frames::{ECEF, ICRS};
-use siderust::coordinates::spherical::Direction;
-use std::collections::HashMap;
+use siderust::coordinates::frames::ECEF;
 use std::fs;
 use std::path::PathBuf;
-
-const DEFAULT_HORIZON_START_MJD: f64 = 62000.0;
-const DEFAULT_HORIZON_END_MJD: f64 = 62030.0;
-
-#[derive(Debug, Deserialize)]
-struct SchedulingBlockInput {
-    id: u64,
-    tasks: Vec<TaskInput>,
-    #[serde(default)]
-    dependencies: Vec<DependencyInput>,
-}
-
-#[derive(Debug, Deserialize)]
-struct TaskInput {
-    id: u64,
-    #[serde(default)]
-    name: Option<String>,
-    requested_duration_sec: f64,
-    target: TargetInput,
-    #[serde(default)]
-    hard_constraints: HardConstraintsInput,
-    #[serde(default)]
-    soft_constraints: Option<SoftConstraintsInput>,
-}
-
-#[derive(Debug, Deserialize)]
-struct TargetInput {
-    ra_deg: f64,
-    dec_deg: f64,
-}
-
-#[derive(Debug, Default, Deserialize)]
-struct HardConstraintsInput {
-    #[serde(default)]
-    altitude_min_deg: Option<f64>,
-    #[serde(default)]
-    altitude_max_deg: Option<f64>,
-    #[serde(default)]
-    azimuth_min_deg: Option<f64>,
-    #[serde(default)]
-    azimuth_max_deg: Option<f64>,
-    #[serde(default)]
-    time_window: Option<TimeWindowInput>,
-}
-
-#[derive(Debug, Clone, Copy, Deserialize)]
-struct TimeWindowInput {
-    start_mjd_utc: f64,
-    end_mjd_utc: f64,
-}
-
-#[derive(Debug, Default, Deserialize)]
-struct SoftConstraintsInput {
-    #[serde(default)]
-    priority: Option<f64>,
-}
-
-#[derive(Debug, Deserialize)]
-struct DependencyInput {
-    from: u64,
-    to: u64,
-}
 
 fn main() {
     env_logger::init();
@@ -101,33 +29,35 @@ fn run() -> Result<(), String> {
     let input_path = resolve_input_path(&args[1]);
     let horizon_override = parse_horizon_args(&args[2..])?;
 
-    let payload_text = fs::read_to_string(&input_path)
-        .map_err(|error| format!("failed to read {}: {error}", input_path.display()))?;
-    let payload: Vec<SchedulingBlockInput> = serde_json::from_str(&payload_text)
-        .map_err(|error| format!("failed to parse {}: {error}", input_path.display()))?;
+    let text = fs::read_to_string(&input_path)
+        .map_err(|e| format!("failed to read {}: {e}", input_path.display()))?;
+    let problem: SchedulingProblem = serde_json::from_str(&text)
+        .map_err(|e| format!("failed to parse {}: {e}", input_path.display()))?;
 
-    if payload.is_empty() {
-        return Err("input JSON contains no scheduling blocks".to_string());
+    if problem.tasks.is_empty() {
+        return Err("input JSON contains no tasks".to_string());
     }
 
-    let (tasks_by_id, blocks) = build_domain(&payload)?;
-    let horizon = build_horizon(&payload, horizon_override)?;
-    let site = roque_site();
+    // Destructure to allow independent borrows of tasks and blocks.
+    let SchedulingProblem {
+        tasks,
+        blocks,
+        detected_horizon,
+        location,
+    } = problem;
 
-    let possible_periods = preschedule(&blocks, &tasks_by_id, &horizon, &site)
-        .map_err(|error| format!("prescheduling failed: {error}"))?;
-    let feasible_tasks = possible_periods
-        .values()
-        .filter(|p| !p.is_empty())
-        .count();
+    let horizon = build_horizon(detected_horizon, horizon_override)?;
+    let site = build_site(location)?;
+    let blocks: Vec<_> = blocks.into_values().collect();
 
-    let total_tasks = tasks_by_id.len();
-    let schedule = est::run_scheduler(
-        tasks_by_id.into_values().collect(),
-        &possible_periods,
-        &horizon,
-    )
-    .map_err(|error| format!("EST run failed: {error}"))?;
+    let possible_periods = preschedule(&blocks, &tasks, &horizon, &site)
+        .map_err(|e| format!("prescheduling failed: {e}"))?;
+
+    let total_tasks = tasks.len();
+    let feasible_tasks = possible_periods.values().filter(|p| !p.is_empty()).count();
+
+    let schedule = est::run_scheduler(tasks.into_values().collect(), &possible_periods, &horizon)
+        .map_err(|e| format!("EST run failed: {e}"))?;
 
     println!(
         "Loaded {} blocks and {} tasks from {}",
@@ -146,12 +76,15 @@ fn run() -> Result<(), String> {
     Ok(())
 }
 
-fn print_schedule(schedule: &scheduler::Schedule) {
+fn print_schedule(schedule: &Schedule) {
     println!("EST placed {} tasks", schedule.placements.len());
 
     let mut placements: Vec<_> = schedule.placements.values().collect();
     placements.sort_by(|a, b| {
-        a.start.to::<MJD>().value().total_cmp(&b.start.to::<MJD>().value())
+        a.start
+            .to::<MJD>()
+            .value()
+            .total_cmp(&b.start.to::<MJD>().value())
     });
 
     for placement in placements.iter().take(20) {
@@ -196,135 +129,22 @@ fn resolve_input_path(arg: &str) -> PathBuf {
     direct
 }
 
-fn build_domain(
-    payload: &[SchedulingBlockInput],
-) -> Result<(HashMap<TaskId, Task>, Vec<SchedulingBlock>), String> {
-    let mut tasks_by_id = HashMap::new();
-    let mut blocks = Vec::with_capacity(payload.len());
-
-    for block_input in payload {
-        let mut block = SchedulingBlock::new(SchedulingBlockId(block_input.id));
-
-        for task_input in &block_input.tasks {
-            let task = build_task(task_input)?;
-            if tasks_by_id.insert(task.id, task).is_some() {
-                return Err(format!(
-                    "duplicate task id {} in input payload",
-                    task_input.id
-                ));
-            }
-            block.add_task(TaskId(task_input.id));
-        }
-
-        for dep in &block_input.dependencies {
-            let (from, to) = (TaskId(dep.from), TaskId(dep.to));
-            if !block.contains_task(from) || !block.contains_task(to) {
-                return Err(format!(
-                    "block {} dependency references unknown task id {} -> {}",
-                    block_input.id, dep.from, dep.to
-                ));
-            }
-            block
-                .add_dependency(from, to, Dependency::DependsOn)
-                .map_err(|e| {
-                    format!(
-                        "block {} dependency {} -> {} is invalid: {e}",
-                        block_input.id, dep.from, dep.to
-                    )
-                })?;
-        }
-
-        blocks.push(block);
-    }
-
-    Ok((tasks_by_id, blocks))
-}
-
-fn build_task(input: &TaskInput) -> Result<Task, String> {
-    let hard_constraints = build_hard_constraints(&input.hard_constraints)?;
-    let soft_constraints = input
-        .soft_constraints
-        .as_ref()
-        .and_then(|s| s.priority)
-        .map(|p| SoftConstraintExpr::atom(PrioritySoftConstraint::new(p)));
-
-    let name = input
-        .name
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(ToOwned::to_owned)
-        .unwrap_or_else(|| format!("task-{}", input.id));
-
-    let target = Direction::<ICRS>::new_raw(
-        Degrees::new(input.target.dec_deg),
-        Degrees::new(input.target.ra_deg),
-    );
-
-    Task::new(
-        TaskId(input.id),
-        name,
-        target,
-        Seconds::new(input.requested_duration_sec),
-        hard_constraints,
-        soft_constraints,
-    )
-    .map_err(|e| format!("invalid task {}: {e}", input.id))
-}
-
-fn build_hard_constraints(input: &HardConstraintsInput) -> Result<ConstraintExpr, String> {
-    let mut constraints = Vec::new();
-
-    if input.altitude_min_deg.is_some() || input.altitude_max_deg.is_some() {
-        let min = input.altitude_min_deg.unwrap_or(0.0);
-        let max = input.altitude_max_deg.unwrap_or(90.0);
-        if min > max {
-            return Err(format!(
-                "invalid altitude bounds: min {min} is greater than max {max}"
-            ));
-        }
-        constraints.push(ConstraintExpr::atom(AltitudeConstraint {
-            min: Degrees::new(min),
-            max: Degrees::new(max),
-        }));
-    }
-
-    if input.azimuth_min_deg.is_some() || input.azimuth_max_deg.is_some() {
-        let min = input.azimuth_min_deg.unwrap_or(0.0);
-        let max = input.azimuth_max_deg.unwrap_or(360.0);
-        constraints.push(ConstraintExpr::atom(AzimuthConstraint {
-            min: Degrees::new(min),
-            max: Degrees::new(max),
-        }));
-    }
-
-    if let Some(tw) = input.time_window {
-        let window = period_from_mjd(tw.start_mjd_utc, tw.end_mjd_utc)?;
-        constraints.push(ConstraintExpr::atom(TimeConstraint { window }));
-    }
-
-    Ok(ConstraintExpr::Intersection(constraints))
-}
-
 fn build_horizon(
-    payload: &[SchedulingBlockInput],
+    detected: Option<Period<MJD>>,
     override_range: Option<(f64, f64)>,
 ) -> Result<Period<MJD>, String> {
     if let Some((start, end)) = override_range {
         return period_from_mjd(start, end);
     }
+    detected.ok_or_else(|| {
+        "missing schedule_time_window in input and no horizon override was provided".to_string()
+    })
+}
 
-    let windows = payload.iter().flat_map(|b| &b.tasks).filter_map(|t| t.hard_constraints.time_window);
-    let (min_start, max_end) = windows.fold(
-        (f64::INFINITY, f64::NEG_INFINITY),
-        |(lo, hi), w| (lo.min(w.start_mjd_utc), hi.max(w.end_mjd_utc)),
-    );
-
-    if min_start.is_finite() && max_end.is_finite() {
-        return period_from_mjd(min_start, max_end);
-    }
-
-    period_from_mjd(DEFAULT_HORIZON_START_MJD, DEFAULT_HORIZON_END_MJD)
+fn build_site(location: Option<Geodetic<ECEF>>) -> Result<Geodetic<ECEF>, String> {
+    location.ok_or_else(|| {
+        "missing top-level location in input; expected geodetic coordinates".to_string()
+    })
 }
 
 fn period_from_mjd(start_mjd: f64, end_mjd: f64) -> Result<Period<MJD>, String> {
@@ -340,12 +160,4 @@ fn period_from_mjd(start_mjd: f64, end_mjd: f64) -> Result<Period<MJD>, String> 
         Time::<MJD>::new(start_mjd),
         Time::<MJD>::new(end_mjd),
     ))
-}
-
-fn roque_site() -> Geodetic<ECEF> {
-    Geodetic::<ECEF>::new(
-        Degrees::new(-17.892),
-        Degrees::new(28.762),
-        Quantity::<Meter>::new(2396.0),
-    )
 }

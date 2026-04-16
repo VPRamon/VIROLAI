@@ -72,7 +72,10 @@ impl EstScheduler {
                 self.config.endangered_threshold,
             );
             let Some(candidate) = candidates.pop_next() else {
-                log::warn!("est: no schedulable candidates remain at cursor={:.4}", cursor.value());
+                log::warn!(
+                    "est: no schedulable candidates remain at cursor={:.4}",
+                    cursor.value()
+                );
                 break;
             };
 

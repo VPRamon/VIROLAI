@@ -80,8 +80,10 @@ impl<'a> EstCandidate<'a> {
         log::trace!(
             "est: candidate task={} refreshed — est={}, deadline={}, flexibility={:.2}, endangered={}",
             self.task.id.0,
-            self.est.map_or("none".to_string(), |t| format!("{:.4}", t.value())),
-            self.deadline.map_or("none".to_string(), |t| format!("{:.4}", t.value())),
+            self.est
+                .map_or("none".to_string(), |t| format!("{:.4}", t.value())),
+            self.deadline
+                .map_or("none".to_string(), |t| format!("{:.4}", t.value())),
             self.flexibility,
             self.is_endangered(1),
         );

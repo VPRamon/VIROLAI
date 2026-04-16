@@ -1,6 +1,6 @@
 // Converts CTAO (Cherenkov Telescope Array Observatory) dataset JSON files
-// into a single `scheduling_blocks.json` that conforms to
-// `schemas/scheduling_blocks.schema.json`.
+// into a single `scheduling_problem.json` that conforms to
+// `schemas/scheduling_problem.schema.json`.
 //
 // Each CTAO block maps to exactly one scheduler block containing one task:
 //
@@ -24,14 +24,34 @@
 // short-names `CTA-N` / `CTA-S`, which are resolved to `data/<name>` relative
 // to the workspace root.
 //
-// `[output_json]` defaults to `<dataset_dir>/scheduling_blocks.json`.
+// `[output_json]` defaults to `<dataset_dir>/scheduling_problem.json`.
 
+use chrono::{DateTime, NaiveDate, Utc};
+use scheduler::time::{MJD, Time};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use siderust::observatories::{EL_PARANAL, ROQUE_DE_LOS_MUCHACHOS};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+const DEFAULT_SCHEDULE_START_YEAR_UTC: i32 = 2028;
+const DEFAULT_SCHEDULE_END_YEAR_UTC: i32 = 2029;
+
 // ── output schema types ───────────────────────────────────────────────────────
+
+#[derive(Debug, Serialize)]
+struct OutSchedulingProblem {
+    location: OutLocation,
+    schedule_time_window: OutTimeWindow,
+    scheduling_blocks: Vec<OutBlock>,
+}
+
+#[derive(Debug, Serialize)]
+struct OutLocation {
+    longitude_deg: f64,
+    latitude_deg: f64,
+    height_m: f64,
+}
 
 #[derive(Debug, Serialize)]
 struct OutBlock {
@@ -95,6 +115,34 @@ struct CtaoFile {
     scheduling_block: Vec<Value>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CtaoObservatory {
+    North,
+    South,
+}
+
+impl CtaoObservatory {
+    fn code(self) -> &'static str {
+        match self {
+            CtaoObservatory::North => "CTA-N",
+            CtaoObservatory::South => "CTA-S",
+        }
+    }
+
+    fn location(self) -> OutLocation {
+        let site = match self {
+            CtaoObservatory::North => ROQUE_DE_LOS_MUCHACHOS,
+            CtaoObservatory::South => EL_PARANAL,
+        };
+
+        OutLocation {
+            longitude_deg: site.lon.value(),
+            latitude_deg: site.lat.value(),
+            height_m: site.height.value(),
+        }
+    }
+}
+
 // ── conversion ────────────────────────────────────────────────────────────────
 
 fn resolve_dataset_dir(arg: &str) -> PathBuf {
@@ -119,6 +167,67 @@ fn resolve_dataset_dir(arg: &str) -> PathBuf {
 
 fn get_f64(v: &Value, key: &str) -> Option<f64> {
     v.get(key)?.as_f64()
+}
+
+fn infer_observatory(
+    dataset_dir: &Path,
+    json_files: &[PathBuf],
+) -> Result<CtaoObservatory, String> {
+    let mut saw_north = false;
+    let mut saw_south = false;
+
+    let dir = dataset_dir.to_string_lossy().to_ascii_uppercase();
+    if dir.contains("CTA-N") || dir.contains("CTA_N") {
+        saw_north = true;
+    }
+    if dir.contains("CTA-S") || dir.contains("CTA_S") {
+        saw_south = true;
+    }
+
+    for path in json_files {
+        let Some(file_name) = path.file_name().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        let name = file_name.to_ascii_uppercase();
+        if name.contains("_N_") || name.contains("CTA-N") || name.contains("CTA_N") {
+            saw_north = true;
+        }
+        if name.contains("_S_") || name.contains("CTA-S") || name.contains("CTA_S") {
+            saw_south = true;
+        }
+    }
+
+    match (saw_north, saw_south) {
+        (true, false) => Ok(CtaoObservatory::North),
+        (false, true) => Ok(CtaoObservatory::South),
+        (true, true) => Err(format!(
+            "cannot infer a single observatory from {}: both CTA-N and CTA-S markers were found",
+            dataset_dir.display()
+        )),
+        (false, false) => Err(format!(
+            "cannot infer observatory from {}: expected CTA-N/CTA-S in directory or file names",
+            dataset_dir.display()
+        )),
+    }
+}
+
+fn utc_midnight(year: i32, month: u32, day: u32) -> Result<DateTime<Utc>, String> {
+    let date = NaiveDate::from_ymd_opt(year, month, day)
+        .ok_or_else(|| format!("invalid UTC date: {year:04}-{month:02}-{day:02}"))?;
+    let datetime = date
+        .and_hms_opt(0, 0, 0)
+        .ok_or_else(|| format!("invalid UTC time: {year:04}-{month:02}-{day:02}T00:00:00Z"))?;
+    Ok(DateTime::<Utc>::from_naive_utc_and_offset(datetime, Utc))
+}
+
+fn default_schedule_time_window() -> Result<OutTimeWindow, String> {
+    let start_utc = utc_midnight(DEFAULT_SCHEDULE_START_YEAR_UTC, 1, 1)?;
+    let end_utc = utc_midnight(DEFAULT_SCHEDULE_END_YEAR_UTC, 1, 1)?;
+
+    Ok(OutTimeWindow {
+        start_mjd_utc: Time::<MJD>::from_utc(start_utc).value(),
+        end_mjd_utc: Time::<MJD>::from_utc(end_utc).value(),
+    })
 }
 
 fn convert_block(raw: &Value) -> Result<OutBlock, String> {
@@ -223,7 +332,7 @@ fn main() {
     let output_path = if args.len() >= 3 {
         PathBuf::from(&args[2])
     } else {
-        dataset_dir.join("scheduling_blocks.json")
+        dataset_dir.join("scheduling_problem.json")
     };
 
     let entries = match fs::read_dir(&dataset_dir) {
@@ -269,7 +378,24 @@ fn main() {
         std::process::exit(1);
     }
 
-    let json = serde_json::to_string_pretty(&all_blocks).expect("serialization failed");
+    let observatory = infer_observatory(&dataset_dir, &json_files).unwrap_or_else(|e| {
+        eprintln!("{e}");
+        std::process::exit(1);
+    });
+
+    let schedule_time_window = default_schedule_time_window().unwrap_or_else(|e| {
+        eprintln!("failed to build default schedule_time_window: {e}");
+        std::process::exit(1);
+    });
+
+    let block_count = all_blocks.len();
+    let problem = OutSchedulingProblem {
+        location: observatory.location(),
+        schedule_time_window,
+        scheduling_blocks: all_blocks,
+    };
+
+    let json = serde_json::to_string_pretty(&problem).expect("serialization failed");
 
     fs::write(&output_path, &json).unwrap_or_else(|e| {
         eprintln!("Cannot write {}: {}", output_path.display(), e);
@@ -277,8 +403,9 @@ fn main() {
     });
 
     println!(
-        "Wrote {} blocks to {}",
-        all_blocks.len(),
+        "Wrote {} blocks for {} to {}",
+        block_count,
+        observatory.code(),
         output_path.display()
     );
 }

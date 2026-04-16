@@ -8,10 +8,20 @@ use siderust::coordinates::frames::ECEF;
 use std::collections::HashMap;
 
 /// The scheduling problem definition: available tasks and blocks.
+///
+/// When deserialized from JSON, `detected_horizon` is populated from the union
+/// of all task `time_window` hard constraints found in the input. It is `None`
+/// when the problem is constructed programmatically or when no time windows
+/// are present in the input.
+///
+/// `location` is populated when input JSON provides a top-level geodetic
+/// location (the envelope format used by `scheduling_problem.schema.json`).
 #[derive(Debug, Default)]
 pub struct SchedulingProblem {
     pub tasks: HashMap<TaskId, Task>,
     pub blocks: HashMap<SchedulingBlockId, SchedulingBlock>,
+    pub detected_horizon: Option<Period<MJD>>,
+    pub location: Option<Geodetic<ECEF>>,
 }
 
 impl SchedulingProblem {

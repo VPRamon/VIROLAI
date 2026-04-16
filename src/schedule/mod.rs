@@ -5,6 +5,7 @@
 //! - an [`IntervalTree<JD>`](crate::time::IntervalTree) for fast overlap queries
 
 mod problem;
+mod serde;
 mod task_placement;
 
 pub use problem::SchedulingProblem;

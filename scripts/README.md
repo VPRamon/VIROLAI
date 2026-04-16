@@ -2,11 +2,15 @@
 
 ## `ctao_adapter`
 
-Rust CLI that converts CTA dataset files in one directory (`*_internalSDC.json`) into one aggregated `scheduling_blocks.json` file compliant with `schemas/scheduling_blocks.schema.json` (also available through `data/scheduling_blocks.schema.json` compatibility shim).
+Rust CLI that converts CTA dataset files in one directory (`*_internalSDC.json`) into one aggregated `scheduling_problem.json` file compliant with `schemas/scheduling_problem.schema.json`.
 
 The output is a minimal scheduler-ready PhD payload:
 
-- each item has `id`, `tasks`, and `dependencies`
+- top-level object fields: `location`, `schedule_time_window`, `scheduling_blocks`
+- `location` is generic geodetic coordinates (`longitude_deg`, `latitude_deg`, `height_m`)
+- adapter infers dataset observatory (`CTA-N` or `CTA-S`) and translates it to site coordinates (`CTA-N` -> Roque de los Muchachos, `CTA-S` -> El Paranal)
+- `schedule_time_window` defaults to UTC `[2028-01-01T00:00:00Z, 2029-01-01T00:00:00Z)` expressed in MJD
+- each scheduling block has `id`, `tasks`, and `dependencies`
 - `tasks` contains task objects (not CTA configuration payloads)
 - each task object includes at least `id`, `requested_duration_sec`, `hard_constraints`, and optional `soft_constraints.priority`
 - each CTA scheduling block is currently converted to one task object (`tasks: [{...}]`)
@@ -22,11 +26,11 @@ cargo run --bin ctao_adapter -- <dataset_dir> [output_json]
 ```bash
 cargo run --bin ctao_adapter -- CTA-N
 cargo run --bin ctao_adapter -- CTA-S
-cargo run --bin ctao_adapter -- data/CTA-N data/CTA-N/scheduling_blocks.json
+cargo run --bin ctao_adapter -- data/CTA-N data/CTA-N/scheduling_problem.json
 ```
 
 ### Notes
 
 - If `dataset_dir` is `CTA-N` or `CTA-S`, the script also checks `data/<dataset_dir>`.
-- Default output is `<dataset_dir>/scheduling_blocks.json`.
+- Default output is `<dataset_dir>/scheduling_problem.json`.
 - For current CTA datasets, each exported scheduling block contains exactly one task object.

@@ -19,6 +19,7 @@ path = "scripts/ctao_adapter.rs"
 siderust      = { path = "siderust" }
 qtty          = "0.4.1"
 tempoch       = "=0.4.0"
+chrono        = "0.4"
 petgraph      = "0.8"
 thiserror     = "2.0"
 rayon         = "1.10"
