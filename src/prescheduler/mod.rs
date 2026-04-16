@@ -32,17 +32,38 @@ impl Prescheduler {
         timeline: &Period<MJD>,
         location: &Geodetic<ECEF>,
     ) -> Result<TaskPeriodMap, ScheduleError> {
+        log::info!(
+            "prescheduler: starting — blocks={}, tasks={}, timeline=[{:.4}, {:.4}]",
+            blocks.len(),
+            tasks.len(),
+            timeline.start.value(),
+            timeline.end.value(),
+        );
+
         let mut out = TaskPeriodMap::new();
         let task_ids: Vec<TaskId> = blocks
             .par_iter()
             .flat_map_iter(SchedulingBlock::iter)
             .collect();
 
+        log::debug!("prescheduler: evaluating {} task ids from blocks", task_ids.len());
+
         for task_id in task_ids {
             let task = tasks.get(&task_id).ok_or(ScheduleError::TaskNotFound)?;
             let feasible =
                 task.hard_constraints
                     .check_hard(timeline, Some(&task.target), Some(location))?;
+
+            let window_count = feasible.as_slice().len();
+            if window_count == 0 {
+                log::warn!("prescheduler: task {} has no feasible windows", task_id.0);
+            } else {
+                log::debug!(
+                    "prescheduler: task {} -> {} feasible window(s)",
+                    task_id.0,
+                    window_count,
+                );
+            }
 
             if out.insert(task_id, feasible).is_some() {
                 return Err(ScheduleError::InvalidTask(format!(
@@ -51,6 +72,13 @@ impl Prescheduler {
                 )));
             }
         }
+
+        let total_windows: usize = out.values().map(|p| p.as_slice().len()).sum();
+        log::info!(
+            "prescheduler: done — {} tasks, {} total feasible windows",
+            out.len(),
+            total_windows,
+        );
 
         Ok(out)
     }

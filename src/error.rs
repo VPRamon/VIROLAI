@@ -26,6 +26,9 @@ pub enum ScheduleError {
     #[error("dependency graph contains a cycle")]
     DependencyCycle,
 
+    #[error("invalid configuration: {0}")]
+    InvalidConfiguration(String),
+
     #[error("constraint violated: {0}")]
     ConstraintViolation(String),
 }

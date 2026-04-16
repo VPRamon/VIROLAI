@@ -155,4 +155,46 @@ mod tests {
         let starts: Vec<f64> = set.iter().map(|period| period.start.value()).collect();
         assert_eq!(starts, vec![10.0, 30.0]);
     }
+
+    #[test]
+    fn contains_point_returns_false_before_first_interval() {
+        let set = PeriodSet::<MJD>::from_periods(vec![p(10.0, 20.0)]);
+        assert!(!set.contains_point(Time::<MJD>::new(5.0)));
+    }
+
+    #[test]
+    fn overlaps_handles_disjoint_and_overlapping_queries() {
+        let set = PeriodSet::<MJD>::from_periods(vec![p(10.0, 20.0), p(30.0, 40.0)]);
+
+        assert!(!set.overlaps(p(0.0, 5.0)));
+        assert!(set.overlaps(p(35.0, 45.0)));
+        assert!(!set.overlaps(p(20.0, 30.0)));
+    }
+
+    #[test]
+    fn insert_merges_and_keeps_periods_sorted() {
+        let mut set = PeriodSet::<MJD>::from_periods(vec![p(20.0, 30.0), p(0.0, 5.0)]);
+        set.insert(p(5.0, 20.0));
+
+        assert_eq!(set.as_slice(), &[p(0.0, 30.0)]);
+    }
+
+    #[test]
+    fn len_and_is_empty_reflect_state() {
+        let mut set = PeriodSet::<MJD>::new();
+        assert!(set.is_empty());
+        assert_eq!(set.len(), 0);
+
+        set.insert(p(1.0, 2.0));
+        assert!(!set.is_empty());
+        assert_eq!(set.len(), 1);
+    }
+
+    #[test]
+    fn into_iter_owned_yields_sorted_normalized_periods() {
+        let set = PeriodSet::<MJD>::from_periods(vec![p(5.0, 7.0), p(1.0, 3.0), p(3.0, 5.0)]);
+        let periods: Vec<_> = set.into_iter().collect();
+
+        assert_eq!(periods, vec![p(1.0, 7.0)]);
+    }
 }

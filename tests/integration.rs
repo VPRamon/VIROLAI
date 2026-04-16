@@ -2,7 +2,7 @@
 //!
 //! Tests are layered:
 //! 1. Unit tests for `Task`, `SchedulingBlock`, `ConstraintExpr`.
-//! 2. Integration tests for `Schedule::place_task`, overlap rejection,
+//! 2. Integration tests for problem-driven placement, overlap rejection,
 //!    dependency ordering, and constraint violations.
 
 use qtty::{Degrees, Meter, Quantity, Seconds};
@@ -10,7 +10,7 @@ use scheduler::{
     Period,
     constraints::{Constraint, ConstraintExpr, TimeWindowConstraint},
     error::ScheduleError,
-    schedule::Schedule,
+    schedule::{Schedule, SchedulingProblem},
     scheduling_block::{Dependency, SchedulingBlock},
     task::Task,
     time::{SchedulingBlockId, TaskId, TimeInterval},
@@ -186,14 +186,15 @@ fn time_window_constraint_rejects_outside() {
 
 #[test]
 fn place_valid_task() {
+    let mut problem = SchedulingProblem::new();
     let mut schedule = Schedule::new();
     let task = make_task(1, 600.0);
-    schedule.add_task(task);
+    problem.add_task(task);
 
     let site = roque();
     let interval = interval_at(2_460_000.0, 600.0);
-    schedule
-        .place_task(TaskId(1), interval, None, &site)
+    problem
+        .place_task(&mut schedule, TaskId(1), interval, None, &site)
         .unwrap();
 
     assert!(schedule.placements.contains_key(&TaskId(1)));
@@ -201,28 +202,32 @@ fn place_valid_task() {
 
 #[test]
 fn reject_overlap() {
+    let mut problem = SchedulingProblem::new();
     let mut schedule = Schedule::new();
-    schedule.add_task(make_task(1, 600.0));
-    schedule.add_task(make_task(2, 600.0));
+    problem.add_task(make_task(1, 600.0));
+    problem.add_task(make_task(2, 600.0));
 
     let site = roque();
     let i1 = interval_at(2_460_000.0, 600.0);
     let i2 = interval_at(2_460_000.0 + 300.0 / 86_400.0, 600.0); // overlaps i1
 
-    schedule.place_task(TaskId(1), i1, None, &site).unwrap();
-    let result = schedule.place_task(TaskId(2), i2, None, &site);
+    problem
+        .place_task(&mut schedule, TaskId(1), i1, None, &site)
+        .unwrap();
+    let result = problem.place_task(&mut schedule, TaskId(2), i2, None, &site);
     assert!(matches!(result, Err(ScheduleError::OverlapConflict)));
 }
 
 #[test]
 fn reject_duration_mismatch() {
+    let mut problem = SchedulingProblem::new();
     let mut schedule = Schedule::new();
-    schedule.add_task(make_task(1, 600.0));
+    problem.add_task(make_task(1, 600.0));
 
     let site = roque();
     // Give it 300 s instead of the required 600 s.
     let short = interval_at(2_460_000.0, 300.0);
-    let result = schedule.place_task(TaskId(1), short, None, &site);
+    let result = problem.place_task(&mut schedule, TaskId(1), short, None, &site);
     assert!(matches!(
         result,
         Err(ScheduleError::IntervalDurationMismatch)
@@ -231,22 +236,24 @@ fn reject_duration_mismatch() {
 
 #[test]
 fn reject_unknown_task() {
+    let problem = SchedulingProblem::new();
     let mut schedule = Schedule::new();
     let site = roque();
     let interval = interval_at(2_460_000.0, 600.0);
-    let result = schedule.place_task(TaskId(99), interval, None, &site);
+    let result = problem.place_task(&mut schedule, TaskId(99), interval, None, &site);
     assert!(matches!(result, Err(ScheduleError::TaskNotFound)));
 }
 
 #[test]
 fn unplace_task() {
+    let mut problem = SchedulingProblem::new();
     let mut schedule = Schedule::new();
-    schedule.add_task(make_task(1, 600.0));
+    problem.add_task(make_task(1, 600.0));
 
     let site = roque();
     let interval = interval_at(2_460_000.0, 600.0);
-    schedule
-        .place_task(TaskId(1), interval, None, &site)
+    problem
+        .place_task(&mut schedule, TaskId(1), interval, None, &site)
         .unwrap();
     schedule.unplace_task(TaskId(1)).unwrap();
 
@@ -255,15 +262,20 @@ fn unplace_task() {
 
 #[test]
 fn move_task() {
+    let mut problem = SchedulingProblem::new();
     let mut schedule = Schedule::new();
-    schedule.add_task(make_task(1, 600.0));
+    problem.add_task(make_task(1, 600.0));
 
     let site = roque();
     let i1 = interval_at(2_460_000.0, 600.0);
     let i2 = interval_at(2_460_000.0 + 3600.0 / 86_400.0, 600.0); // 1 hour later
 
-    schedule.place_task(TaskId(1), i1, None, &site).unwrap();
-    schedule.move_task(TaskId(1), i2, None, &site).unwrap();
+    problem
+        .place_task(&mut schedule, TaskId(1), i1, None, &site)
+        .unwrap();
+    problem
+        .move_task(&mut schedule, TaskId(1), i2, None, &site)
+        .unwrap();
 
     let p = schedule.placements.get(&TaskId(1)).unwrap();
     assert!((p.start.value() - i2.start.value()).abs() < 1e-9);
@@ -271,9 +283,10 @@ fn move_task() {
 
 #[test]
 fn block_dependency_ordering_respected() {
+    let mut problem = SchedulingProblem::new();
     let mut schedule = Schedule::new();
-    schedule.add_task(make_task(1, 600.0));
-    schedule.add_task(make_task(2, 600.0));
+    problem.add_task(make_task(1, 600.0));
+    problem.add_task(make_task(2, 600.0));
 
     let mut block = SchedulingBlock::new(SchedulingBlockId(10));
     block.add_task(TaskId(1));
@@ -282,26 +295,39 @@ fn block_dependency_ordering_respected() {
     block
         .add_dependency(TaskId(1), TaskId(2), Dependency::DependsOn)
         .unwrap();
-    schedule.add_block(block);
+    problem.add_block(block);
 
     let site = roque();
     let i1 = interval_at(2_460_000.0, 600.0);
     let i2 = interval_at(2_460_000.0 + 3600.0 / 86_400.0, 600.0);
 
     // Place task 1 first, then task 2 — should succeed.
-    schedule
-        .place_task(TaskId(1), i1, Some(SchedulingBlockId(10)), &site)
+    problem
+        .place_task(
+            &mut schedule,
+            TaskId(1),
+            i1,
+            Some(SchedulingBlockId(10)),
+            &site,
+        )
         .unwrap();
-    schedule
-        .place_task(TaskId(2), i2, Some(SchedulingBlockId(10)), &site)
+    problem
+        .place_task(
+            &mut schedule,
+            TaskId(2),
+            i2,
+            Some(SchedulingBlockId(10)),
+            &site,
+        )
         .unwrap();
 }
 
 #[test]
 fn block_dependency_ordering_rejected_when_predecessor_unplaced() {
+    let mut problem = SchedulingProblem::new();
     let mut schedule = Schedule::new();
-    schedule.add_task(make_task(1, 600.0));
-    schedule.add_task(make_task(2, 600.0));
+    problem.add_task(make_task(1, 600.0));
+    problem.add_task(make_task(2, 600.0));
 
     let mut block = SchedulingBlock::new(SchedulingBlockId(10));
     block.add_task(TaskId(1));
@@ -310,12 +336,18 @@ fn block_dependency_ordering_rejected_when_predecessor_unplaced() {
     block
         .add_dependency(TaskId(1), TaskId(2), Dependency::DependsOn)
         .unwrap();
-    schedule.add_block(block);
+    problem.add_block(block);
 
     let site = roque();
     let i2 = interval_at(2_460_000.0 + 3600.0 / 86_400.0, 600.0);
 
     // Try to place task 2 before task 1 — should fail.
-    let result = schedule.place_task(TaskId(2), i2, Some(SchedulingBlockId(10)), &site);
+    let result = problem.place_task(
+        &mut schedule,
+        TaskId(2),
+        i2,
+        Some(SchedulingBlockId(10)),
+        &site,
+    );
     assert!(matches!(result, Err(ScheduleError::ConstraintViolation(_))));
 }

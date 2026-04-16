@@ -248,4 +248,29 @@ mod tests {
         let starts: Vec<f64> = tree.entries.iter().map(|e| e.0.start.value()).collect();
         assert_eq!(starts, vec![0.0, 5.0, 10.0]);
     }
+
+    #[test]
+    fn len_and_is_empty_track_mutations() {
+        let mut tree = IntervalTree::<MJD>::new();
+        assert!(tree.is_empty());
+        assert_eq!(tree.len(), 0);
+
+        tree.insert(p(0.0, 1.0), tid(1));
+        assert!(!tree.is_empty());
+        assert_eq!(tree.len(), 1);
+
+        tree.remove(tid(1));
+        assert!(tree.is_empty());
+        assert_eq!(tree.len(), 0);
+    }
+
+    #[test]
+    fn query_with_end_before_first_start_returns_empty() {
+        let mut tree = IntervalTree::<MJD>::new();
+        tree.insert(p(10.0, 20.0), tid(1));
+        tree.insert(p(30.0, 40.0), tid(2));
+
+        let hits = tree.query_overlapping(&p(0.0, 5.0));
+        assert!(hits.is_empty());
+    }
 }

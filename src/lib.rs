@@ -2,10 +2,12 @@ pub mod constraints;
 pub mod error;
 pub mod prescheduler;
 pub mod schedule;
+pub mod scheduler;
 pub mod scheduling_block;
 pub mod time;
 
 pub use prescheduler::{Prescheduler, TaskPeriodMap, preschedule};
+pub use schedule::{Schedule, SchedulingProblem, TaskPlacement};
 pub use scheduling_block::task;
 pub use time::IntervalTree;
 
