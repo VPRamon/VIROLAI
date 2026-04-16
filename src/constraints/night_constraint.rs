@@ -1,8 +1,7 @@
 use super::expr::{Constraint, ConstraintResult};
 use crate::error::ScheduleError;
-use crate::period::Period;
-use crate::period_set::PeriodSet;
 use crate::task::IcrsTarget;
+use crate::time::{Period, PeriodSet};
 use siderust::bodies::solar_system::Sun;
 use siderust::calculus::altitude::AltitudePeriodsProvider;
 use siderust::calculus::solar::Twilight;

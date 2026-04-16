@@ -15,11 +15,9 @@
 //! while being correct and efficient enough for v1.
 
 use crate::error::ScheduleError;
-use crate::period::Period;
-use crate::period_set::PeriodSet;
 use crate::scheduling_block::SchedulingBlock;
 use crate::task::Task;
-use crate::time::{SchedulingBlockId, TaskId, TimeInterval, TimePoint};
+use crate::time::{Period, PeriodSet, SchedulingBlockId, TaskId, TimeInterval, TimePoint};
 use ordered_float::NotNan;
 use siderust::coordinates::centers::Geodetic;
 use siderust::coordinates::frames::ECEF;

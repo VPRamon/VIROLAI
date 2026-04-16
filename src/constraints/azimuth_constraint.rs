@@ -1,8 +1,7 @@
 use super::expr::{Constraint, ConstraintResult};
 use crate::error::ScheduleError;
-use crate::period::Period;
-use crate::period_set::PeriodSet;
 use crate::task::IcrsTarget;
+use crate::time::{Period, PeriodSet};
 use qtty::Degrees;
 use siderust::calculus::azimuth::{AzimuthProvider, AzimuthQuery};
 use siderust::coordinates::centers::Geodetic;

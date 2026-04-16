@@ -1,9 +1,8 @@
 //! Constraint expression tree.
 
 use crate::error::ScheduleError;
-use crate::period::Period;
-use crate::period_set::PeriodSet;
 use crate::task::IcrsTarget;
+use crate::time::{Period, PeriodSet};
 use siderust::coordinates::centers::Geodetic;
 use siderust::coordinates::frames::ECEF;
 use siderust::time::MJD;

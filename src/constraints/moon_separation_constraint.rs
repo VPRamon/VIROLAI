@@ -1,8 +1,7 @@
 use super::expr::{Constraint, ConstraintResult};
 use crate::error::ScheduleError;
-use crate::period::Period;
-use crate::period_set::PeriodSet;
 use crate::task::IcrsTarget;
+use crate::time::{Period, PeriodSet};
 use qtty::{Degree, Degrees};
 use siderust::calculus::lunar::meeus_ch47::moon_position_meeus_ch47;
 use siderust::coordinates::centers::Geodetic;
