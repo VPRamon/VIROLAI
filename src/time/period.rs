@@ -1,18 +1,10 @@
-use super::{TempochPeriod, Time, TimeScale};
+use super::{TempochPeriod, TimeScale};
 
 pub type Period<S> = TempochPeriod<S>;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum PeriodError {
     InvalidRange,
-}
-
-pub fn new_period<S: TimeScale>(start: Time<S>, end: Time<S>) -> Result<Period<S>, PeriodError> {
-    if start < end {
-        Ok(Period::new(start, end))
-    } else {
-        Err(PeriodError::InvalidRange)
-    }
 }
 
 pub trait PeriodExt: Sized {

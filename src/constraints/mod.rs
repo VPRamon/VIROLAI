@@ -1,31 +1,25 @@
 //! Constraint system for observation scheduling.
 //!
-//! Constraints are organized in four blocks per task:
-//! - Hard-Static
-//! - Hard-Dynamic
-//! - Soft-Static
-//! - Soft-Dynamic
-//!
-//! Hard blocks are represented as [`ConstraintExpr`] trees and produce feasible
-//! period sets. Soft blocks are represented as ordered lists of qualifiers that
-//! can transform or rank feasible periods (scoring policy is intentionally TBD).
+//! Constraints are organized into hard feasibility expressions and soft
+//! scoring expressions. Hard constraints are represented as
+//! [`ConstraintExpr`] trees and produce feasible period sets. Soft
+//! constraints are represented as [`SoftConstraintExpr`] trees that combine
+//! scores using arithmetic operations.
 
-mod azimuth_constraint;
-mod altitude_constraint;
+pub mod hard;
+pub mod soft;
+
 mod expr;
-mod moon_altitude_constraint;
-mod moon_separation_constraint;
-mod night_constraint;
-mod time_window_constraint;
+mod soft_expr;
 mod types;
 
-pub use azimuth_constraint::AzimuthConstraint;
-pub use altitude_constraint::AltitudeConstraint;
+pub use hard::{
+	AltitudeConstraint, AzimuthConstraint, MoonAltitudeConstraint,
+	MoonSeparationConstraint, NightConstraint, TimeConstraint, TimeWindowConstraint,
+};
 pub use expr::{Constraint, ConstraintExpr};
-pub use moon_altitude_constraint::MoonAltitudeConstraint;
-pub use moon_separation_constraint::MoonSeparationConstraint;
-pub use night_constraint::NightConstraint;
-pub use time_window_constraint::{TimeConstraint, TimeWindowConstraint};
+pub use soft::PrioritySoftConstraint;
+pub use soft_expr::{SoftConstraint, SoftConstraintExpr};
 pub use types::{
-	ConstraintBlocks, HardConstraintExpr, SoftConstraint, SoftConstraintSet,
+	ConstraintBlocks, HardConstraintExpr,
 };

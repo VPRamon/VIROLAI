@@ -4,25 +4,25 @@
 //! - a set of [`Task`]s keyed by [`TaskId`]
 //! - a set of [`SchedulingBlock`]s keyed by [`SchedulingBlockId`]
 //! - a set of [`TaskPlacement`]s keyed by [`TaskId`]
-//! - a mutable interval index for fast overlap queries
+//! - an [`IntervalTree<JD>`](crate::interval_tree::IntervalTree) for fast
+//!   overlap queries
 //!
 //! ## Interval index
 //!
-//! The interval index is a sorted `BTreeMap<OrderedFloat<f64>, TaskId>` keyed
-//! by start time (JD).  A second `BTreeMap` keyed by end time allows the
-//! overlap query in `O(k log n)` where `k` is the number of overlapping
-//! placements.  This keeps the implementation dependency-free (no extra crate)
-//! while being correct and efficient enough for v1.
+//! The interval index is an [`IntervalTree<JD>`](crate::interval_tree::IntervalTree)
+//! that stores each placed task as a [`Period<JD>`](tempoch::Period) typed
+//! interval.  Overlap queries run in O(log n + k) where k is the number of
+//! results, using binary-search start-pruning and suffix-max-end pruning.
 
 use crate::error::ScheduleError;
+use crate::interval_tree::IntervalTree;
 use crate::scheduling_block::SchedulingBlock;
 use crate::task::Task;
-use crate::time::{Period, PeriodSet, SchedulingBlockId, TaskId, TimeInterval, TimePoint};
-use ordered_float::NotNan;
+use crate::time::{Period, PeriodSet, SchedulingBlockId, TaskId, TimeInterval, TimePoint, JD};
 use siderust::coordinates::centers::Geodetic;
 use siderust::coordinates::frames::ECEF;
-use siderust::time::{JulianDate, MJD};
-use std::collections::{BTreeMap, HashMap};
+use siderust::time::MJD;
+use std::collections::HashMap;
 
 // ─── TaskPlacement ───────────────────────────────────────────────────────────
 
@@ -37,38 +37,29 @@ pub struct TaskPlacement {
 }
 
 impl TaskPlacement {
-    /// Convenience: return the interval `[start, end)`.
+    /// Convenience: return the interval `[start, end)` as a [`Period<JD>`].
     pub fn interval(&self) -> TimeInterval {
         TimeInterval::new(self.start, self.end)
     }
-}
-
-// ─── Interval index helpers ──────────────────────────────────────────────────
-
-/// Key type for the interval index maps.
-type JdKey = NotNan<f64>;
-
-fn jd_key(jd: JulianDate) -> JdKey {
-    NotNan::new(jd.value()).expect("schedule time must be finite")
 }
 
 // ─── Schedule ────────────────────────────────────────────────────────────────
 
 /// The aggregate schedule.
 ///
-/// All mutating operations go through the high-level methods which keep
-/// the placements and interval index consistent.
+/// All mutating operations go through the high-level methods, which keep
+/// the placements and interval tree consistent.
 #[derive(Debug, Default)]
 pub struct Schedule {
     pub tasks: HashMap<TaskId, Task>,
     pub blocks: HashMap<SchedulingBlockId, SchedulingBlock>,
     pub placements: HashMap<TaskId, TaskPlacement>,
 
-    /// Sorted by placement **start** time → task id.
-    /// Multiple tasks can start at the same JD, so the value is a `Vec`.
-    starts: BTreeMap<JdKey, Vec<TaskId>>,
-    /// Sorted by placement **end** time → task id (for efficient overlap check).
-    ends: BTreeMap<JdKey, Vec<TaskId>>,
+    /// Interval tree index for O(log n + k) overlap queries.
+    ///
+    /// Each entry maps a [`Period<JD>`](tempoch::Period) to a [`TaskId`].
+    /// The tree is updated atomically with `placements` by every mutation.
+    interval_tree: IntervalTree<JD>,
 }
 
 impl Schedule {
@@ -96,27 +87,11 @@ impl Schedule {
     /// `[start, end)`.
     ///
     /// Two intervals `[a, b)` and `[c, d)` overlap iff `a < d && c < b`.
+    ///
+    /// Delegates to [`IntervalTree::query_overlapping`] for O(log n + k)
+    /// performance.
     pub fn overlapping(&self, interval: &TimeInterval) -> Vec<TaskId> {
-        let req_start = jd_key(interval.start);
-        let req_end = jd_key(interval.end);
-
-        // A placed task `[p_start, p_end)` overlaps `[req_start, req_end)` iff:
-        //   p_start < req_end  AND  p_end > req_start
-        //
-        // We iterate all placed tasks whose start < req_end (thanks to BTreeMap),
-        // then filter for p_end > req_start.
-        let mut result = Vec::new();
-        for (_start, ids) in self.starts.range(..req_end) {
-            for &id in ids {
-                if let Some(placement) = self.placements.get(&id) {
-                    let p_end = jd_key(placement.end);
-                    if p_end > req_start {
-                        result.push(id);
-                    }
-                }
-            }
-        }
-        result
+        self.interval_tree.query_overlapping(interval)
     }
 
     // ── Validation ────────────────────────────────────────────────────────
@@ -149,7 +124,7 @@ impl Schedule {
             return Err(ScheduleError::IntervalDurationMismatch);
         }
 
-        // 3. Overlap check.
+        // 3. Overlap check via interval tree.
         if !self.overlapping(candidate).is_empty() {
             return Err(ScheduleError::OverlapConflict);
         }
@@ -157,9 +132,10 @@ impl Schedule {
         // 4. Constraint tree.
         let candidate_period = Period::new(candidate.start.to::<MJD>(), candidate.end.to::<MJD>());
         let hard_task_feasible = task
-            .constraints
+            .hard_constraints
             .check_hard(&candidate_period, Some(&task.target), Some(site))?;
-        let dependency_feasible = self.block_dependency_feasible_periods(task_id, candidate, block_id)?;
+        let dependency_feasible =
+            self.block_dependency_feasible_periods(task_id, candidate, block_id)?;
         let feasible = hard_task_feasible.intersection(&dependency_feasible);
 
         let candidate_start = candidate.start.to::<MJD>();
@@ -176,11 +152,10 @@ impl Schedule {
             ));
         }
 
-        // 7. Soft qualification is prepared for scoring/selection but does not
-        // block placement decisions yet.
-        let _ = task
-            .constraints
-            .qualify_soft(&candidate_period, Some(&task.target), Some(site), &feasible)?;
+        // 7. Soft scoring is computed but does not block placement decisions.
+        if let Some(soft_constraints) = &task.soft_constraints {
+            let _ = soft_constraints.score(&candidate_start, Some(site), Some(&task.target));
+        }
 
         Ok(())
     }
@@ -216,7 +191,7 @@ impl Schedule {
             match self.placements.get(predecessor_id) {
                 None => return Ok(PeriodSet::new()),
                 Some(prev) => {
-                    if jd_key(prev.end) > jd_key(candidate.start) {
+                    if prev.end > candidate.start {
                         return Ok(PeriodSet::new());
                     }
                 }
@@ -282,7 +257,6 @@ impl Schedule {
         match self.place_task(task_id, new_interval, block_id, site) {
             Ok(()) => Ok(()),
             Err(e) => {
-                // Restore old placement on failure.
                 if let Some(p) = old {
                     self.index_insert(&p);
                     self.placements.insert(task_id, p);
@@ -295,22 +269,10 @@ impl Schedule {
     // ── Index helpers ─────────────────────────────────────────────────────
 
     fn index_insert(&mut self, p: &TaskPlacement) {
-        self.starts.entry(jd_key(p.start)).or_default().push(p.task_id);
-        self.ends.entry(jd_key(p.end)).or_default().push(p.task_id);
+        self.interval_tree.insert(p.interval(), p.task_id);
     }
 
     fn index_remove(&mut self, p: &TaskPlacement) {
-        if let Some(v) = self.starts.get_mut(&jd_key(p.start)) {
-            v.retain(|&id| id != p.task_id);
-            if v.is_empty() {
-                self.starts.remove(&jd_key(p.start));
-            }
-        }
-        if let Some(v) = self.ends.get_mut(&jd_key(p.end)) {
-            v.retain(|&id| id != p.task_id);
-            if v.is_empty() {
-                self.ends.remove(&jd_key(p.end));
-            }
-        }
+        self.interval_tree.remove(p.task_id);
     }
 }

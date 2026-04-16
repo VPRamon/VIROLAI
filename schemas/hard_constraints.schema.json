@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema",
+  "$id": "hard_constraints.schema.json",
+  "title": "HardConstraints",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "altitude_min_deg": {
+      "description": "Minimum target altitude above horizon in degrees.",
+      "type": "number",
+      "minimum": 0,
+      "maximum": 90
+    },
+    "altitude_max_deg": {
+      "description": "Maximum target altitude above horizon in degrees.",
+      "type": "number",
+      "minimum": 0,
+      "maximum": 90
+    },
+    "azimuth_min_deg": {
+      "description": "Minimum target azimuth in degrees [0, 360).",
+      "type": "number",
+      "minimum": 0,
+      "exclusiveMaximum": 360
+    },
+    "azimuth_max_deg": {
+      "description": "Maximum target azimuth in degrees (0, 360].",
+      "type": "number",
+      "minimum": 0,
+      "maximum": 360
+    },
+    "time_window": {
+      "description": "Fixed time window in which the task must be scheduled.",
+      "$ref": "#/$defs/TimeWindow"
+    }
+  },
+  "$defs": {
+    "TimeWindow": {
+      "type": "object",
+      "required": ["start_mjd_utc", "end_mjd_utc"],
+      "additionalProperties": false,
+      "properties": {
+        "start_mjd_utc": {
+          "description": "Window start as Modified Julian Date (UTC scale).",
+          "type": "number"
+        },
+        "end_mjd_utc": {
+          "description": "Window end as Modified Julian Date (UTC scale).",
+          "type": "number"
+        }
+      }
+    }
+  }
+}

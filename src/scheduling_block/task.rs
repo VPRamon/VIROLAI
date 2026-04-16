@@ -1,6 +1,7 @@
 //! Astronomical observation task.
 
 use crate::constraints::ConstraintBlocks;
+use crate::constraints::SoftConstraintExpr;
 use crate::error::ScheduleError;
 use crate::time::TaskId;
 use qtty::Seconds;
@@ -12,9 +13,9 @@ pub type IcrsTarget = Direction<ICRS>;
 
 /// A single schedulable observation task.
 ///
-/// A task couples a sky target, an integration duration, and a tree of
-/// observing constraints. It does **not** carry a time placement; that
-/// is held by [`TaskPlacement`](crate::schedule::TaskPlacement).
+/// A task couples a sky target, an integration duration, and separate hard
+/// and soft observing constraints. It does **not** carry a time placement;
+/// that is held by [`TaskPlacement`](crate::schedule::TaskPlacement).
 #[derive(Debug)]
 pub struct Task {
     pub id: TaskId,
@@ -22,8 +23,10 @@ pub struct Task {
     pub target: IcrsTarget,
     /// Required total on-sky time (must be positive).
     pub duration: Seconds,
-    /// Four-block constraint organization used during placement.
-    pub constraints: ConstraintBlocks,
+    /// Hard constraints evaluated before placement.
+    pub hard_constraints: ConstraintBlocks,
+    /// Soft constraints used for scoring and ranking.
+    pub soft_constraints: Option<SoftConstraintExpr>,
 }
 
 impl Task {
@@ -33,7 +36,8 @@ impl Task {
         name: impl Into<String>,
         target: IcrsTarget,
         duration: Seconds,
-        constraints: impl Into<ConstraintBlocks>,
+        hard_constraints: impl Into<ConstraintBlocks>,
+        soft_constraints: Option<SoftConstraintExpr>,
     ) -> Result<Self, ScheduleError> {
         let name = name.into();
         if name.trim().is_empty() {
@@ -47,7 +51,8 @@ impl Task {
             name,
             target,
             duration,
-            constraints: constraints.into(),
+            hard_constraints: hard_constraints.into(),
+            soft_constraints,
         })
     }
 }

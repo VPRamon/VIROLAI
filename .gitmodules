@@ -1,0 +1,3 @@
+[submodule "siderust"]
+	path = siderust
+	url = git@github.com:Siderust/siderust.git

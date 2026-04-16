@@ -1,4 +1,4 @@
-use super::expr::Constraint;
+use super::super::expr::Constraint;
 use crate::task::IcrsTarget;
 use crate::time::{Period, PeriodSet};
 use qtty::Degrees;

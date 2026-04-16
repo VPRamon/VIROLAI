@@ -11,12 +11,18 @@ path = "src/lib.rs"
 name = "scheduler"
 path = "src/main.rs"
 
+[[bin]]
+name = "ctao_adapter"
+path = "scripts/ctao_adapter.rs"
+
 [dependencies]
-siderust      = "0.6.0"
+siderust      = { path = "siderust" }
 qtty          = "0.4.1"
-tempoch       = "0.4"
+tempoch       = "=0.4.0"
 petgraph      = "0.8"
-ordered-float = "5.3"
 thiserror     = "2.0"
+rayon         = "1.10"
+serde         = { version = "1.0", features = ["derive"] }
+serde_json    = "1.0"
 
 [dev-dependencies]

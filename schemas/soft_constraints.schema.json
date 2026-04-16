@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema",
+  "$id": "soft_constraints.schema.json",
+  "title": "SoftConstraints",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "priority": {
+      "description": "Free-form priority score used by soft constraint ranking.",
+      "type": "number"
+    }
+  }
+}

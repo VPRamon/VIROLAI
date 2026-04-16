@@ -67,7 +67,7 @@ impl ConstraintExpr {
                     return PeriodSet::from_periods(vec![Period::new(
                         timeline.start,
                         timeline.end,
-                    )]));
+                    )]);
                 }
 
                 let mut iter = children.iter();
