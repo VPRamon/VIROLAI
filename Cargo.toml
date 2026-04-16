@@ -1,0 +1,22 @@
+[package]
+name = "PhD"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "scheduler"
+path = "src/lib.rs"
+
+[[bin]]
+name = "scheduler"
+path = "src/main.rs"
+
+[dependencies]
+siderust      = "0.6.0"
+qtty          = "0.4.1"
+tempoch       = "0.4"
+petgraph      = "0.8"
+ordered-float = "5.3"
+thiserror     = "2.0"
+
+[dev-dependencies]
