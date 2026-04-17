@@ -4,10 +4,12 @@
 //! - a set of [`TaskPlacement`]s keyed by [`TaskId`]
 //! - an [`IntervalTree<JD>`](crate::time::IntervalTree) for fast overlap queries
 
+mod output;
 mod problem;
 mod serde;
 mod task_placement;
 
+pub use output::ScheduleOutput;
 pub use problem::SchedulingProblem;
 pub use task_placement::TaskPlacement;
 

@@ -1,3 +1,6 @@
 [submodule "siderust"]
 	path = siderust
 	url = git@github.com:Siderust/siderust.git
+[submodule "TSI"]
+	path = TSI
+	url = git@github.com:VPRamon/TSI.git

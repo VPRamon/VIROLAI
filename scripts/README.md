@@ -35,3 +35,44 @@ cargo run --bin ctao_adapter -- data/CTA-N data/CTA-N/scheduling_problem.json
 - If `dataset_dir` is `CTA-N` or `CTA-S`, the script also checks `data/<dataset_dir>`.
 - Default output is `<dataset_dir>/scheduling_problem.json`.
 - For current CTA datasets, each exported scheduling block contains exactly one task object.
+
+## `phd_tsi_server`
+
+Rust HTTP server that embeds the TSI backend and registers a custom import adapter for this repository's current scheduling schema (`schemas/scheduling_problem.schema.json`).
+
+The adapter accepts payloads with top-level fields:
+
+- `resources` (uses `resources[0].location` as the TSI observing site)
+- `schedule_time_window`
+- `scheduling_blocks[*].tasks[*]` (full task objects only)
+
+Each task object is mapped into one TSI scheduling block.
+
+### Run locally
+
+```bash
+cargo run --bin phd_tsi_server
+```
+
+The API starts at `http://localhost:8080`.
+
+### Run with Docker
+
+From the repository root:
+
+```bash
+./docker/start_adapted_tsi.sh
+```
+
+Equivalent direct command:
+
+```bash
+docker compose -f docker/docker-compose.yml up --build
+```
+
+Services:
+
+- frontend: `http://localhost:3000`
+- backend health: `http://localhost:8080/health`
+
+Upload any `scheduling_problem.json` compatible with `schemas/scheduling_problem.schema.json` directly in the TSI UI.

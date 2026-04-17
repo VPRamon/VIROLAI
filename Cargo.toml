@@ -15,6 +15,10 @@ path = "src/main.rs"
 name = "ctao_adapter"
 path = "scripts/ctao_adapter.rs"
 
+[[bin]]
+name = "phd_tsi_server"
+path = "scripts/phd_tsi_server.rs"
+
 [dependencies]
 siderust      = { path = "siderust" }
 qtty          = "0.4.1"
@@ -27,5 +31,11 @@ log           = "0.4"
 env_logger    = "0.11"
 serde         = { version = "1.0", features = ["derive"] }
 serde_json    = "1.0"
+anyhow        = "1.0"
+axum          = "0.8"
+tokio         = { version = "1", features = ["full"] }
+tracing       = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tsi-rust      = { path = "TSI/backend", default-features = false, features = ["local-repo", "http-server"] }
 
 [dev-dependencies]

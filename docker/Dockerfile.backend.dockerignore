@@ -1,0 +1,17 @@
+.git
+.github
+.gitmodules
+
+# Rust build outputs
+target
+**/target
+
+# Frontend outputs not needed for backend image
+TSI/frontend/node_modules
+TSI/frontend/dist
+
+# Editor/cache artifacts
+.vscode
+.idea
+*.swp
+*.swo

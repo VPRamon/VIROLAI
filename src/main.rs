@@ -1,7 +1,7 @@
 use scheduler::scheduler::est;
 use scheduler::telescope::Telescope;
 use scheduler::time::{MJD, Period, Time};
-use scheduler::{Schedule, SchedulingProblem, preschedule};
+use scheduler::{Schedule, ScheduleOutput, SchedulingProblem, preschedule};
 use std::fs;
 use std::path::PathBuf;
 use std::time::Instant;
@@ -31,6 +31,8 @@ fn run() -> Result<(), String> {
 
     let text = fs::read_to_string(&input_path)
         .map_err(|e| format!("failed to read {}: {e}", input_path.display()))?;
+    let raw_json: serde_json::Value = serde_json::from_str(&text)
+        .map_err(|e| format!("failed to parse JSON {}: {e}", input_path.display()))?;
     let problem: SchedulingProblem = serde_json::from_str(&text)
         .map_err(|e| format!("failed to parse {}: {e}", input_path.display()))?;
 
@@ -87,6 +89,14 @@ fn run() -> Result<(), String> {
     );
     print_schedule(&schedule);
 
+    let output_path = derive_output_path(&input_path);
+    let output = ScheduleOutput::new(raw_json, &schedule);
+    let output_text = serde_json::to_string_pretty(&output)
+        .map_err(|e| format!("failed to serialize schedule output: {e}"))?;
+    fs::write(&output_path, &output_text)
+        .map_err(|e| format!("failed to write {}: {e}", output_path.display()))?;
+    println!("Schedule written to {}", output_path.display());
+
     Ok(())
 }
 
@@ -140,6 +150,15 @@ fn parse_horizon_args(args: &[String]) -> Result<Option<(f64, f64)>, String> {
         }
         _ => Err("horizon override requires both start and end MJD values".to_string()),
     }
+}
+
+fn derive_output_path(input: &PathBuf) -> PathBuf {
+    let stem = input
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("schedule");
+    let parent = input.parent().unwrap_or(std::path::Path::new("."));
+    parent.join(format!("{stem}_schedule.json"))
 }
 
 fn resolve_input_path(arg: &str) -> PathBuf {

@@ -1,0 +1,45 @@
+# PhD-TSI backend Dockerfile
+# Builds the custom backend binary that adapts PhD scheduling_problem payloads to TSI.
+
+# Stage 1: build
+FROM rust:latest AS builder
+
+WORKDIR /app
+
+# Copy TSI backend dependency crate
+COPY TSI/backend/Cargo.toml TSI/backend/Cargo.lock* TSI/backend/
+COPY TSI/backend/src TSI/backend/src
+
+# Copy local siderust dependency used by this repository crate
+COPY siderust /app/siderust
+
+# Copy PhD crate
+COPY Cargo.toml Cargo.lock* /app/
+COPY src /app/src
+COPY scripts /app/scripts
+COPY schemas /app/schemas
+
+# Build custom backend binary
+RUN cargo build --release --bin phd_tsi_server
+
+# Stage 2: runtime
+FROM debian:bookworm-slim
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y \
+    ca-certificates \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /app/target/release/phd_tsi_server /usr/local/bin/phd_tsi_server
+
+RUN useradd -r -s /bin/false phd
+USER phd
+
+EXPOSE 8080
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8080/health || exit 1
+
+CMD ["phd_tsi_server"]

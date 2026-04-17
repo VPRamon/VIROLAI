@@ -10,7 +10,7 @@ pub mod time;
 pub(crate) mod serde_repr;
 
 pub use prescheduler::{Prescheduler, TaskPeriodMap, preschedule};
-pub use schedule::{Schedule, SchedulingProblem, TaskPlacement};
+pub use schedule::{Schedule, ScheduleOutput, SchedulingProblem, TaskPlacement};
 pub use scheduling_block::task;
 pub use telescope::Telescope;
 pub use time::IntervalTree;
