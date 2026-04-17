@@ -61,7 +61,7 @@ The API starts at `http://localhost:8080`.
 From the repository root:
 
 ```bash
-./webapp/docker/start_adapted_tsi.sh
+./webapp/setup.sh
 ```
 
 Equivalent direct command:

@@ -9,14 +9,14 @@ This directory contains the Docker assets for running TSI with the PhD schema ad
 - Dockerfile.frontend: builds and serves the TSI frontend
 - Dockerfile.backend.dockerignore: backend-specific Docker ignore rules
 - Dockerfile.frontend.dockerignore: frontend-specific Docker ignore rules
-- start_adapted_tsi.sh: helper script to start/stop the stack
+- ../setup.sh: helper script to start/stop the stack
 
 ## Quick Start
 
 From the repository root:
 
 ```bash
-./webapp/docker/start_adapted_tsi.sh
+./webapp/setup.sh
 ```
 
 This runs:
@@ -35,13 +35,13 @@ Services:
 Detached mode:
 
 ```bash
-./webapp/docker/start_adapted_tsi.sh -d
+./webapp/setup.sh -d
 ```
 
 Stop services:
 
 ```bash
-./webapp/docker/start_adapted_tsi.sh down
+./webapp/setup.sh down
 ```
 
 Follow logs:
