@@ -15,6 +15,7 @@
 // | `constraints_.azimuth_constraint_.min/max`               | `task.hard_constraints.azimuth_*`    |
 // | `constraints_.time_constraint_.fixed_start/stop_time`    | `task.hard_constraints.time_window`  |
 // | `priority`                                               | `task.soft_constraints.priority` |
+// | inferred observatory (`CTA-N` / `CTA-S`)                 | `resources[0].location` + `resources[0].hard_constraints` |
 //
 // # Usage
 // ```text
@@ -30,18 +31,22 @@ use chrono::{DateTime, NaiveDate, Utc};
 use scheduler::time::{MJD, Time};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use siderust::calculus::solar::Twilight;
 use siderust::observatories::{EL_PARANAL, ROQUE_DE_LOS_MUCHACHOS};
 use std::fs;
 use std::path::{Path, PathBuf};
 
 const DEFAULT_SCHEDULE_START_YEAR_UTC: i32 = 2028;
 const DEFAULT_SCHEDULE_END_YEAR_UTC: i32 = 2029;
+const DEFAULT_TELESCOPE_NIGHT_TWILIGHT: Twilight = Twilight::Nautical;
+const DEFAULT_MOON_ALTITUDE_MIN_DEG: f64 = -90.0;
+const DEFAULT_MOON_ALTITUDE_MAX_DEG: f64 = 0.0;
 
 // ── output schema types ───────────────────────────────────────────────────────
 
 #[derive(Debug, Serialize)]
 struct OutSchedulingProblem {
-    location: OutLocation,
+    resources: Vec<OutTelescope>,
     schedule_time_window: OutTimeWindow,
     scheduling_blocks: Vec<OutBlock>,
 }
@@ -51,6 +56,31 @@ struct OutLocation {
     longitude_deg: f64,
     latitude_deg: f64,
     height_m: f64,
+}
+
+#[derive(Debug, Serialize)]
+struct OutTelescope {
+    id: u64,
+    name: String,
+    location: OutLocation,
+    hard_constraints: OutResourceHardConstraints,
+}
+
+#[derive(Debug, Serialize)]
+struct OutResourceHardConstraints {
+    night_time: OutNightTimeConstraint,
+    moon_altitude: OutMoonAltitudeConstraint,
+}
+
+#[derive(Debug, Serialize)]
+struct OutNightTimeConstraint {
+    twilight: String,
+}
+
+#[derive(Debug, Serialize)]
+struct OutMoonAltitudeConstraint {
+    min_deg: f64,
+    max_deg: f64,
 }
 
 #[derive(Debug, Serialize)]
@@ -129,17 +159,47 @@ impl CtaoObservatory {
         }
     }
 
-    fn location(self) -> OutLocation {
+    fn telescope_id(self) -> u64 {
+        match self {
+            CtaoObservatory::North => 0,
+            CtaoObservatory::South => 1,
+        }
+    }
+
+    fn telescope_resource(self) -> OutTelescope {
         let site = match self {
             CtaoObservatory::North => ROQUE_DE_LOS_MUCHACHOS,
             CtaoObservatory::South => EL_PARANAL,
         };
 
-        OutLocation {
-            longitude_deg: site.lon.value(),
-            latitude_deg: site.lat.value(),
-            height_m: site.height.value(),
+        OutTelescope {
+            id: self.telescope_id(),
+            name: self.code().to_string(),
+            location: OutLocation {
+                longitude_deg: site.lon.value(),
+                latitude_deg: site.lat.value(),
+                height_m: site.height.value(),
+            },
+            hard_constraints: OutResourceHardConstraints {
+                night_time: OutNightTimeConstraint {
+                    twilight: twilight_schema_name(DEFAULT_TELESCOPE_NIGHT_TWILIGHT).to_string(),
+                },
+                moon_altitude: OutMoonAltitudeConstraint {
+                    min_deg: DEFAULT_MOON_ALTITUDE_MIN_DEG,
+                    max_deg: DEFAULT_MOON_ALTITUDE_MAX_DEG,
+                },
+            },
         }
+    }
+}
+
+fn twilight_schema_name(twilight: Twilight) -> &'static str {
+    match twilight {
+        Twilight::Civil => "Civil",
+        Twilight::Nautical => "Nautical",
+        Twilight::Astronomical => "Astronomical",
+        Twilight::Horizon => "Horizon",
+        Twilight::ApparentHorizon => "ApparentHorizon",
     }
 }
 
@@ -390,7 +450,7 @@ fn main() {
 
     let block_count = all_blocks.len();
     let problem = OutSchedulingProblem {
-        location: observatory.location(),
+        resources: vec![observatory.telescope_resource()],
         schedule_time_window,
         scheduling_blocks: all_blocks,
     };

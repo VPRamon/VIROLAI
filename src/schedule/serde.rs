@@ -2,8 +2,10 @@
 //!
 //! Accepted inputs:
 //! - Legacy: an array of scheduling blocks, each containing full task objects.
-//! - Envelope: an object with `location`, optional `schedule_time_window`, and
+//! - Envelope: an object with `resources`, optional `schedule_time_window`, and
 //!   `scheduling_blocks`.
+//! - Backward-compatible envelope: an object with legacy top-level `location`
+//!   instead of `resources`.
 //!
 //! Legacy array example:
 //!
@@ -34,21 +36,24 @@
 //! - otherwise, the union of all task `time_window` hard constraints.
 //! - `None` when no horizon information is present.
 //!
-//! `location` on the returned [`SchedulingProblem`] is populated from the
-//! envelope `location` object when available.
+//! The telescope resource (if any) is stored on the returned
+//! [`SchedulingProblem`] as a [`Telescope`]. Telescope-level hard constraints
+//! remain on the telescope and are not merged into individual tasks.
 
 use super::SchedulingProblem;
-use crate::constraints::{
-    AltitudeConstraint, AzimuthConstraint, ConstraintExpr, PrioritySoftConstraint,
-    SoftConstraintExpr, TimeConstraint,
-};
+use crate::constraints::{PrioritySoftConstraint, SoftConstraintExpr};
 use crate::scheduling_block::{Dependency, SchedulingBlock};
+use crate::serde_repr::{
+    HardConstraintsRepr, LocationRepr, TimeWindowRepr, geodetic_location_from_repr,
+    hard_constraint_blocks_from_repr, mjd_period,
+};
 use crate::task::Task;
-use crate::time::{MJD, Period, SchedulingBlockId, TaskId, Time};
-use qtty::{Degrees, Meters, Seconds};
+use crate::telescope::Telescope;
+use crate::telescope::serde_impl::TelescopeRepr;
+use crate::time::{SchedulingBlockId, TaskId};
+use qtty::{Degrees, Seconds};
 use serde::{Deserialize, Deserializer};
-use siderust::coordinates::centers::Geodetic;
-use siderust::coordinates::frames::{ECEF, ICRS};
+use siderust::coordinates::frames::ICRS;
 use siderust::coordinates::spherical::Direction;
 
 // ── JSON repr types (schema) ──────────────────────────────────────────────────
@@ -70,17 +75,13 @@ enum ProblemRepr {
 
 #[derive(Debug, Deserialize)]
 struct ProblemEnvelopeRepr {
-    location: LocationRepr,
+    #[serde(default)]
+    location: Option<LocationRepr>,
+    #[serde(default)]
+    resources: Vec<TelescopeRepr>,
     #[serde(default)]
     schedule_time_window: Option<TimeWindowRepr>,
     scheduling_blocks: Vec<BlockRepr>,
-}
-
-#[derive(Debug, Deserialize)]
-struct LocationRepr {
-    longitude_deg: f64,
-    latitude_deg: f64,
-    height_m: f64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -103,21 +104,6 @@ struct TargetRepr {
 }
 
 #[derive(Debug, Default, Deserialize)]
-struct HardConstraintsRepr {
-    altitude_min_deg: Option<f64>,
-    altitude_max_deg: Option<f64>,
-    azimuth_min_deg: Option<f64>,
-    azimuth_max_deg: Option<f64>,
-    time_window: Option<TimeWindowRepr>,
-}
-
-#[derive(Debug, Clone, Copy, Deserialize)]
-struct TimeWindowRepr {
-    start_mjd_utc: f64,
-    end_mjd_utc: f64,
-}
-
-#[derive(Debug, Default, Deserialize)]
 struct SoftConstraintsRepr {
     priority: Option<f64>,
 }
@@ -128,69 +114,11 @@ struct DepRepr {
     to: u64,
 }
 
-// ── Conversion helpers ────────────────────────────────────────────────────────
-
-fn mjd_period(start: f64, end: f64) -> Result<Period<MJD>, String> {
-    if !start.is_finite() || !end.is_finite() {
-        return Err("time_window bounds must be finite".to_string());
-    }
-    if start >= end {
-        return Err(format!(
-            "time_window start ({start}) must be before end ({end})"
-        ));
-    }
-    Ok(Period::new(Time::<MJD>::new(start), Time::<MJD>::new(end)))
-}
-
-fn geodetic_location_from_repr(repr: LocationRepr) -> Result<Geodetic<ECEF>, String> {
-    if !repr.longitude_deg.is_finite()
-        || !repr.latitude_deg.is_finite()
-        || !repr.height_m.is_finite()
-    {
-        return Err("location coordinates must be finite".to_string());
-    }
-
-    Ok(Geodetic::<ECEF>::new(
-        Degrees::new(repr.longitude_deg),
-        Degrees::new(repr.latitude_deg),
-        Meters::new(repr.height_m),
-    ))
-}
-
-fn hard_constraints_from_repr(repr: &HardConstraintsRepr) -> Result<ConstraintExpr, String> {
-    let mut constraints = Vec::new();
-
-    if repr.altitude_min_deg.is_some() || repr.altitude_max_deg.is_some() {
-        let min = repr.altitude_min_deg.unwrap_or(0.0);
-        let max = repr.altitude_max_deg.unwrap_or(90.0);
-        if min > max {
-            return Err(format!("invalid altitude bounds: min {min} > max {max}"));
-        }
-        constraints.push(ConstraintExpr::atom(AltitudeConstraint {
-            min: Degrees::new(min),
-            max: Degrees::new(max),
-        }));
-    }
-
-    if repr.azimuth_min_deg.is_some() || repr.azimuth_max_deg.is_some() {
-        let min = repr.azimuth_min_deg.unwrap_or(0.0);
-        let max = repr.azimuth_max_deg.unwrap_or(360.0);
-        constraints.push(ConstraintExpr::atom(AzimuthConstraint {
-            min: Degrees::new(min),
-            max: Degrees::new(max),
-        }));
-    }
-
-    if let Some(tw) = repr.time_window {
-        let window = mjd_period(tw.start_mjd_utc, tw.end_mjd_utc)?;
-        constraints.push(ConstraintExpr::atom(TimeConstraint { window }));
-    }
-
-    Ok(ConstraintExpr::Intersection(constraints))
-}
+// ── Conversion ───────────────────────────────────────────────────────────────
 
 fn task_from_repr(repr: TaskRepr) -> Result<Task, String> {
-    let hard_constraints = hard_constraints_from_repr(&repr.hard_constraints)?;
+    let hard_constraints = hard_constraint_blocks_from_repr(&repr.hard_constraints)?;
+
     let soft_constraints = repr
         .soft_constraints
         .as_ref()
@@ -225,23 +153,46 @@ fn task_from_repr(repr: TaskRepr) -> Result<Task, String> {
 
 impl<'de> Deserialize<'de> for SchedulingProblem {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let (block_reprs, explicit_horizon, location) =
-            match ProblemRepr::deserialize(deserializer)? {
-                ProblemRepr::BlockList(blocks) => (blocks, None, None),
-                ProblemRepr::Envelope(envelope) => {
-                    let horizon = envelope
-                        .schedule_time_window
-                        .map(|tw| mjd_period(tw.start_mjd_utc, tw.end_mjd_utc))
-                        .transpose()
-                        .map_err(serde::de::Error::custom)?;
-                    let location = geodetic_location_from_repr(envelope.location)
-                        .map_err(serde::de::Error::custom)?;
-                    (envelope.scheduling_blocks, horizon, Some(location))
-                }
-            };
+        let (block_reprs, explicit_horizon, telescope) = match ProblemRepr::deserialize(
+            deserializer,
+        )? {
+            ProblemRepr::BlockList(blocks) => (blocks, None, None),
+            ProblemRepr::Envelope(envelope) => {
+                let horizon = envelope
+                    .schedule_time_window
+                    .map(|tw| mjd_period(tw.start_mjd_utc, tw.end_mjd_utc))
+                    .transpose()
+                    .map_err(serde::de::Error::custom)?;
+
+                let mut resources = envelope.resources.into_iter();
+                let telescope = if let Some(primary) = resources.next() {
+                    if resources.next().is_some() {
+                        return Err(serde::de::Error::custom(
+                            "multiple resources are not supported yet; expected exactly one telescope resource",
+                        ));
+                    }
+                    Some(primary.into_telescope().map_err(serde::de::Error::custom)?)
+                } else if let Some(location) = envelope.location {
+                    let location =
+                        geodetic_location_from_repr(location).map_err(serde::de::Error::custom)?;
+                    Some(Telescope::new(
+                        0,
+                        "telescope-0",
+                        location,
+                        Default::default(),
+                    ))
+                } else {
+                    return Err(serde::de::Error::custom(
+                        "missing observing site; expected resources[0].location or legacy location",
+                    ));
+                };
+
+                (envelope.scheduling_blocks, horizon, telescope)
+            }
+        };
 
         let mut problem = SchedulingProblem::new();
-        problem.location = location;
+        problem.telescope = telescope;
         let mut min_start = f64::INFINITY;
         let mut max_end = f64::NEG_INFINITY;
 
@@ -301,5 +252,149 @@ impl<'de> Deserialize<'de> for SchedulingProblem {
         }
 
         Ok(problem)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::constraints::{
+        AltitudeConstraint, ConstraintExpr, MoonAltitudeConstraint, NightConstraint,
+    };
+    use crate::time::{MJD, Period, Time};
+    use qtty::Meters;
+    use siderust::calculus::solar::Twilight;
+    use siderust::coordinates::centers::Geodetic;
+    use siderust::coordinates::frames::ECEF;
+
+    fn roque() -> Geodetic<ECEF> {
+        Geodetic::<ECEF>::new(
+            Degrees::new(-17.892),
+            Degrees::new(28.762),
+            Meters::new(2396.0),
+        )
+    }
+
+    #[test]
+    fn telescope_hard_constraints_parse_from_envelope() {
+        let payload = serde_json::json!({
+            "resources": [
+                {
+                    "id": 1,
+                    "name": "CTA-N",
+                    "location": {
+                        "longitude_deg": -17.892,
+                        "latitude_deg": 28.762,
+                        "height_m": 2396.0
+                    },
+                    "hard_constraints": {
+                        "night_time": {"twilight": "Nautical"},
+                        "moon_altitude": {"min_deg": -90.0, "max_deg": 0.0}
+                    }
+                }
+            ],
+            "schedule_time_window": {
+                "start_mjd_utc": 60000.0,
+                "end_mjd_utc": 60001.0
+            },
+            "scheduling_blocks": [
+                {
+                    "id": 1,
+                    "tasks": [
+                        {
+                            "id": 10,
+                            "name": "task-10",
+                            "requested_duration_sec": 600.0,
+                            "target": {"ra_deg": 101.287, "dec_deg": -16.716},
+                            "hard_constraints": {
+                                "altitude_min_deg": 20.0,
+                                "altitude_max_deg": 90.0
+                            }
+                        }
+                    ],
+                    "dependencies": []
+                }
+            ]
+        });
+
+        let problem: SchedulingProblem = serde_json::from_value(payload).unwrap();
+
+        let telescope = problem.telescope.as_ref().expect("telescope should parse");
+        let timeline = Period::new(Time::<MJD>::new(60000.0), Time::<MJD>::new(60001.0));
+        let telescope_out = telescope
+            .hard_constraints
+            .check_hard(&timeline, None, Some(&telescope.location))
+            .expect("telescope constraints should evaluate");
+        let expected_telescope = ConstraintExpr::Intersection(vec![
+            ConstraintExpr::atom(NightConstraint {
+                twilight: Twilight::Nautical,
+            }),
+            ConstraintExpr::atom(MoonAltitudeConstraint {
+                min: Degrees::new(-90.0),
+                max: Degrees::new(0.0),
+            }),
+        ])
+        .check(&timeline, Some(&telescope.location), None);
+        assert_eq!(telescope_out, expected_telescope);
+
+        // Task carries only its own constraints — telescope constraints are
+        // not merged in at deserialization time.
+        let task = problem.tasks.get(&TaskId(10)).expect("task parsed");
+        let task_out = task
+            .hard_constraints
+            .check_hard(&timeline, Some(&task.target), Some(&roque()))
+            .expect("task constraints should evaluate");
+        let expected_task = ConstraintExpr::atom(AltitudeConstraint {
+            min: Degrees::new(20.0),
+            max: Degrees::new(90.0),
+        })
+        .check(&timeline, Some(&roque()), Some(&task.target));
+        assert_eq!(task_out, expected_task);
+    }
+
+    #[test]
+    fn deserialize_rejects_moon_altitude_above_horizon_limit() {
+        let payload = serde_json::json!({
+            "resources": [
+                {
+                    "id": 1,
+                    "location": {
+                        "longitude_deg": -17.892,
+                        "latitude_deg": 28.762,
+                        "height_m": 2396.0
+                    },
+                    "hard_constraints": {
+                        "moon_altitude": {
+                            "min_deg": -90.0,
+                            "max_deg": 5.0
+                        }
+                    }
+                }
+            ],
+            "schedule_time_window": {
+                "start_mjd_utc": 60000.0,
+                "end_mjd_utc": 60001.0
+            },
+            "scheduling_blocks": [
+                {
+                    "id": 1,
+                    "tasks": [
+                        {
+                            "id": 10,
+                            "requested_duration_sec": 600.0,
+                            "target": { "ra_deg": 101.287, "dec_deg": -16.716 },
+                            "hard_constraints": {}
+                        }
+                    ],
+                    "dependencies": []
+                }
+            ]
+        });
+
+        let err = serde_json::from_value::<SchedulingProblem>(payload)
+            .expect_err("payload should be rejected")
+            .to_string();
+
+        assert!(err.contains("must be <= 0"));
     }
 }

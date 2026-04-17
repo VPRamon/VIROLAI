@@ -1,10 +1,10 @@
 use scheduler::scheduler::est;
+use scheduler::telescope::Telescope;
 use scheduler::time::{MJD, Period, Time};
 use scheduler::{Schedule, SchedulingProblem, preschedule};
-use siderust::coordinates::centers::Geodetic;
-use siderust::coordinates::frames::ECEF;
 use std::fs;
 use std::path::PathBuf;
+use std::time::Instant;
 
 fn main() {
     env_logger::init();
@@ -38,26 +38,31 @@ fn run() -> Result<(), String> {
         return Err("input JSON contains no tasks".to_string());
     }
 
-    // Destructure to allow independent borrows of tasks and blocks.
     let SchedulingProblem {
         tasks,
         blocks,
         detected_horizon,
-        location,
+        telescope,
     } = problem;
 
     let horizon = build_horizon(detected_horizon, horizon_override)?;
-    let site = build_site(location)?;
+    let telescope = telescope.ok_or_else(|| {
+        "missing observing site in input; expected resources[0] or legacy location".to_string()
+    })?;
     let blocks: Vec<_> = blocks.into_values().collect();
-
-    let possible_periods = preschedule(&blocks, &tasks, &horizon, &site)
-        .map_err(|e| format!("prescheduling failed: {e}"))?;
-
     let total_tasks = tasks.len();
+
+    let preschedule_start = Instant::now();
+    let possible_periods = preschedule(&blocks, &tasks, &horizon, &telescope)
+        .map_err(|e| format!("prescheduling failed: {e}"))?;
+    let preschedule_elapsed = preschedule_start.elapsed();
+
     let feasible_tasks = possible_periods.values().filter(|p| !p.is_empty()).count();
 
+    let est_start = Instant::now();
     let schedule = est::run_scheduler(tasks.into_values().collect(), &possible_periods, &horizon)
         .map_err(|e| format!("EST run failed: {e}"))?;
+    let est_elapsed = est_start.elapsed();
 
     println!(
         "Loaded {} blocks and {} tasks from {}",
@@ -65,15 +70,35 @@ fn run() -> Result<(), String> {
         total_tasks,
         input_path.display()
     );
+    print_telescope(&telescope);
     println!(
         "Horizon (MJD): [{:.5}, {:.5})",
         horizon.start.value(),
         horizon.end.value()
     );
-    println!("Prescheduler feasible tasks: {feasible_tasks}/{total_tasks}");
+    println!(
+        "Prescheduler feasible tasks: {feasible_tasks}/{total_tasks} in {:.3}s",
+        preschedule_elapsed.as_secs_f64()
+    );
+    println!("EST elapsed: {:.3}s", est_elapsed.as_secs_f64());
+    println!(
+        "Total scheduling elapsed: {:.3}s",
+        (preschedule_elapsed + est_elapsed).as_secs_f64()
+    );
     print_schedule(&schedule);
 
     Ok(())
+}
+
+fn print_telescope(telescope: &Telescope) {
+    println!(
+        "Telescope: id={} name='{}' lon={:.4}° lat={:.4}° h={:.0}m",
+        telescope.id,
+        telescope.name,
+        telescope.location.lon.value(),
+        telescope.location.lat.value(),
+        telescope.location.height.value(),
+    );
 }
 
 fn print_schedule(schedule: &Schedule) {
@@ -138,12 +163,6 @@ fn build_horizon(
     }
     detected.ok_or_else(|| {
         "missing schedule_time_window in input and no horizon override was provided".to_string()
-    })
-}
-
-fn build_site(location: Option<Geodetic<ECEF>>) -> Result<Geodetic<ECEF>, String> {
-    location.ok_or_else(|| {
-        "missing top-level location in input; expected geodetic coordinates".to_string()
     })
 }
 

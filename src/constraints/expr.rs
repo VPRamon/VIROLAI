@@ -42,6 +42,14 @@ impl ConstraintExpr {
         ConstraintExpr::Atom(Box::new(c))
     }
 
+    /// Return `true` when this expression imposes no restriction.
+    ///
+    /// By convention, an empty intersection is the identity element and
+    /// therefore equivalent to "always feasible" on the provided timeline.
+    pub fn is_unconstrained(&self) -> bool {
+        matches!(self, ConstraintExpr::Intersection(children) if children.is_empty())
+    }
+
     /// Evaluate the expression tree over a candidate timeline and optional
     /// contextual data required by some constraints.
     pub fn check(

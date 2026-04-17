@@ -32,9 +32,57 @@
     "time_window": {
       "description": "Fixed time window in which the task must be scheduled.",
       "$ref": "#/$defs/TimeWindow"
+    },
+    "night_time": {
+      "description": "Restrict feasibility to nighttime based on a siderust twilight threshold.",
+      "$ref": "#/$defs/NightTimeConstraint"
+    },
+    "moon_altitude": {
+      "description": "Restrict Moon altitude bounds; use max <= 0 to enforce Moon below horizon.",
+      "$ref": "#/$defs/MoonAltitudeConstraint"
     }
   },
   "$defs": {
+    "Twilight": {
+      "type": "string",
+      "enum": [
+        "Civil",
+        "Nautical",
+        "Astronomical",
+        "Horizon",
+        "ApparentHorizon"
+      ],
+      "description": "siderust Twilight enum variant used as the solar altitude threshold."
+    },
+    "NightTimeConstraint": {
+      "type": "object",
+      "required": ["twilight"],
+      "additionalProperties": false,
+      "properties": {
+        "twilight": {
+          "$ref": "#/$defs/Twilight"
+        }
+      }
+    },
+    "MoonAltitudeConstraint": {
+      "type": "object",
+      "required": ["min_deg", "max_deg"],
+      "additionalProperties": false,
+      "properties": {
+        "min_deg": {
+          "description": "Minimum allowed Moon altitude in degrees.",
+          "type": "number",
+          "minimum": -90,
+          "maximum": 0
+        },
+        "max_deg": {
+          "description": "Maximum allowed Moon altitude in degrees (must be <= horizon).",
+          "type": "number",
+          "minimum": -90,
+          "maximum": 0
+        }
+      }
+    },
     "TimeWindow": {
       "type": "object",
       "required": ["start_mjd_utc", "end_mjd_utc"],

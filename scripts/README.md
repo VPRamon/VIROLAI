@@ -6,8 +6,9 @@ Rust CLI that converts CTA dataset files in one directory (`*_internalSDC.json`)
 
 The output is a minimal scheduler-ready PhD payload:
 
-- top-level object fields: `location`, `schedule_time_window`, `scheduling_blocks`
-- `location` is generic geodetic coordinates (`longitude_deg`, `latitude_deg`, `height_m`)
+- top-level object fields: `resources`, `schedule_time_window`, `scheduling_blocks`
+- `resources` contains one inferred telescope resource with `id`, `name`, geodetic `location` (`longitude_deg`, `latitude_deg`, `height_m`), and telescope `hard_constraints`
+- adapter sets telescope `hard_constraints.night_time.twilight = "Astronomical"` and `hard_constraints.moon_altitude = {"min_deg": -90, "max_deg": 0}` to enforce night-only windows with Moon below horizon
 - adapter infers dataset observatory (`CTA-N` or `CTA-S`) and translates it to site coordinates (`CTA-N` -> Roque de los Muchachos, `CTA-S` -> El Paranal)
 - `schedule_time_window` defaults to UTC `[2028-01-01T00:00:00Z, 2029-01-01T00:00:00Z)` expressed in MJD
 - each scheduling block has `id`, `tasks`, and `dependencies`

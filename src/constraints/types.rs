@@ -38,7 +38,29 @@ impl ConstraintBlocks {
         location: Option<&Geodetic<ECEF>>,
     ) -> Result<PeriodSet<MJD>, ScheduleError> {
         let static_feasible = self.hard_static.check(timeline, location, target);
-        let dynamic_feasible = self.hard_dynamic.check(timeline, location, target);
+        if static_feasible.is_empty() {
+            return Ok(static_feasible);
+        }
+
+        if self.hard_dynamic.is_unconstrained() {
+            return Ok(static_feasible);
+        }
+
+        // Evaluate dynamic constraints only inside statically feasible windows.
+        // This avoids expensive full-horizon astronomy calculations when tasks
+        // already have narrow time windows.
+        let dynamic_feasible = if self.hard_static.is_unconstrained() {
+            self.hard_dynamic.check(timeline, location, target)
+        } else {
+            static_feasible
+                .as_slice()
+                .iter()
+                .fold(PeriodSet::new(), |acc, period| {
+                    let dynamic = self.hard_dynamic.check(period, location, target);
+                    acc.union(&dynamic)
+                })
+        };
+
         Ok(static_feasible.intersection(&dynamic_feasible))
     }
 }

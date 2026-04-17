@@ -2,6 +2,7 @@ use super::{Schedule, TaskPlacement};
 use crate::error::ScheduleError;
 use crate::scheduling_block::SchedulingBlock;
 use crate::task::Task;
+use crate::telescope::Telescope;
 use crate::time::{MJD, Period, PeriodSet, SchedulingBlockId, TaskId, TimeInterval};
 use siderust::coordinates::centers::Geodetic;
 use siderust::coordinates::frames::ECEF;
@@ -14,14 +15,15 @@ use std::collections::HashMap;
 /// when the problem is constructed programmatically or when no time windows
 /// are present in the input.
 ///
-/// `location` is populated when input JSON provides a top-level geodetic
-/// location (the envelope format used by `scheduling_problem.schema.json`).
+/// `telescope` is populated when input JSON provides an observing resource via
+/// the envelope `resources[0]` entry (preferred) or a legacy top-level
+/// `location` (in which case telescope hard constraints default to empty).
 #[derive(Debug, Default)]
 pub struct SchedulingProblem {
     pub tasks: HashMap<TaskId, Task>,
     pub blocks: HashMap<SchedulingBlockId, SchedulingBlock>,
     pub detected_horizon: Option<Period<MJD>>,
-    pub location: Option<Geodetic<ECEF>>,
+    pub telescope: Option<Telescope>,
 }
 
 impl SchedulingProblem {
