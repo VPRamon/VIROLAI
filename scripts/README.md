@@ -61,13 +61,13 @@ The API starts at `http://localhost:8080`.
 From the repository root:
 
 ```bash
-./docker/start_adapted_tsi.sh
+./webapp/docker/start_adapted_tsi.sh
 ```
 
 Equivalent direct command:
 
 ```bash
-docker compose -f docker/docker-compose.yml up --build
+docker compose -f webapp/docker/docker-compose.yml up --build
 ```
 
 Services:

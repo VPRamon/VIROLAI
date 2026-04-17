@@ -16,13 +16,13 @@ This directory contains the Docker assets for running TSI with the PhD schema ad
 From the repository root:
 
 ```bash
-./docker/start_adapted_tsi.sh
+./webapp/docker/start_adapted_tsi.sh
 ```
 
 This runs:
 
 ```bash
-docker compose -f docker/docker-compose.yml up --build
+docker compose -f webapp/docker/docker-compose.yml up --build
 ```
 
 Services:
@@ -35,19 +35,19 @@ Services:
 Detached mode:
 
 ```bash
-./docker/start_adapted_tsi.sh -d
+./webapp/docker/start_adapted_tsi.sh -d
 ```
 
 Stop services:
 
 ```bash
-./docker/start_adapted_tsi.sh down
+./webapp/docker/start_adapted_tsi.sh down
 ```
 
 Follow logs:
 
 ```bash
-docker compose -f docker/docker-compose.yml logs -f
+docker compose -f webapp/docker/docker-compose.yml logs -f
 ```
 
 ## Optional Environment Variables

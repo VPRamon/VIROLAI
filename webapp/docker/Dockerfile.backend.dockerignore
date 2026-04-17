@@ -7,8 +7,8 @@ target
 **/target
 
 # Frontend outputs not needed for backend image
-TSI/frontend/node_modules
-TSI/frontend/dist
+webapp/TSI/frontend/node_modules
+webapp/TSI/frontend/dist
 
 # Editor/cache artifacts
 .vscode

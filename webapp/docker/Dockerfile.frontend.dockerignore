@@ -5,11 +5,11 @@
 # Rust build outputs not needed for frontend image
 target
 **/target
-TSI/backend/target
+webapp/TSI/backend/target
 
 # Frontend outputs
-TSI/frontend/node_modules
-TSI/frontend/dist
+webapp/TSI/frontend/node_modules
+webapp/TSI/frontend/dist
 
 # Editor/cache artifacts
 .vscode

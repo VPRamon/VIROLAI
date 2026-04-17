@@ -5,8 +5,8 @@
 services:
   backend:
     build:
-      context: ..
-      dockerfile: docker/Dockerfile.backend
+      context: ../..
+      dockerfile: webapp/docker/Dockerfile.backend
     restart: unless-stopped
     environment:
       HOST: 0.0.0.0
@@ -22,8 +22,8 @@ services:
 
   frontend:
     build:
-      context: ..
-      dockerfile: docker/Dockerfile.frontend
+      context: ../..
+      dockerfile: webapp/docker/Dockerfile.frontend
     restart: unless-stopped
     depends_on:
       backend:
