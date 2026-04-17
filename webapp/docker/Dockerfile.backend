@@ -6,6 +6,11 @@ FROM rust:latest AS builder
 
 WORKDIR /app
 
+RUN apt-get update && apt-get install -y \
+    libpq-dev \
+    pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+
 # Copy TSI backend dependency crate
 COPY webapp/TSI/backend/Cargo.toml webapp/TSI/backend/Cargo.lock* webapp/TSI/backend/
 COPY webapp/TSI/backend/src webapp/TSI/backend/src
@@ -30,6 +35,7 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y \
     ca-certificates \
     curl \
+    libpq5 \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /app/target/release/phd_tsi_server /usr/local/bin/phd_tsi_server

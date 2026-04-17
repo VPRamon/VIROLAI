@@ -7,12 +7,32 @@ use tracing::warn;
 use tsi_rust::api::{self, Schedule};
 use tsi_rust::models::ModifiedJulianDate;
 use tsi_rust::qtty;
+use tsi_rust::siderust::bodies::Sun;
+use tsi_rust::siderust::bodies::solar_system::Moon;
+use tsi_rust::siderust::calculus::solar::Twilight;
+use tsi_rust::siderust::time::intersect_periods;
+use tsi_rust::siderust::{SearchOpts, altitude_ranges, below_threshold};
 use tsi_rust::services::ScheduleImportAdapter;
 use tsi_rust::services::visibility_service::{VisibilityInput, compute_block_visibility};
 
 const FALLBACK_SCHEDULE_START_MJD: f64 = 60000.0;
 const FALLBACK_SCHEDULE_END_MJD: f64 = 60007.0;
 const DEFAULT_SCHEDULE_NAME: &str = "PhD Scheduling Problem";
+
+#[derive(Debug, Clone)]
+struct ResourceObservabilityConstraints {
+    twilight: Twilight,
+    moon_altitude_deg: Option<(f64, f64)>,
+}
+
+impl Default for ResourceObservabilityConstraints {
+    fn default() -> Self {
+        Self {
+            twilight: Twilight::Astronomical,
+            moon_altitude_deg: None,
+        }
+    }
+}
 
 #[derive(Debug, Default)]
 pub struct PhdScheduleImportAdapter;
@@ -34,7 +54,8 @@ impl ScheduleImportAdapter for PhdScheduleImportAdapter {
 
         validate_problem_shape(&input)?;
 
-        let (geographic_location, schedule_name) = resolve_location_and_name(&input)?;
+        let (geographic_location, schedule_name, resource_constraints) =
+            resolve_location_and_name(&input)?;
         let mut blocks = map_blocks(&input.scheduling_blocks)?;
         let schedule_period =
             resolve_schedule_period(input.schedule_time_window.as_ref(), &blocks)?;
@@ -45,6 +66,12 @@ impl ScheduleImportAdapter for PhdScheduleImportAdapter {
                 &schedule_period,
             );
 
+        let dark_periods = compute_dark_periods(
+            &geographic_location,
+            &schedule_period,
+            &resource_constraints,
+        )?;
+
         blocks.par_iter_mut().for_each(|block| {
             block.visibility_periods = compute_block_visibility(&VisibilityInput {
                 location: &geographic_location,
@@ -53,7 +80,7 @@ impl ScheduleImportAdapter for PhdScheduleImportAdapter {
                 target_dec: block.target_dec,
                 constraints: &block.constraints,
                 min_duration: block.min_observation,
-                astronomical_nights: Some(&astronomical_nights),
+                astronomical_nights: Some(&dark_periods),
             });
         });
 
@@ -62,11 +89,40 @@ impl ScheduleImportAdapter for PhdScheduleImportAdapter {
             name: schedule_name,
             checksum: tsi_rust::models::schedule::compute_schedule_checksum(raw_payload),
             schedule_period,
-            dark_periods: astronomical_nights.clone(),
+            dark_periods,
             geographic_location,
             astronomical_nights,
             blocks,
         })
+    }
+}
+
+fn compute_dark_periods(
+    geographic_location: &api::GeographicLocation,
+    schedule_period: &api::Period,
+    constraints: &ResourceObservabilityConstraints,
+) -> anyhow::Result<Vec<api::Period>> {
+    let night_periods = below_threshold(
+        &Sun,
+        geographic_location,
+        *schedule_period,
+        constraints.twilight.into(),
+        SearchOpts::default(),
+    );
+
+    match constraints.moon_altitude_deg {
+        Some((min_deg, max_deg)) => {
+            let moon_ok_periods = altitude_ranges(
+                &Moon,
+                geographic_location,
+                *schedule_period,
+                qtty::Degrees::new(min_deg),
+                qtty::Degrees::new(max_deg),
+                SearchOpts::default(),
+            );
+            Ok(intersect_periods(&night_periods, &moon_ok_periods))
+        }
+        None => Ok(night_periods),
     }
 }
 
@@ -106,7 +162,11 @@ fn validate_problem_shape(input: &PhdSchedulingProblemRepr) -> anyhow::Result<()
 
 fn resolve_location_and_name(
     input: &PhdSchedulingProblemRepr,
-) -> anyhow::Result<(api::GeographicLocation, String)> {
+) -> anyhow::Result<(
+    api::GeographicLocation,
+    String,
+    ResourceObservabilityConstraints,
+)> {
     if let Some(primary) = input.resources.first() {
         if input.resources.len() > 1 {
             warn!(
@@ -116,6 +176,12 @@ fn resolve_location_and_name(
         }
 
         let location = map_location(&primary.location)?;
+        let constraints = primary
+            .hard_constraints
+            .as_ref()
+            .map(map_resource_constraints)
+            .transpose()?
+            .unwrap_or_default();
         let name = primary
             .name
             .as_deref()
@@ -124,7 +190,7 @@ fn resolve_location_and_name(
             .map(ToOwned::to_owned)
             .unwrap_or_else(|| DEFAULT_SCHEDULE_NAME.to_string());
 
-        return Ok((location, name));
+        return Ok((location, name, constraints));
     }
 
     let fallback_location = input
@@ -135,7 +201,39 @@ fn resolve_location_and_name(
     Ok((
         map_location(fallback_location)?,
         DEFAULT_SCHEDULE_NAME.to_string(),
+        ResourceObservabilityConstraints::default(),
     ))
+}
+
+fn map_resource_constraints(
+    repr: &ResourceHardConstraintsRepr,
+) -> anyhow::Result<ResourceObservabilityConstraints> {
+    let twilight = repr
+        .night_time
+        .as_ref()
+        .map(|night| Twilight::from(night.twilight))
+        .unwrap_or(Twilight::Astronomical);
+
+    let moon_altitude_deg = if let Some(moon) = &repr.moon_altitude {
+        if !moon.min_deg.is_finite() || !moon.max_deg.is_finite() {
+            bail!("resource moon_altitude bounds must be finite");
+        }
+        if moon.min_deg > moon.max_deg {
+            bail!(
+                "resource moon_altitude has invalid bounds: min_deg {} > max_deg {}",
+                moon.min_deg,
+                moon.max_deg
+            );
+        }
+        Some((moon.min_deg, moon.max_deg))
+    } else {
+        None
+    };
+
+    Ok(ResourceObservabilityConstraints {
+        twilight,
+        moon_altitude_deg,
+    })
 }
 
 fn map_location(repr: &LocationRepr) -> anyhow::Result<api::GeographicLocation> {
@@ -214,6 +312,8 @@ fn map_task(parent_block_id: u64, task: &PhdTaskRepr) -> anyhow::Result<api::Sch
         .map(map_time_window)
         .transpose()?;
 
+    let scheduled_period = map_scheduled_period(task)?;
+
     let priority = task
         .soft_constraints
         .as_ref()
@@ -249,8 +349,40 @@ fn map_task(parent_block_id: u64, task: &PhdTaskRepr) -> anyhow::Result<api::Sch
         min_observation: qtty::Seconds::new(task.requested_duration_sec),
         requested_duration: qtty::Seconds::new(task.requested_duration_sec),
         visibility_periods: Vec::new(),
-        scheduled_period: None,
+        scheduled_period,
     })
+}
+
+fn map_scheduled_period(task: &PhdTaskRepr) -> anyhow::Result<Option<api::Period>> {
+    if matches!(task.scheduled, Some(false)) {
+        return Ok(None);
+    }
+
+    match (task.scheduled_start_mjd_utc, task.scheduled_end_mjd_utc) {
+        (Some(start), Some(end)) => {
+            if !start.is_finite() || !end.is_finite() {
+                bail!("task {} has non-finite scheduled time bounds", task.id);
+            }
+            if start >= end {
+                bail!(
+                    "task {} has invalid scheduled window: start {} must be < end {}",
+                    task.id,
+                    start,
+                    end
+                );
+            }
+
+            Ok(Some(api::Period {
+                start: ModifiedJulianDate::new(start),
+                end: ModifiedJulianDate::new(end),
+            }))
+        }
+        (None, None) => Ok(None),
+        _ => bail!(
+            "task {} has incomplete scheduled window: both scheduled_start_mjd_utc and scheduled_end_mjd_utc are required",
+            task.id
+        ),
+    }
 }
 
 fn resolve_schedule_period(
@@ -317,6 +449,48 @@ struct ResourceRepr {
     #[serde(default)]
     name: Option<String>,
     location: LocationRepr,
+    #[serde(default)]
+    hard_constraints: Option<ResourceHardConstraintsRepr>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ResourceHardConstraintsRepr {
+    #[serde(default)]
+    night_time: Option<NightTimeConstraintRepr>,
+    #[serde(default)]
+    moon_altitude: Option<MoonAltitudeConstraintRepr>,
+}
+
+#[derive(Debug, Deserialize)]
+struct NightTimeConstraintRepr {
+    twilight: TwilightRepr,
+}
+
+#[derive(Debug, Deserialize)]
+struct MoonAltitudeConstraintRepr {
+    min_deg: f64,
+    max_deg: f64,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+enum TwilightRepr {
+    Civil,
+    Nautical,
+    Astronomical,
+    Horizon,
+    ApparentHorizon,
+}
+
+impl From<TwilightRepr> for Twilight {
+    fn from(value: TwilightRepr) -> Self {
+        match value {
+            TwilightRepr::Civil => Twilight::Civil,
+            TwilightRepr::Nautical => Twilight::Nautical,
+            TwilightRepr::Astronomical => Twilight::Astronomical,
+            TwilightRepr::Horizon => Twilight::Horizon,
+            TwilightRepr::ApparentHorizon => Twilight::ApparentHorizon,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -345,6 +519,12 @@ struct PhdTaskRepr {
     #[serde(default)]
     name: Option<String>,
     requested_duration_sec: f64,
+    #[serde(default)]
+    scheduled: Option<bool>,
+    #[serde(default)]
+    scheduled_start_mjd_utc: Option<f64>,
+    #[serde(default)]
+    scheduled_end_mjd_utc: Option<f64>,
     #[serde(default)]
     target: Option<TargetRepr>,
     #[serde(default)]
@@ -439,6 +619,59 @@ mod tests {
     }
 
     #[test]
+    fn maps_scheduled_window_when_present() {
+        let payload = r#"{
+            "resources": [{
+                "name": "CTA-N",
+                "location": {
+                    "longitude_deg": -17.8925,
+                    "latitude_deg": 28.7543,
+                    "height_m": 2396.0
+                }
+            }],
+            "schedule_time_window": {
+                "start_mjd_utc": 61771.0,
+                "end_mjd_utc": 61772.0
+            },
+            "scheduling_blocks": [{
+                "id": 100,
+                "tasks": [{
+                    "id": 101,
+                    "name": "scheduled-task",
+                    "requested_duration_sec": 1200.0,
+                    "scheduled": true,
+                    "scheduled_start_mjd_utc": 61771.25,
+                    "scheduled_end_mjd_utc": 61771.30,
+                    "target": { "ra_deg": 83.63, "dec_deg": 22.01 },
+                    "hard_constraints": {
+                        "altitude_min_deg": 30.0,
+                        "altitude_max_deg": 90.0,
+                        "azimuth_min_deg": 0.0,
+                        "azimuth_max_deg": 360.0,
+                        "time_window": {
+                            "start_mjd_utc": 61771.1,
+                            "end_mjd_utc": 61771.4
+                        }
+                    },
+                    "soft_constraints": { "priority": 3.0 }
+                }],
+                "dependencies": []
+            }]
+        }"#;
+
+        let adapter = PhdScheduleImportAdapter;
+        let schedule = adapter
+            .parse_schedule(payload)
+            .expect("payload should parse");
+
+        let scheduled = schedule.blocks[0]
+            .scheduled_period
+            .expect("scheduled period should be mapped");
+        assert_eq!(scheduled.start.value(), 61771.25);
+        assert_eq!(scheduled.end.value(), 61771.30);
+    }
+
+    #[test]
     fn rejects_bare_task_ids() {
         let payload = r#"{
             "resources": [{
@@ -464,6 +697,69 @@ mod tests {
             err.to_string()
                 .contains("adapter requires full task objects"),
             "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn resource_twilight_constraint_changes_dark_periods() {
+        let payload = r#"{
+            "resources": [{
+                "name": "CTA-N",
+                "location": {
+                    "longitude_deg": -17.8925,
+                    "latitude_deg": 28.7543,
+                    "height_m": 2396.0
+                },
+                "hard_constraints": {
+                    "night_time": { "twilight": "Civil" }
+                }
+            }],
+            "schedule_time_window": {
+                "start_mjd_utc": 61771.0,
+                "end_mjd_utc": 61772.0
+            },
+            "scheduling_blocks": [{
+                "id": 100,
+                "tasks": [{
+                    "id": 101,
+                    "name": "test-task",
+                    "requested_duration_sec": 1200.0,
+                    "target": { "ra_deg": 83.63, "dec_deg": 22.01 },
+                    "hard_constraints": {
+                        "altitude_min_deg": 30.0,
+                        "altitude_max_deg": 90.0,
+                        "azimuth_min_deg": 0.0,
+                        "azimuth_max_deg": 360.0,
+                        "time_window": {
+                            "start_mjd_utc": 61771.1,
+                            "end_mjd_utc": 61771.2
+                        }
+                    },
+                    "soft_constraints": { "priority": 3.0 }
+                }],
+                "dependencies": []
+            }]
+        }"#;
+
+        let adapter = PhdScheduleImportAdapter;
+        let schedule = adapter
+            .parse_schedule(payload)
+            .expect("payload should parse");
+
+        let dark_hours: f64 = schedule
+            .dark_periods
+            .iter()
+            .map(|p| (p.end.value() - p.start.value()) * 24.0)
+            .sum();
+        let astro_hours: f64 = schedule
+            .astronomical_nights
+            .iter()
+            .map(|p| (p.end.value() - p.start.value()) * 24.0)
+            .sum();
+
+        assert!(
+            dark_hours > astro_hours,
+            "civil twilight dark-period coverage should be greater than astronomical-night coverage"
         );
     }
 }

@@ -4,12 +4,13 @@ This directory contains the Docker assets for running TSI with the PhD schema ad
 
 ## Files
 
-- docker-compose.yml: frontend + adapted backend stack
+- docker-compose.yml: frontend + adapted backend + postgres stack
 - Dockerfile.backend: builds the phd_tsi_server binary
 - Dockerfile.frontend: builds and serves the TSI frontend
 - Dockerfile.backend.dockerignore: backend-specific Docker ignore rules
 - Dockerfile.frontend.dockerignore: frontend-specific Docker ignore rules
-- ../setup.sh: helper script to start/stop the stack
+- ../setup.sh: helper script to start the stack
+- ../teardown.sh: helper script to stop/remove the stack
 
 ## Quick Start
 
@@ -41,7 +42,13 @@ Detached mode:
 Stop services:
 
 ```bash
-./webapp/setup.sh down
+./webapp/teardown.sh
+```
+
+Stop services and delete database data:
+
+```bash
+./webapp/teardown.sh --purge-db
 ```
 
 Follow logs:
@@ -54,4 +61,12 @@ docker compose -f webapp/docker/docker-compose.yml logs -f
 
 - BACKEND_PORT (default: 8080)
 - FRONTEND_PORT (default: 3000)
+- POSTGRES_PORT (default: 5432)
+- POSTGRES_USER (default: tsi)
+- POSTGRES_PASSWORD (default: tsi)
+- POSTGRES_DB (default: tsi)
 - RUST_LOG (default: info)
+
+## Database Persistence
+
+PostgreSQL data is stored in the named Docker volume `postgres_data`, so data survives restarts and normal teardown (`./webapp/teardown.sh`).

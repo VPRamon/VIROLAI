@@ -64,6 +64,18 @@ From the repository root:
 ./webapp/setup.sh
 ```
 
+Stop services while keeping database data:
+
+```bash
+./webapp/teardown.sh
+```
+
+Remove services and database data:
+
+```bash
+./webapp/teardown.sh --purge-db
+```
+
 Equivalent direct command:
 
 ```bash
@@ -74,5 +86,7 @@ Services:
 
 - frontend: `http://localhost:3000`
 - backend health: `http://localhost:8080/health`
+
+The Docker stack uses a persistent PostgreSQL volume (`postgres_data`) by default.
 
 Upload any `scheduling_problem.json` compatible with `schemas/scheduling_problem.schema.json` directly in the TSI UI.
