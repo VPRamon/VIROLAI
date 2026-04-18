@@ -3,8 +3,15 @@ use scheduler::telescope::Telescope;
 use scheduler::time::{MJD, Period, Time};
 use scheduler::{Schedule, ScheduleOutput, SchedulingProblem, preschedule};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
+
+#[derive(Debug, Clone)]
+struct CliArgs {
+    input_path: PathBuf,
+    horizon_override: Option<(f64, f64)>,
+    est_config: est::EstConfig,
+}
 
 fn main() {
     env_logger::init();
@@ -17,17 +24,14 @@ fn main() {
 
 fn run() -> Result<(), String> {
     let args: Vec<String> = std::env::args().collect();
-    if args.len() < 2 || args.len() > 4 {
-        eprintln!(
-            "Usage: {} <input_json> [horizon_start_mjd horizon_end_mjd]\n\
-             Example: {} data/ctao_n.json",
-            args[0], args[0]
-        );
-        return Err("invalid CLI arguments".to_string());
-    }
+    let cli = match parse_cli_args(&args[0], &args[1..]) {
+        Ok(cli) => cli,
+        Err(error) if error == "help requested" => return Ok(()),
+        Err(error) => return Err(error),
+    };
 
-    let input_path = resolve_input_path(&args[1]);
-    let horizon_override = parse_horizon_args(&args[2..])?;
+    let input_path = cli.input_path;
+    let horizon_override = cli.horizon_override;
 
     let text = fs::read_to_string(&input_path)
         .map_err(|e| format!("failed to read {}: {e}", input_path.display()))?;
@@ -62,7 +66,10 @@ fn run() -> Result<(), String> {
     let feasible_tasks = possible_periods.values().filter(|p| !p.is_empty()).count();
 
     let est_start = Instant::now();
-    let schedule = est::run_scheduler(tasks.into_values().collect(), &possible_periods, &horizon)
+    let est_scheduler = est::EstScheduler::new(cli.est_config)
+        .map_err(|e| format!("invalid EST configuration: {e}"))?;
+    let schedule = est_scheduler
+        .run_scheduler(tasks.into_values().collect(), &possible_periods, &horizon)
         .map_err(|e| format!("EST run failed: {e}"))?;
     let est_elapsed = est_start.elapsed();
 
@@ -82,6 +89,10 @@ fn run() -> Result<(), String> {
         "Prescheduler feasible tasks: {feasible_tasks}/{total_tasks} in {:.3}s",
         preschedule_elapsed.as_secs_f64()
     );
+    println!(
+        "EST config: endangered_threshold={}",
+        cli.est_config.endangered_threshold
+    );
     println!("EST elapsed: {:.3}s", est_elapsed.as_secs_f64());
     println!(
         "Total scheduling elapsed: {:.3}s",
@@ -98,6 +109,72 @@ fn run() -> Result<(), String> {
     println!("Schedule written to {}", output_path.display());
 
     Ok(())
+}
+
+fn parse_cli_args(program: &str, args: &[String]) -> Result<CliArgs, String> {
+    if args.is_empty() {
+        print_usage(program);
+        return Err("invalid CLI arguments".to_string());
+    }
+
+    let mut positionals: Vec<&str> = Vec::new();
+    let mut est_config = est::EstConfig::default();
+
+    let mut i = 0usize;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--est-endangered-threshold" => {
+                let Some(value) = args.get(i + 1) else {
+                    print_usage(program);
+                    return Err(
+                        "missing value for --est-endangered-threshold (expected an unsigned integer)"
+                            .to_string(),
+                    );
+                };
+                est_config.endangered_threshold = value.parse::<u32>().map_err(|e| {
+                    format!("invalid --est-endangered-threshold value '{value}': {e}")
+                })?;
+                i += 2;
+            }
+            "-h" | "--help" => {
+                print_usage(program);
+                return Err("help requested".to_string());
+            }
+            flag if flag.starts_with('-') => {
+                print_usage(program);
+                return Err(format!("unknown argument '{flag}'"));
+            }
+            value => {
+                positionals.push(value);
+                i += 1;
+            }
+        }
+    }
+
+    let (input_arg, horizon_override) = match positionals.as_slice() {
+        [input] => (*input, None),
+        [input, start, end] => (*input, parse_horizon_args(&[*start, *end])?),
+        _ => {
+            print_usage(program);
+            return Err(
+                "expected <input_json> and optional [horizon_start_mjd horizon_end_mjd]"
+                    .to_string(),
+            );
+        }
+    };
+
+    Ok(CliArgs {
+        input_path: resolve_input_path(input_arg),
+        horizon_override,
+        est_config,
+    })
+}
+
+fn print_usage(program: &str) {
+    eprintln!(
+        "Usage: {program} <input_json> [horizon_start_mjd horizon_end_mjd] [--est-endangered-threshold <u32>]\n\
+         Example: {program} data/ctao_n.json --est-endangered-threshold 2"
+    );
 }
 
 fn print_telescope(telescope: &Telescope) {
@@ -136,7 +213,7 @@ fn print_schedule(schedule: &Schedule) {
     }
 }
 
-fn parse_horizon_args(args: &[String]) -> Result<Option<(f64, f64)>, String> {
+fn parse_horizon_args(args: &[&str]) -> Result<Option<(f64, f64)>, String> {
     match args {
         [] => Ok(None),
         [start, end] => {
@@ -152,12 +229,12 @@ fn parse_horizon_args(args: &[String]) -> Result<Option<(f64, f64)>, String> {
     }
 }
 
-fn derive_output_path(input: &PathBuf) -> PathBuf {
+fn derive_output_path(input: &Path) -> PathBuf {
     let stem = input
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("schedule");
-    let parent = input.parent().unwrap_or(std::path::Path::new("."));
+    let parent = input.parent().unwrap_or(Path::new("."));
     parent.join(format!("{stem}_schedule.json"))
 }
 

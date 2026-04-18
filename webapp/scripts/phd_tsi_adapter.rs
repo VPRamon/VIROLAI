@@ -7,13 +7,13 @@ use tracing::warn;
 use tsi_rust::api::{self, Schedule};
 use tsi_rust::models::ModifiedJulianDate;
 use tsi_rust::qtty;
+use tsi_rust::services::ScheduleImportAdapter;
+use tsi_rust::services::visibility_service::{VisibilityInput, compute_block_visibility};
 use tsi_rust::siderust::bodies::Sun;
 use tsi_rust::siderust::bodies::solar_system::Moon;
 use tsi_rust::siderust::calculus::solar::Twilight;
 use tsi_rust::siderust::time::intersect_periods;
 use tsi_rust::siderust::{SearchOpts, altitude_ranges, below_threshold};
-use tsi_rust::services::ScheduleImportAdapter;
-use tsi_rust::services::visibility_service::{VisibilityInput, compute_block_visibility};
 
 const FALLBACK_SCHEDULE_START_MJD: f64 = 60000.0;
 const FALLBACK_SCHEDULE_END_MJD: f64 = 60007.0;

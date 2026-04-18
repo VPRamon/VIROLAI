@@ -32,10 +32,7 @@ impl ScheduleOutput {
             .map(|(TaskId(id), p)| {
                 (
                     *id,
-                    (
-                        p.start.to::<MJD>().value(),
-                        p.end.to::<MJD>().value(),
-                    ),
+                    (p.start.to::<MJD>().value(), p.end.to::<MJD>().value()),
                 )
             })
             .collect();
@@ -57,7 +54,10 @@ impl Serialize for ScheduleOutput {
 
 fn annotate_blocks(json: &mut Value, placements: &HashMap<u64, (f64, f64)>) {
     // Envelope format: { "scheduling_blocks": [...] }
-    if let Some(blocks) = json.get_mut("scheduling_blocks").and_then(Value::as_array_mut) {
+    if let Some(blocks) = json
+        .get_mut("scheduling_blocks")
+        .and_then(Value::as_array_mut)
+    {
         for block in blocks {
             annotate_tasks_in_block(block, placements);
         }
