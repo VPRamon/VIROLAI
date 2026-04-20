@@ -2,8 +2,8 @@ mod algorithm;
 mod candidate;
 mod ordering;
 mod queue;
-mod validation;
 mod schedule_state;
+mod validation;
 
 pub use algorithm::{EstConfig, EstScheduler, run_scheduler};
 pub use candidate::{EstCandidate, IntoTaskPlacement};

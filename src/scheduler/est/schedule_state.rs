@@ -1,9 +1,9 @@
 use super::queue::CandidateQueue;
 use crate::schedule::Schedule;
-use crate::time::{Time, MJD};
+use crate::time::{MJD, Time};
 
 pub struct ScheduleState<'a> {
-    pub cursor: Time<MJD>,
-    pub schedule: Schedule,
-    pub candidates: CandidateQueue<'a>,
+    pub(super) cursor: Time<MJD>,
+    pub(super) schedule: Schedule,
+    pub(super) candidates: CandidateQueue<'a>,
 }

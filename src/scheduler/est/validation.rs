@@ -1,11 +1,16 @@
-use super::algorithm::EstScheduler;
+use super::algorithm::{EstScheduler};
 use crate::error::ScheduleError;
 use crate::prescheduler::TaskPeriodMap;
 use crate::task::Task;
 use std::collections::HashSet;
 
 #[inline]
-pub fn validate_scheduler(_scheduler: &EstScheduler) -> Result<(), ScheduleError> {
+pub fn validate_scheduler(scheduler: &EstScheduler) -> Result<(), ScheduleError> {
+    if scheduler.config.k_beams == 0 {
+        return Err(ScheduleError::InvalidConfiguration(
+            "est.k_beams must be at least 1".to_string(),
+        ));
+    }
     Ok(())
 }
 

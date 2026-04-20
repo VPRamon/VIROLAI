@@ -12,12 +12,15 @@ use crate::time::{MJD, Period};
 pub struct EstConfig {
     /// Candidate class split between endangered and flexible.
     pub endangered_threshold: u32,
+    /// Number of schedule states kept in memory during an EST run.
+    pub k_beams: usize,
 }
 
 impl Default for EstConfig {
     fn default() -> Self {
         Self {
             endangered_threshold: 1,
+            k_beams: 1,
         }
     }
 }
@@ -43,9 +46,10 @@ impl EstScheduler {
         horizon: &Period<MJD>,
     ) -> Result<Schedule, ScheduleError> {
         log::info!(
-            "est: starting scheduler — tasks={}, endangered_threshold={}, horizon=[{:.4}, {:.4}]",
+            "est: starting scheduler — tasks={}, endangered_threshold={}, k_beams={}, horizon=[{:.4}, {:.4}]",
             tasks.len(),
             self.config.endangered_threshold,
+            self.config.k_beams,
             horizon.start.value(),
             horizon.end.value(),
         );
@@ -55,16 +59,30 @@ impl EstScheduler {
 
         log::debug!("est: {} tasks remain after feasibility filter", tasks.len());
 
-        let mut schedule_state = super::ScheduleState {
-            cursor: horizon.start,
-            schedule: Schedule::new(),
-            candidates: CandidateQueue::build(
-                &tasks,
-                possible_periods,
-                horizon,
-                self.config.endangered_threshold,
-            ),
-        };
+        let initial_candidates = CandidateQueue::build(
+            &tasks,
+            possible_periods,
+            horizon,
+            self.config.endangered_threshold,
+        );
+
+        let mut schedule_states: Vec<super::ScheduleState> = (0..self.config.k_beams)
+            .map(|_| super::ScheduleState {
+                cursor: horizon.start,
+                schedule: Schedule::new(),
+                candidates: initial_candidates.clone(),
+            })
+            .collect();
+
+        // while true
+        //   for each schedule_state schedule next candidate
+        //   if all schedule states have no candidates, break
+        //   if collect k_beams schedules, keep best k_beams schedules and discard the rest
+
+
+        let schedule_state = schedule_states
+            .first_mut()
+            .expect("EST invariant violated: k_beams must be >= 1");
 
         let mut iteration: u32 = 0;
 
@@ -103,7 +121,12 @@ impl EstScheduler {
             iteration,
         );
 
-        Ok(schedule_state.schedule)
+        let primary_state = schedule_states
+            .into_iter()
+            .next()
+            .expect("EST invariant violated: primary schedule state is missing");
+
+        Ok(primary_state.schedule)
     }
 }
 

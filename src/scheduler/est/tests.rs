@@ -1,4 +1,4 @@
-use super::algorithm::{EstConfig, EstScheduler, run_scheduler};
+use super::algorithm::{EstConfig, EstScheduler, MAX_k_beams, run_scheduler};
 use super::candidate::EstCandidate;
 use super::ordering::compare_candidates;
 use crate::constraints::{ConstraintExpr, PrioritySoftConstraint, SoftConstraintExpr};
@@ -227,8 +227,39 @@ fn run_scheduler_recomputes_est_from_remaining_horizon() {
 fn zero_threshold_is_allowed() {
     let scheduler = EstScheduler::new(EstConfig {
         endangered_threshold: 0,
+        ..EstConfig::default()
     });
     assert!(scheduler.is_ok());
+}
+
+#[test]
+fn zero_k_beams_is_rejected() {
+    let error = EstScheduler::new(EstConfig {
+        k_beams: 0,
+        ..EstConfig::default()
+    })
+    .expect_err("scheduler config should fail");
+
+    assert!(matches!(
+        error,
+        ScheduleError::InvalidConfiguration(message)
+            if message.contains("est.k_beams must be at least 1")
+    ));
+}
+
+#[test]
+fn k_beams_above_max_is_rejected() {
+    let error = EstScheduler::new(EstConfig {
+        k_beams: MAX_k_beams + 1,
+        ..EstConfig::default()
+    })
+    .expect_err("scheduler config should fail");
+
+    assert!(matches!(
+        error,
+        ScheduleError::InvalidConfiguration(message)
+            if message.contains(&format!("est.k_beams must be <= {MAX_k_beams}"))
+    ));
 }
 
 #[test]
