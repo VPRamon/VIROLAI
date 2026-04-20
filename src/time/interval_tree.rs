@@ -34,7 +34,7 @@ use crate::time::{Period, TaskId, TimeScale, interval};
 /// - `entries` is sorted ascending by `entry.0.start.value()`.
 /// - `suffix_max_end[i]` equals `max(entries[j].0.end.value() for j ≥ i)`.
 /// - `suffix_max_end.len() == entries.len()`.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct IntervalTree<S: TimeScale> {
     /// `(interval, task_id)` pairs sorted ascending by `interval.start`.
     entries: Vec<(Period<S>, TaskId)>,

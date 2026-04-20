@@ -90,8 +90,10 @@ fn run() -> Result<(), String> {
         preschedule_elapsed.as_secs_f64()
     );
     println!(
-        "EST config: endangered_threshold={}, k_beams={}",
-        cli.est_config.endangered_threshold, cli.est_config.k_beams,
+        "EST config: endangered_threshold={}, k_beams={}, branching_factor={}",
+        cli.est_config.endangered_threshold,
+        cli.est_config.k_beams,
+        cli.est_config.branching_factor,
     );
     println!("EST elapsed: {:.3}s", est_elapsed.as_secs_f64());
     println!(
@@ -149,6 +151,19 @@ fn parse_cli_args(program: &str, args: &[String]) -> Result<CliArgs, String> {
                     .map_err(|e| format!("invalid --est-schedule-states value '{value}': {e}"))?;
                 i += 2;
             }
+            "--est-branching-factor" => {
+                let Some(value) = args.get(i + 1) else {
+                    print_usage(program);
+                    return Err(
+                        "missing value for --est-branching-factor (expected an unsigned integer)"
+                            .to_string(),
+                    );
+                };
+                est_config.branching_factor = value
+                    .parse::<usize>()
+                    .map_err(|e| format!("invalid --est-branching-factor value '{value}': {e}"))?;
+                i += 2;
+            }
             "-h" | "--help" => {
                 print_usage(program);
                 return Err("help requested".to_string());
@@ -185,8 +200,8 @@ fn parse_cli_args(program: &str, args: &[String]) -> Result<CliArgs, String> {
 
 fn print_usage(program: &str) {
     eprintln!(
-        "Usage: {program} <input_json> [horizon_start_mjd horizon_end_mjd] [--est-endangered-threshold <u32>] [--est-schedule-states <usize>]\n\
-         Example: {program} data/ctao_n.json --est-endangered-threshold 2 --est-schedule-states 1"
+        "Usage: {program} <input_json> [horizon_start_mjd horizon_end_mjd] [--est-endangered-threshold <u32>] [--est-schedule-states <usize>] [--est-branching-factor <usize>]\n\
+         Example: {program} data/ctao_n.json --est-endangered-threshold 2 --est-schedule-states 5 --est-branching-factor 3"
     );
 }
 

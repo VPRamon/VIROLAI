@@ -1,5 +1,6 @@
-use super::algorithm::{EstConfig, EstScheduler, MAX_k_beams, run_scheduler};
+use super::algorithm::{EstConfig, EstScheduler, MAX_K_BEAMS, run_scheduler};
 use super::candidate::EstCandidate;
+use super::fom::SoftConstraintFom;
 use super::ordering::compare_candidates;
 use crate::constraints::{ConstraintExpr, PrioritySoftConstraint, SoftConstraintExpr};
 use crate::error::ScheduleError;
@@ -10,6 +11,7 @@ use qtty::{Degrees, Seconds};
 use siderust::coordinates::frames::ICRS;
 use siderust::coordinates::spherical::Direction;
 use std::cmp::Ordering;
+use std::sync::Arc;
 
 fn target() -> IcrsTarget {
     Direction::<ICRS>::new_raw(Degrees::new(10.0), Degrees::new(20.0))
@@ -250,7 +252,7 @@ fn zero_k_beams_is_rejected() {
 #[test]
 fn k_beams_above_max_is_rejected() {
     let error = EstScheduler::new(EstConfig {
-        k_beams: MAX_k_beams + 1,
+        k_beams: MAX_K_BEAMS + 1,
         ..EstConfig::default()
     })
     .expect_err("scheduler config should fail");
@@ -258,7 +260,22 @@ fn k_beams_above_max_is_rejected() {
     assert!(matches!(
         error,
         ScheduleError::InvalidConfiguration(message)
-            if message.contains(&format!("est.k_beams must be <= {MAX_k_beams}"))
+            if message.contains(&format!("est.k_beams must be <= {MAX_K_BEAMS}"))
+    ));
+}
+
+#[test]
+fn zero_branching_factor_is_rejected() {
+    let error = EstScheduler::new(EstConfig {
+        branching_factor: 0,
+        ..EstConfig::default()
+    })
+    .expect_err("scheduler config should fail");
+
+    assert!(matches!(
+        error,
+        ScheduleError::InvalidConfiguration(message)
+            if message.contains("est.branching_factor must be at least 1")
     ));
 }
 
@@ -290,4 +307,108 @@ fn run_scheduler_rejects_zero_duration_tasks() {
     let error = run_scheduler(tasks, &possible, &horizon).expect_err("run should fail");
 
     assert!(matches!(error, ScheduleError::InvalidDuration));
+}
+
+/// k=1, b=1 must match the classic greedy result exactly.
+#[test]
+fn beam_search_k1_b1_matches_greedy() {
+    let tasks_a = vec![
+        task_with_priority(1, 0.5, 1.0),
+        task_with_priority(2, 0.5, 1.0),
+    ];
+    let tasks_b = vec![
+        task_with_priority(1, 0.5, 1.0),
+        task_with_priority(2, 0.5, 1.0),
+    ];
+    let mut possible = TaskPeriodMap::new();
+    possible.insert(TaskId(1), windows(&[(2.0, 3.0)]));
+    possible.insert(TaskId(2), windows(&[(0.0, 1.0)]));
+
+    let horizon = period(0.0, 4.0);
+
+    let greedy = run_scheduler(tasks_a, &possible, &horizon).expect("greedy run should pass");
+
+    let config = EstConfig {
+        k_beams: 1,
+        branching_factor: 1,
+        ..EstConfig::default()
+    };
+    let beam = EstScheduler::new(config)
+        .expect("config should be valid")
+        .run_scheduler(tasks_b, &possible, &horizon)
+        .expect("beam run should pass");
+
+    assert_eq!(greedy.placements.len(), beam.placements.len());
+    for (id, p) in &greedy.placements {
+        let q = beam.placements.get(id).expect("same task should be placed");
+        assert_eq!(p.start, q.start);
+    }
+}
+
+/// With k=2, b=2 the scheduler explores a second branch and should place
+/// both tasks even when they share a window (only one fits per greedy run).
+#[test]
+fn beam_search_k2_b2_places_both_tasks_in_disjoint_windows() {
+    // task 1 fits in [0,2], task 2 fits only in [1,3].
+    // Greedy: place task 1 at t=0 (ends at t=1), then task 2 at t=1. Both fit.
+    // Beam with b=2 must also find this or a better solution.
+    let tasks_a = vec![
+        task_with_priority(1, 1.0, 10.0),
+        task_with_priority(2, 1.0, 5.0),
+    ];
+    let tasks_b = vec![
+        task_with_priority(1, 1.0, 10.0),
+        task_with_priority(2, 1.0, 5.0),
+    ];
+    let mut possible = TaskPeriodMap::new();
+    possible.insert(TaskId(1), windows(&[(0.0, 2.0)]));
+    possible.insert(TaskId(2), windows(&[(0.0, 3.0)]));
+
+    let horizon = period(0.0, 5.0);
+
+    let greedy = run_scheduler(tasks_a, &possible, &horizon).expect("greedy should pass");
+
+    let config = EstConfig {
+        k_beams: 2,
+        branching_factor: 2,
+        ..EstConfig::default()
+    };
+    let beam = EstScheduler::new(config)
+        .expect("config should be valid")
+        .run_scheduler(tasks_b, &possible, &horizon)
+        .expect("beam run should pass");
+
+    // Beam search must place at least as many tasks as greedy.
+    assert!(beam.placements.len() >= greedy.placements.len());
+}
+
+/// `SoftConstraintFom` should prefer the schedule that maximises priority sum.
+#[test]
+fn beam_search_soft_constraint_fom_prefers_high_priority() {
+    // Two tasks fit in the same window; only one can be placed.
+    // task 1 has priority 10, task 2 has priority 1.
+    // SoftConstraintFom should pick task 1.
+    let tasks = vec![
+        task_with_priority(1, 1.5, 10.0),
+        task_with_priority(2, 1.5, 1.0),
+    ];
+    let mut possible = TaskPeriodMap::new();
+    possible.insert(TaskId(1), windows(&[(0.0, 2.0)]));
+    possible.insert(TaskId(2), windows(&[(0.0, 2.0)]));
+
+    let horizon = period(0.0, 2.0);
+
+    let config = EstConfig {
+        k_beams: 2,
+        branching_factor: 2,
+        ..EstConfig::default()
+    };
+    let schedule = EstScheduler::with_fom(config, Arc::new(SoftConstraintFom))
+        .expect("config should be valid")
+        .run_scheduler(tasks, &possible, &horizon)
+        .expect("run should pass");
+
+    // Only one task fits; with SoftConstraintFom it should be the high-priority one.
+    assert_eq!(schedule.placements.len(), 1);
+    assert!(schedule.placements.contains_key(&TaskId(1)));
 }

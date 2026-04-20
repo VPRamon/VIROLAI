@@ -20,7 +20,7 @@ use std::collections::HashMap;
 /// The placement result.
 ///
 /// All mutations keep the placement map and interval tree consistent.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct Schedule {
     pub placements: HashMap<TaskId, TaskPlacement>,
     interval_tree: IntervalTree<JD>,

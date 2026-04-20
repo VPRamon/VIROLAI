@@ -2,6 +2,7 @@ use super::queue::CandidateQueue;
 use crate::schedule::Schedule;
 use crate::time::{MJD, Time};
 
+#[derive(Clone)]
 pub struct ScheduleState<'a> {
     pub(super) cursor: Time<MJD>,
     pub(super) schedule: Schedule,

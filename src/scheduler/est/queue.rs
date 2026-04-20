@@ -37,11 +37,25 @@ impl<'a> CandidateQueue<'a> {
         Self { candidates }
     }
 
-    pub(super) fn pop_next(&mut self) -> Option<EstCandidate<'a>> {
+    /// Count candidates at the front of the queue that are schedulable (not impossible).
+    pub(super) fn count_schedulable(&self) -> usize {
         self.candidates
-            .first()
-            .filter(|candidate| !candidate.is_impossible())?;
-        Some(self.candidates.remove(0))
+            .iter()
+            .take_while(|c| !c.is_impossible())
+            .count()
+    }
+
+    /// Remove and return the candidate at position `idx`.
+    ///
+    /// `idx` must be less than `count_schedulable()`. The remaining candidates
+    /// keep their relative order — no re-sort is needed since `refresh()` has
+    /// already sorted them.
+    pub(super) fn pop_at(&mut self, idx: usize) -> EstCandidate<'a> {
+        debug_assert!(
+            idx < self.candidates.len() && !self.candidates[idx].is_impossible(),
+            "pop_at: idx={idx} is out of range or points to an impossible candidate"
+        );
+        self.candidates.remove(idx)
     }
 
     pub(super) fn refresh(&mut self, horizon: &Period<MJD>, endangered_threshold: u32) {
