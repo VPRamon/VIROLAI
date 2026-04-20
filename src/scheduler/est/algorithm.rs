@@ -55,26 +55,28 @@ impl EstScheduler {
 
         log::debug!("est: {} tasks remain after feasibility filter", tasks.len());
 
-        let mut schedule = Schedule::new();
+        let mut schedule_state = super::ScheduleState {
+            cursor: horizon.start,
+            schedule: Schedule::new(),
+            candidates: CandidateQueue::build(
+                &tasks,
+                possible_periods,
+                horizon,
+                self.config.endangered_threshold,
+            ),
+        };
 
-        let mut candidates = CandidateQueue::build(
-            &tasks,
-            possible_periods,
-            horizon,
-            self.config.endangered_threshold,
-        );
-        let mut cursor = horizon.start;
         let mut iteration: u32 = 0;
 
-        while cursor < horizon.end {
-            candidates.refresh(
-                &Period::new(cursor, horizon.end),
+        while schedule_state.cursor < horizon.end {
+            schedule_state.candidates.refresh(
+                &Period::new(schedule_state.cursor, horizon.end),
                 self.config.endangered_threshold,
             );
-            let Some(candidate) = candidates.pop_next() else {
+            let Some(candidate) = schedule_state.candidates.pop_next() else {
                 log::warn!(
                     "est: no schedulable candidates remain at cursor={:.4}",
-                    cursor.value()
+                    schedule_state.cursor.value()
                 );
                 break;
             };
@@ -90,18 +92,18 @@ impl EstScheduler {
                 placement.end.value(),
             );
 
-            cursor = placement.end.to::<MJD>();
-            schedule.insert_placement(placement);
+            schedule_state.cursor = placement.end.to::<MJD>();
+            schedule_state.schedule.insert_placement(placement);
             iteration += 1;
         }
 
         log::info!(
             "est: done — scheduled {} task(s) in {} iteration(s)",
-            schedule.placements.len(),
+            schedule_state.schedule.placements.len(),
             iteration,
         );
 
-        Ok(schedule)
+        Ok(schedule_state.schedule)
     }
 }
 
