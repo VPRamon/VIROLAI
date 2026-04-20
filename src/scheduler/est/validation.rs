@@ -1,4 +1,4 @@
-use super::algorithm::{EstScheduler, MAX_K_BEAMS};
+use super::algorithm::EstScheduler;
 use crate::error::ScheduleError;
 use crate::prescheduler::TaskPeriodMap;
 use crate::task::Task;
@@ -11,9 +11,9 @@ pub fn validate_scheduler(scheduler: &EstScheduler) -> Result<(), ScheduleError>
             "est.k_beams must be at least 1".to_string(),
         ));
     }
-    if scheduler.config.k_beams > MAX_K_BEAMS {
+    if scheduler.config.k_beams < 1 {
         return Err(ScheduleError::InvalidConfiguration(format!(
-            "est.k_beams must be <= {MAX_K_BEAMS}"
+            "est.k_beams must be >= 1"
         )));
     }
     if scheduler.config.branching_factor == 0 {
