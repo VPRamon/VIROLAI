@@ -37,7 +37,7 @@ Notes:
 Run the scheduler on a `scheduling_problem.json` file:
 
 ```bash
-cargo run --bin scheduler -- <input_json> [horizon_start_mjd horizon_end_mjd] [--est-endangered-threshold <u32>]
+cargo run --bin scheduler -- <input_json> [horizon_start_mjd horizon_end_mjd] [--est-fom <task_count|soft_constraint>] [--est-endangered-threshold <u32>] [--est-k <usize>] [--est-b <usize>]
 ```
 
 Examples:
@@ -56,7 +56,7 @@ cargo run --bin scheduler -- data/CTA-N/scheduling_problem.json 61710.0 61720.0
 Optional EST configuration override:
 
 ```bash
-cargo run --bin scheduler -- data/CTA-N/scheduling_problem.json --est-endangered-threshold 2
+cargo run --bin scheduler -- data/CTA-N/scheduling_problem.json --est-fom soft_constraint --est-endangered-threshold 2 --est-k 5 --est-b 3
 ```
 
 The scheduler writes a result file next to the input using the pattern:
@@ -69,6 +69,57 @@ For example:
 
 ```text
 data/CTA-N/scheduling_problem_schedule.json
+```
+
+## 2b. Run an EST experiment sweep
+
+Run a whole EST configuration sweep and write one schedule per configuration plus a comparison CSV:
+
+```bash
+cargo run --bin est_experiment -- --spec experiments/ctao_n_est.json
+```
+
+You can also drive the sweep directly from CLI overrides:
+
+```bash
+cargo run --bin est_experiment -- data/CTA-N/scheduling_problem.json \
+  --output-dir out/ctao_n_est \
+  --est-fom-values task_count,soft_constraint \
+  --est-e-values 1,2 \
+  --est-k-values 1,4 \
+  --est-b-values 1,2
+```
+
+Generated output layout:
+
+```text
+<output_dir>/
+  manifest.json
+  comparison.csv
+  schedules/
+    fom-task_count__e-1__k-1__b-1.json
+    ...
+```
+
+Example experiment-spec JSON:
+
+```json
+{
+  "input_json": "data/CTA-N/scheduling_problem.json",
+  "output_dir": "out/ctao_n_est",
+  "baseline": {
+    "fom": "task_count",
+    "endangered_threshold": 1,
+    "k_beams": 1,
+    "branching_factor": 1
+  },
+  "sweep": {
+    "foms": ["task_count", "soft_constraint"],
+    "endangered_thresholds": [1, 2],
+    "k_beams": [1, 4],
+    "branching_factors": [1, 2]
+  }
+}
 ```
 
 ## 3. Run the webapp

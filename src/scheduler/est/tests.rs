@@ -1,7 +1,8 @@
-use super::algorithm::{EstConfig, EstScheduler, MAX_K_BEAMS, run_scheduler};
 use super::candidate::EstCandidate;
-use super::fom::SoftConstraintFom;
+use super::fom::{EstFomKind, SoftConstraintFom};
 use super::ordering::compare_candidates;
+use super::queue::CandidateQueue;
+use super::{EstConfig, EstScheduler, MAX_K_BEAMS, run_scheduler};
 use crate::constraints::{ConstraintExpr, PrioritySoftConstraint, SoftConstraintExpr};
 use crate::error::ScheduleError;
 use crate::prescheduler::TaskPeriodMap;
@@ -84,37 +85,161 @@ fn comparator_puts_impossible_candidates_last() {
 }
 
 #[test]
-fn comparator_allows_flexible_before_endangered_when_safe() {
+fn comparator_orders_by_earlier_est_first() {
     let horizon = period(0.0, 10.0);
     let empty_windows = crate::time::PeriodSet::new();
-    let endangered_task = task_with_priority(1, 2.0, 1.0);
-    let flexible_task = task_with_priority(2, 1.0, 1.0);
-    let flexible_long_task = task_with_priority(2, 4.5, 1.0);
+    let earlier_task = task_with_priority(1, 1.0, 1.0);
+    let later_task = task_with_priority(2, 1.0, 100.0);
 
-    let mut endangered = EstCandidate::new(&endangered_task, &empty_windows, &horizon);
-    endangered.est = Some(Time::<MJD>::new(5.0));
-    endangered.deadline = Some(Time::<MJD>::new(8.0));
-    endangered.flexibility = 1.2;
+    let mut earlier = EstCandidate::new(&earlier_task, &empty_windows, &horizon);
+    earlier.est = Some(Time::<MJD>::new(1.0));
+    earlier.flexibility = 5.0;
 
-    let mut flexible = EstCandidate::new(&flexible_task, &empty_windows, &horizon);
-    flexible.est = Some(Time::<MJD>::new(4.0));
-    flexible.deadline = Some(Time::<MJD>::new(10.0));
-    flexible.flexibility = 3.0;
+    let mut later = EstCandidate::new(&later_task, &empty_windows, &horizon);
+    later.est = Some(Time::<MJD>::new(2.0));
+    later.flexibility = 1.0;
 
     assert_eq!(
-        compare_candidates(&flexible, &endangered, 2, horizon.start),
+        compare_candidates(&earlier, &later, 2, horizon.start),
         Ordering::Less
     );
+}
 
-    let mut flexible_long = EstCandidate::new(&flexible_long_task, &empty_windows, &horizon);
-    flexible_long.est = flexible.est;
-    flexible_long.deadline = flexible.deadline;
-    flexible_long.flexibility = flexible.flexibility;
+#[test]
+fn comparator_orders_by_lower_flexibility_before_priority() {
+    let horizon = period(0.0, 10.0);
+    let empty_windows = crate::time::PeriodSet::new();
+    let low_flex_task = task_with_priority(1, 1.0, 1.0);
+    let high_flex_task = task_with_priority(2, 1.0, 100.0);
+
+    let mut low_flex = EstCandidate::new(&low_flex_task, &empty_windows, &horizon);
+    low_flex.est = Some(Time::<MJD>::new(1.0));
+    low_flex.flexibility = 1.5;
+
+    let mut high_flex = EstCandidate::new(&high_flex_task, &empty_windows, &horizon);
+    high_flex.est = Some(Time::<MJD>::new(1.0));
+    high_flex.flexibility = 3.0;
 
     assert_eq!(
-        compare_candidates(&flexible_long, &endangered, 2, horizon.start),
-        Ordering::Greater
+        compare_candidates(&low_flex, &high_flex, 2, horizon.start),
+        Ordering::Less
     );
+}
+
+#[test]
+fn comparator_orders_by_higher_soft_priority_after_est_and_flexibility() {
+    let horizon = period(0.0, 10.0);
+    let empty_windows = crate::time::PeriodSet::new();
+    let low_priority_task = task_with_priority(1, 1.0, 1.0);
+    let high_priority_task = task_with_priority(2, 1.0, 10.0);
+
+    let mut low_priority = EstCandidate::new(&low_priority_task, &empty_windows, &horizon);
+    low_priority.est = Some(Time::<MJD>::new(1.0));
+    low_priority.flexibility = 2.0;
+
+    let mut high_priority = EstCandidate::new(&high_priority_task, &empty_windows, &horizon);
+    high_priority.est = Some(Time::<MJD>::new(1.0));
+    high_priority.flexibility = 2.0;
+
+    assert_eq!(
+        compare_candidates(&high_priority, &low_priority, 2, horizon.start),
+        Ordering::Less
+    );
+}
+
+#[test]
+fn comparator_orders_by_task_id_after_other_keys_tie() {
+    let horizon = period(0.0, 10.0);
+    let empty_windows = crate::time::PeriodSet::new();
+    let lower_id_task = task_with_priority(1, 1.0, 5.0);
+    let higher_id_task = task_with_priority(2, 1.0, 5.0);
+
+    let mut lower_id = EstCandidate::new(&lower_id_task, &empty_windows, &horizon);
+    lower_id.est = Some(Time::<MJD>::new(1.0));
+    lower_id.flexibility = 2.0;
+
+    let mut higher_id = EstCandidate::new(&higher_id_task, &empty_windows, &horizon);
+    higher_id.est = Some(Time::<MJD>::new(1.0));
+    higher_id.flexibility = 2.0;
+
+    assert_eq!(
+        compare_candidates(&lower_id, &higher_id, 2, horizon.start),
+        Ordering::Less
+    );
+}
+
+#[test]
+fn comparator_sorts_missing_est_after_candidates_with_est() {
+    let horizon = period(0.0, 10.0);
+    let empty_windows = crate::time::PeriodSet::new();
+    let with_est_task = task_with_priority(1, 1.0, 1.0);
+    let missing_est_task = task_with_priority(2, 1.0, 1.0);
+
+    let mut with_est = EstCandidate::new(&with_est_task, &empty_windows, &horizon);
+    with_est.est = Some(Time::<MJD>::new(1.0));
+    with_est.flexibility = 2.0;
+
+    let mut missing_est = EstCandidate::new(&missing_est_task, &empty_windows, &horizon);
+    missing_est.est = None;
+    missing_est.flexibility = 2.0;
+
+    assert_eq!(
+        compare_candidates(&with_est, &missing_est, 2, horizon.start),
+        Ordering::Less
+    );
+}
+
+#[test]
+fn candidate_queue_pop_at_uses_schedulable_index_not_raw_index() {
+    let horizon = period(0.0, 10.0);
+    let empty_windows = crate::time::PeriodSet::new();
+    let task_1 = task_with_priority(1, 1.0, 10.0);
+    let task_2 = task_with_priority(2, 1.0, 1.0);
+    let task_3 = task_with_priority(3, 1.0, 5.0);
+
+    let mut first = EstCandidate::new(&task_1, &empty_windows, &horizon);
+    first.est = Some(Time::<MJD>::new(1.0));
+    first.flexibility = 2.0;
+
+    let mut impossible = EstCandidate::new(&task_2, &empty_windows, &horizon);
+    impossible.est = None;
+    impossible.flexibility = 0.25;
+
+    let mut second = EstCandidate::new(&task_3, &empty_windows, &horizon);
+    second.est = Some(Time::<MJD>::new(2.0));
+    second.flexibility = 3.0;
+
+    let mut queue = CandidateQueue::from_candidates_for_test(vec![first, impossible, second]);
+
+    assert_eq!(queue.count_schedulable(), 2);
+    assert_eq!(queue.pop_at(1).task_id(), TaskId(3));
+    assert_eq!(queue.count_schedulable(), 1);
+}
+
+#[test]
+fn candidate_queue_refresh_resorts_mixed_candidates_without_panicking() {
+    let tasks = [
+        task_with_priority(1, 1.0, 1.0),
+        task_with_priority(2, 1.0, 10.0),
+        task_with_priority(3, 1.0, 5.0),
+        task_with_priority(4, 1.0, 1.0),
+    ];
+    let mut possible = TaskPeriodMap::new();
+    possible.insert(TaskId(1), windows(&[(0.0, 2.0)]));
+    possible.insert(TaskId(2), windows(&[(0.0, 3.0)]));
+    possible.insert(TaskId(3), windows(&[(2.0, 3.0)]));
+    possible.insert(TaskId(4), crate::time::PeriodSet::new());
+
+    let horizon = period(0.0, 5.0);
+    let task_refs: Vec<_> = tasks.iter().collect();
+    let mut queue = CandidateQueue::build(&task_refs, &possible, &horizon, 10);
+
+    queue.refresh(&period(0.5, 5.0), 10);
+
+    assert_eq!(queue.count_schedulable(), 3);
+    assert_eq!(queue.pop_at(0).task_id(), TaskId(1));
+    assert_eq!(queue.pop_at(0).task_id(), TaskId(2));
+    assert_eq!(queue.pop_at(0).task_id(), TaskId(3));
 }
 
 #[test]
@@ -128,7 +253,7 @@ fn run_scheduler_schedules_feasible_and_marks_unplanned() {
     possible.insert(TaskId(2), windows(&[(10.0, 12.0)]));
 
     let horizon = period(0.0, 5.0);
-    let schedule = run_scheduler(tasks, &possible, &horizon).expect("run should pass");
+    let schedule = run_scheduler(&tasks, &possible, &horizon).expect("run should pass");
 
     assert_eq!(schedule.placements.len(), 1);
     let placement = schedule
@@ -149,7 +274,7 @@ fn run_scheduler_filters_tasks_missing_possible_periods() {
     possible.insert(TaskId(1), windows(&[(0.0, 2.0)]));
 
     let horizon = period(0.0, 5.0);
-    let schedule = run_scheduler(tasks, &possible, &horizon).expect("run should pass");
+    let schedule = run_scheduler(&tasks, &possible, &horizon).expect("run should pass");
 
     assert!(schedule.placements.contains_key(&TaskId(1)));
     assert!(!schedule.placements.contains_key(&TaskId(2)));
@@ -166,7 +291,7 @@ fn run_scheduler_filters_tasks_with_empty_possible_periods() {
     possible.insert(TaskId(2), crate::time::PeriodSet::new());
 
     let horizon = period(0.0, 5.0);
-    let schedule = run_scheduler(tasks, &possible, &horizon).expect("run should pass");
+    let schedule = run_scheduler(&tasks, &possible, &horizon).expect("run should pass");
 
     assert!(schedule.placements.contains_key(&TaskId(1)));
     assert!(!schedule.placements.contains_key(&TaskId(2)));
@@ -183,7 +308,7 @@ fn run_scheduler_uses_earliest_start_order() {
     possible.insert(TaskId(2), windows(&[(0.0, 1.0)]));
 
     let horizon = period(0.0, 4.0);
-    let schedule = run_scheduler(tasks, &possible, &horizon).expect("run should pass");
+    let schedule = run_scheduler(&tasks, &possible, &horizon).expect("run should pass");
 
     assert_eq!(schedule.placements.len(), 2);
     let task_1 = schedule
@@ -209,7 +334,7 @@ fn run_scheduler_recomputes_est_from_remaining_horizon() {
     possible.insert(TaskId(2), windows(&[(0.5, 3.0)]));
 
     let horizon = period(0.0, 4.0);
-    let schedule = run_scheduler(tasks, &possible, &horizon).expect("run should pass");
+    let schedule = run_scheduler(&tasks, &possible, &horizon).expect("run should pass");
 
     assert_eq!(schedule.placements.len(), 2);
     let task_1 = schedule
@@ -232,6 +357,14 @@ fn zero_threshold_is_allowed() {
         ..EstConfig::default()
     });
     assert!(scheduler.is_ok());
+}
+
+#[test]
+fn with_kind_builds_soft_constraint_scheduler() {
+    let scheduler = EstScheduler::with_kind(EstConfig::default(), EstFomKind::SoftConstraint)
+        .expect("config should be valid");
+
+    assert!(format!("{:?}", scheduler.fom).contains("SoftConstraintFom"));
 }
 
 #[test]
@@ -288,7 +421,7 @@ fn run_scheduler_rejects_duplicate_task_ids() {
     let possible = TaskPeriodMap::new();
     let horizon = period(0.0, 5.0);
 
-    let error = run_scheduler(tasks, &possible, &horizon).expect_err("run should fail");
+    let error = run_scheduler(&tasks, &possible, &horizon).expect_err("run should fail");
 
     assert!(
         matches!(error, ScheduleError::InvalidTask(message) if message.contains("duplicate task id 1"))
@@ -304,7 +437,7 @@ fn run_scheduler_rejects_zero_duration_tasks() {
     let possible = TaskPeriodMap::new();
     let horizon = period(0.0, 5.0);
 
-    let error = run_scheduler(tasks, &possible, &horizon).expect_err("run should fail");
+    let error = run_scheduler(&tasks, &possible, &horizon).expect_err("run should fail");
 
     assert!(matches!(error, ScheduleError::InvalidDuration));
 }
@@ -326,7 +459,7 @@ fn beam_search_k1_b1_matches_greedy() {
 
     let horizon = period(0.0, 4.0);
 
-    let greedy = run_scheduler(tasks_a, &possible, &horizon).expect("greedy run should pass");
+    let greedy = run_scheduler(&tasks_a, &possible, &horizon).expect("greedy run should pass");
 
     let config = EstConfig {
         k_beams: 1,
@@ -335,7 +468,7 @@ fn beam_search_k1_b1_matches_greedy() {
     };
     let beam = EstScheduler::new(config)
         .expect("config should be valid")
-        .run_scheduler(tasks_b, &possible, &horizon)
+        .run_scheduler(&tasks_b, &possible, &horizon)
         .expect("beam run should pass");
 
     assert_eq!(greedy.placements.len(), beam.placements.len());
@@ -366,7 +499,7 @@ fn beam_search_k2_b2_places_both_tasks_in_disjoint_windows() {
 
     let horizon = period(0.0, 5.0);
 
-    let greedy = run_scheduler(tasks_a, &possible, &horizon).expect("greedy should pass");
+    let greedy = run_scheduler(&tasks_a, &possible, &horizon).expect("greedy should pass");
 
     let config = EstConfig {
         k_beams: 2,
@@ -375,11 +508,39 @@ fn beam_search_k2_b2_places_both_tasks_in_disjoint_windows() {
     };
     let beam = EstScheduler::new(config)
         .expect("config should be valid")
-        .run_scheduler(tasks_b, &possible, &horizon)
+        .run_scheduler(&tasks_b, &possible, &horizon)
         .expect("beam run should pass");
 
     // Beam search must place at least as many tasks as greedy.
     assert!(beam.placements.len() >= greedy.placements.len());
+}
+
+#[test]
+fn beam_search_wide_branching_does_not_panic_with_mixed_candidate_states() {
+    let tasks = vec![
+        task_with_priority(1, 1.0, 10.0),
+        task_with_priority(2, 1.0, 9.0),
+        task_with_priority(3, 1.0, 8.0),
+        task_with_priority(4, 1.0, 1.0),
+    ];
+    let mut possible = TaskPeriodMap::new();
+    possible.insert(TaskId(1), windows(&[(0.0, 2.0)]));
+    possible.insert(TaskId(2), windows(&[(0.0, 2.5)]));
+    possible.insert(TaskId(3), windows(&[(1.0, 3.0)]));
+    possible.insert(TaskId(4), windows(&[(0.0, 0.5)]));
+
+    let horizon = period(0.0, 4.0);
+    let config = EstConfig {
+        k_beams: 1,
+        branching_factor: 4,
+        ..EstConfig::default()
+    };
+    let schedule = EstScheduler::new(config)
+        .expect("config should be valid")
+        .run_scheduler(&tasks, &possible, &horizon)
+        .expect("wide-branch EST run should pass");
+
+    assert!(!schedule.placements.is_empty());
 }
 
 /// `SoftConstraintFom` should prefer the schedule that maximises priority sum.
@@ -405,7 +566,7 @@ fn beam_search_soft_constraint_fom_prefers_high_priority() {
     };
     let schedule = EstScheduler::with_fom(config, Arc::new(SoftConstraintFom))
         .expect("config should be valid")
-        .run_scheduler(tasks, &possible, &horizon)
+        .run_scheduler(&tasks, &possible, &horizon)
         .expect("run should pass");
 
     // Only one task fits; with SoftConstraintFom it should be the high-priority one.

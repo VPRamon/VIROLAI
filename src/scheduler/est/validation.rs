@@ -1,19 +1,24 @@
 use super::algorithm::EstScheduler;
+use super::config::MAX_K_BEAMS;
 use crate::error::ScheduleError;
 use crate::prescheduler::TaskPeriodMap;
 use crate::task::Task;
 use std::collections::HashSet;
 
 #[inline]
+/// Validate EST scheduler configuration before any work is performed.
 pub fn validate_scheduler(scheduler: &EstScheduler) -> Result<(), ScheduleError> {
     if scheduler.config.k_beams == 0 {
         return Err(ScheduleError::InvalidConfiguration(
             "est.k_beams must be at least 1".to_string(),
         ));
     }
-    if scheduler.config.k_beams < 1 {
+    if scheduler.config.k_beams > MAX_K_BEAMS {
+        // Cap beam width explicitly so malformed configs cannot explode the
+        // search-state count.
         return Err(ScheduleError::InvalidConfiguration(format!(
-            "est.k_beams must be >= 1"
+            "est.k_beams must be <= {MAX_K_BEAMS}, got {}",
+            scheduler.config.k_beams
         )));
     }
     if scheduler.config.branching_factor == 0 {
@@ -25,6 +30,11 @@ pub fn validate_scheduler(scheduler: &EstScheduler) -> Result<(), ScheduleError>
 }
 
 #[inline]
+/// Validate the task list consumed by EST.
+///
+/// Decision checks:
+/// 1. reject non-positive durations,
+/// 2. reject duplicate task identifiers.
 pub fn validate_tasks(tasks: &[Task]) -> Result<(), ScheduleError> {
     log::debug!("est: validating {} task(s)", tasks.len());
     let mut seen_ids = HashSet::with_capacity(tasks.len());
@@ -35,6 +45,8 @@ pub fn validate_tasks(tasks: &[Task]) -> Result<(), ScheduleError> {
             return Err(ScheduleError::InvalidDuration);
         }
 
+        // EST depends on unique task ids because schedules and feasible-window
+        // maps are keyed by `TaskId`.
         if !seen_ids.insert(task.id) {
             log::warn!("est: duplicate task id {}", task.id.0);
             return Err(ScheduleError::InvalidTask(format!(
@@ -49,11 +61,14 @@ pub fn validate_tasks(tasks: &[Task]) -> Result<(), ScheduleError> {
 }
 
 #[inline]
-pub fn filter_tasks(tasks: Vec<Task>, possible_periods: &TaskPeriodMap) -> Vec<Task> {
+/// Drop tasks that have no feasible windows in the pre-scheduler output.
+pub fn filter_tasks<'a>(tasks: &'a [Task], possible_periods: &TaskPeriodMap) -> Vec<&'a Task> {
     let before = tasks.len();
-    let filtered: Vec<Task> = tasks
-        .into_iter()
+    let filtered: Vec<&Task> = tasks
+        .iter()
         .filter(|task| {
+            // EST only builds candidates for tasks with at least one feasible
+            // prescheduled period.
             let keep = possible_periods
                 .get(&task.id)
                 .is_some_and(|periods| !periods.is_empty());

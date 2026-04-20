@@ -70,3 +70,26 @@ docker compose -f webapp/docker/docker-compose.yml logs -f
 ## Database Persistence
 
 PostgreSQL data is stored in the named Docker volume `postgres_data`, so data survives restarts and normal teardown (`./webapp/teardown.sh`).
+
+## Troubleshooting: Registry DNS Failures
+
+If `./webapp/setup.sh` fails before build starts with errors like `failed to resolve source metadata` or `lookup registry-1.docker.io ... no such host`, the host resolver cannot resolve container registry domains.
+
+Quick checks:
+
+```bash
+getent hosts registry-1.docker.io
+docker pull rust:latest
+```
+
+If these fail but `nslookup registry-1.docker.io 8.8.8.8` works, your local resolver path (systemd-resolved/network DNS policy) is the issue.
+
+Typical remediation:
+
+1. Ensure system DNS can resolve registry domains.
+2. Remove unreachable registry mirrors from `/etc/docker/daemon.json`.
+3. Restart services:
+
+```bash
+sudo systemctl restart systemd-resolved docker
+```

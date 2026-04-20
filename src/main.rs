@@ -11,6 +11,7 @@ struct CliArgs {
     input_path: PathBuf,
     horizon_override: Option<(f64, f64)>,
     est_config: est::EstConfig,
+    est_fom: est::EstFomKind,
 }
 
 fn main() {
@@ -62,14 +63,16 @@ fn run() -> Result<(), String> {
     let possible_periods = preschedule(&blocks, &tasks, &horizon, &telescope)
         .map_err(|e| format!("prescheduling failed: {e}"))?;
     let preschedule_elapsed = preschedule_start.elapsed();
+    let mut tasks: Vec<_> = tasks.into_values().collect();
+    tasks.sort_by_key(|task| task.id.0);
 
     let feasible_tasks = possible_periods.values().filter(|p| !p.is_empty()).count();
 
     let est_start = Instant::now();
-    let est_scheduler = est::EstScheduler::new(cli.est_config)
+    let est_scheduler = est::EstScheduler::with_kind(cli.est_config, cli.est_fom)
         .map_err(|e| format!("invalid EST configuration: {e}"))?;
     let schedule = est_scheduler
-        .run_scheduler(tasks.into_values().collect(), &possible_periods, &horizon)
+        .run_scheduler(&tasks, &possible_periods, &horizon)
         .map_err(|e| format!("EST run failed: {e}"))?;
     let est_elapsed = est_start.elapsed();
 
@@ -90,7 +93,8 @@ fn run() -> Result<(), String> {
         preschedule_elapsed.as_secs_f64()
     );
     println!(
-        "EST config: endangered_threshold={}, k_beams={}, branching_factor={}",
+        "EST config: fom={}, endangered_threshold={}, k={}, b={}",
+        cli.est_fom,
         cli.est_config.endangered_threshold,
         cli.est_config.k_beams,
         cli.est_config.branching_factor,
@@ -121,47 +125,61 @@ fn parse_cli_args(program: &str, args: &[String]) -> Result<CliArgs, String> {
 
     let mut positionals: Vec<&str> = Vec::new();
     let mut est_config = est::EstConfig::default();
+    let mut est_fom = est::EstFomKind::default();
 
     let mut i = 0usize;
     while i < args.len() {
         match args[i].as_str() {
-            "--est-endangered-threshold" => {
+            "--est-fom" => {
+                let flag = args[i].as_str();
                 let Some(value) = args.get(i + 1) else {
                     print_usage(program);
-                    return Err(
-                        "missing value for --est-endangered-threshold (expected an unsigned integer)"
-                            .to_string(),
-                    );
+                    return Err(format!(
+                        "missing value for {flag} (expected 'task_count' or 'soft_constraint')"
+                    ));
                 };
-                est_config.endangered_threshold = value.parse::<u32>().map_err(|e| {
-                    format!("invalid --est-endangered-threshold value '{value}': {e}")
-                })?;
+                est_fom = value
+                    .parse::<est::EstFomKind>()
+                    .map_err(|e| format!("invalid {flag} value '{value}': {e}"))?;
                 i += 2;
             }
-            "--est-schedule-states" => {
+            "--est-e" | "--est-endangered-threshold" => {
+                let flag = args[i].as_str();
                 let Some(value) = args.get(i + 1) else {
                     print_usage(program);
-                    return Err(
-                        "missing value for --est-schedule-states (expected an unsigned integer)"
-                            .to_string(),
-                    );
+                    return Err(format!(
+                        "missing value for {flag} (expected an unsigned integer)"
+                    ));
+                };
+                est_config.endangered_threshold = value
+                    .parse::<u32>()
+                    .map_err(|e| format!("invalid {flag} value '{value}': {e}"))?;
+                i += 2;
+            }
+            "--est-k" | "--est-schedule-states" => {
+                let flag = args[i].as_str();
+                let Some(value) = args.get(i + 1) else {
+                    print_usage(program);
+                    return Err(format!(
+                        "missing value for {flag} (expected an unsigned integer)"
+                    ));
                 };
                 est_config.k_beams = value
                     .parse::<usize>()
-                    .map_err(|e| format!("invalid --est-schedule-states value '{value}': {e}"))?;
+                    .map_err(|e| format!("invalid {flag} value '{value}': {e}"))?;
                 i += 2;
             }
-            "--est-branching-factor" => {
+            "--est-b" | "--est-branching-factor" => {
+                let flag = args[i].as_str();
                 let Some(value) = args.get(i + 1) else {
                     print_usage(program);
-                    return Err(
-                        "missing value for --est-branching-factor (expected an unsigned integer)"
-                            .to_string(),
-                    );
+                    return Err(format!(
+                        "missing value for {flag} (expected an unsigned integer)"
+                    ));
                 };
                 est_config.branching_factor = value
                     .parse::<usize>()
-                    .map_err(|e| format!("invalid --est-branching-factor value '{value}': {e}"))?;
+                    .map_err(|e| format!("invalid {flag} value '{value}': {e}"))?;
                 i += 2;
             }
             "-h" | "--help" => {
@@ -195,13 +213,15 @@ fn parse_cli_args(program: &str, args: &[String]) -> Result<CliArgs, String> {
         input_path: resolve_input_path(input_arg),
         horizon_override,
         est_config,
+        est_fom,
     })
 }
 
 fn print_usage(program: &str) {
     eprintln!(
-        "Usage: {program} <input_json> [horizon_start_mjd horizon_end_mjd] [--est-endangered-threshold <u32>] [--est-schedule-states <usize>] [--est-branching-factor <usize>]\n\
-         Example: {program} data/ctao_n.json --est-endangered-threshold 2 --est-schedule-states 5 --est-branching-factor 3"
+        "Usage: {program} <input_json> [horizon_start_mjd horizon_end_mjd] [--est-fom <task_count|soft_constraint>] [--est-e <u32>] [--est-k <usize>] [--est-b <usize>]\n\
+         Aliases: --est-endangered-threshold <u32> for --est-e, --est-schedule-states <usize> for --est-k, --est-branching-factor <usize> for --est-b\n\
+         Example: {program} data/ctao_n.json --est-fom soft_constraint --est-e 2 --est-k 5 --est-b 3"
     );
 }
 

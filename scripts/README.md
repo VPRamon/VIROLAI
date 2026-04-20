@@ -90,3 +90,66 @@ Services:
 The Docker stack uses a persistent PostgreSQL volume (`postgres_data`) by default.
 
 Upload any `scheduling_problem.json` compatible with `schemas/scheduling_problem.schema.json` directly in the TSI UI.
+
+## `est_experiment`
+
+Rust CLI that runs one scheduling problem across a resolved sweep of EST configurations and writes:
+
+- one annotated scheduler output JSON per configuration under `output_dir/schedules/`
+- `output_dir/comparison.csv` with per-run metrics and baseline deltas
+- `output_dir/manifest.json` describing the resolved run set
+
+The default baseline is the classic greedy EST configuration:
+
+- `fom = "task_count"`
+- `endangered_threshold = 1`
+- `k_beams = 1`
+- `branching_factor = 1`
+
+### Run with a spec file
+
+```bash
+cargo run --bin est_experiment -- --spec experiments/ctao_n_est.json
+```
+
+### Run with CLI overrides
+
+```bash
+cargo run --bin est_experiment -- data/CTA-N/scheduling_problem.json \
+  --output-dir out/ctao_n_est \
+  --est-fom-values task_count,soft_constraint \
+  --est-e-values 1,2 \
+  --est-k-values 1,4 \
+  --est-b-values 1,2
+```
+
+### Spec format
+
+```json
+{
+  "input_json": "data/CTA-N/scheduling_problem.json",
+  "output_dir": "out/ctao_n_est",
+  "horizon_override": {
+    "start_mjd": 61710.0,
+    "end_mjd": 61720.0
+  },
+  "baseline": {
+    "fom": "task_count",
+    "endangered_threshold": 1,
+    "k_beams": 1,
+    "branching_factor": 1
+  },
+  "sweep": {
+    "foms": ["task_count", "soft_constraint"],
+    "endangered_thresholds": [1, 2],
+    "k_beams": [1, 4],
+    "branching_factors": [1, 2]
+  }
+}
+```
+
+### Notes
+
+- Relative `input_json` and `output_dir` paths in the spec are resolved relative to the spec file location.
+- CLI sweep values override the spec sweep axes; unspecified axes fall back to the spec and then to the baseline singleton.
+- The runner refuses to write into a non-empty `output_dir`.

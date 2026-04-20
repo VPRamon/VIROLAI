@@ -2,81 +2,41 @@ use super::candidate::EstCandidate;
 use crate::time::{MJD, Time};
 use std::cmp::Ordering;
 
-/// Sort EST candidates by earliest start time and flexibility while
-/// preserving feasibility, endangered/flexible priority rules,
-/// and original order for equal keys.
+/// Sort EST candidates by their current EST metadata using a total order.
+///
+/// Queue ordering is recomputed from scratch on every refresh so candidates
+/// can move freely between schedulable, endangered, and impossible states.
 pub fn sort_candidates(
     candidates: &mut [EstCandidate<'_>],
-    endangered_threshold: u32,
+    _endangered_threshold: u32,
     priority_at: Time<MJD>,
 ) {
-    candidates
-        .sort_by(|left, right| compare_candidates(left, right, endangered_threshold, priority_at));
+    candidates.sort_by(|left, right| compare_candidates(left, right, 0, priority_at));
 }
 
-/// Comparator implementing EST candidate ordering rules.
+/// Comparator implementing the EST queue's total ordering.
+///
+/// Ordering keys:
+/// 1. schedulable candidates before impossible ones,
+/// 2. earliest feasible start,
+/// 3. lower flexibility,
+/// 4. higher soft-constraint score,
+/// 5. stable task id order.
 pub fn compare_candidates(
     left: &EstCandidate<'_>,
     right: &EstCandidate<'_>,
-    endangered_threshold: u32,
+    _endangered_threshold: u32,
     priority_at: Time<MJD>,
 ) -> Ordering {
     left.is_impossible()
         .cmp(&right.is_impossible())
-        .then_with(|| compare_by_kind(left, right, endangered_threshold, priority_at))
-}
-
-fn compare_same_kind(
-    left: &EstCandidate<'_>,
-    right: &EstCandidate<'_>,
-    priority_at: Time<MJD>,
-) -> Ordering {
-    cmp_optional_time(left.est, right.est)
-        .then_with(|| cmp_f64_desc(left.priority(priority_at), right.priority(priority_at)))
+        .then_with(|| cmp_optional_time(left.est, right.est))
         .then_with(|| cmp_f64_asc(left.flexibility, right.flexibility))
+        .then_with(|| cmp_f64_desc(left.priority(priority_at), right.priority(priority_at)))
         .then_with(|| left.task_id().0.cmp(&right.task_id().0))
 }
 
-fn compare_by_kind(
-    left: &EstCandidate<'_>,
-    right: &EstCandidate<'_>,
-    endangered_threshold: u32,
-    priority_at: Time<MJD>,
-) -> Ordering {
-    match (
-        left.is_endangered(endangered_threshold),
-        right.is_endangered(endangered_threshold),
-    ) {
-        (true, true) | (false, false) => compare_same_kind(left, right, priority_at),
-        (false, true) => compare_flexible_and_endangered(left, right),
-        (true, false) => compare_flexible_and_endangered(right, left).reverse(),
-    }
-}
-
-fn compare_flexible_and_endangered(
-    flexible: &EstCandidate<'_>,
-    endangered: &EstCandidate<'_>,
-) -> Ordering {
-    if flexible_can_precede_endangered(flexible, endangered) {
-        Ordering::Less
-    } else {
-        Ordering::Greater
-    }
-}
-
-fn flexible_can_precede_endangered(
-    flexible: &EstCandidate<'_>,
-    endangered: &EstCandidate<'_>,
-) -> bool {
-    let (Some(flexible_est), Some(endangered_est), Some(endangered_deadline)) =
-        (flexible.est, endangered.est, endangered.deadline)
-    else {
-        return false;
-    };
-
-    flexible_est < endangered_est && (flexible_est + flexible.duration()) <= endangered_deadline
-}
-
+/// Compare optional times, treating `Some` as earlier/better than `None`.
 fn cmp_optional_time(left: Option<Time<MJD>>, right: Option<Time<MJD>>) -> Ordering {
     match (left, right) {
         (Some(a), Some(b)) => cmp_f64_asc(a.value(), b.value()),
@@ -86,10 +46,12 @@ fn cmp_optional_time(left: Option<Time<MJD>>, right: Option<Time<MJD>>) -> Order
     }
 }
 
+/// Compare floating-point values in ascending order with total ordering.
 fn cmp_f64_asc(left: f64, right: f64) -> Ordering {
-    left.partial_cmp(&right).unwrap_or(Ordering::Equal)
+    left.total_cmp(&right)
 }
 
+/// Compare floating-point values in descending order with total ordering.
 fn cmp_f64_desc(left: f64, right: f64) -> Ordering {
-    right.partial_cmp(&left).unwrap_or(Ordering::Equal)
+    right.total_cmp(&left)
 }
