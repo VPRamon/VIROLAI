@@ -46,6 +46,7 @@ fn run() -> Result<(), String> {
     }
 
     let execution = run_experiment(&resolved)?;
+    println!("Artifacts written under {}", execution.output_dir.display());
     println!("Manifest written to {}", execution.manifest_path.display());
     println!(
         "Comparison CSV written to {}",

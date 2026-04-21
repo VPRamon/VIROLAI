@@ -95,9 +95,26 @@ Upload any `scheduling_problem.json` compatible with `schemas/scheduling_problem
 
 Rust CLI that runs one scheduling problem across a resolved sweep of EST configurations and writes:
 
-- one annotated scheduler output JSON per configuration under `output_dir/schedules/`
-- `output_dir/comparison.csv` with per-run metrics and baseline deltas
-- `output_dir/manifest.json` describing the resolved run set
+- one annotated scheduler output JSON per configuration under `output_dir/run-<timestamp>/schedules/`
+- `output_dir/run-<timestamp>/comparison.csv` with compact per-run metrics
+- `output_dir/run-<timestamp>/manifest.json` describing the resolved run set
+
+Schedule files use this naming pattern:
+
+- `e{endangered_threshold}-k{k_beams}-b{branching_factor}-{count|fitness}.json`
+
+The comparison CSV includes only these columns:
+
+- `run_slug`
+- `is_baseline`
+- `scheduled_task_count`
+- `fitness_priority_sum` (sum of scheduled-task priorities)
+- `scheduled_priority_p25`
+- `scheduled_priority_p50`
+- `scheduled_priority_p75`
+- `scheduled_priority_p90`
+
+`run_slug` encodes configuration as `e{endangered_threshold}-k{k_beams}-b{branching_factor}-{count|fitness}`.
 
 The default baseline is the classic greedy EST configuration:
 
@@ -152,4 +169,4 @@ cargo run --bin est_experiment -- data/CTA-N/scheduling_problem.json \
 
 - Relative `input_json` and `output_dir` paths in the spec are resolved relative to the spec file location.
 - CLI sweep values override the spec sweep axes; unspecified axes fall back to the spec and then to the baseline singleton.
-- The runner refuses to write into a non-empty `output_dir`.
+- Each run creates a new timestamped subdirectory (`run-<timestamp>`) under `output_dir`, so multiple runs can coexist.

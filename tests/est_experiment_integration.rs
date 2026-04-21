@@ -1,6 +1,7 @@
 use csv::Reader;
 use serde::Deserialize;
 use serde_json::Value;
+use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
 use tempfile::TempDir;
@@ -13,22 +14,12 @@ use scheduler::experiment::est::{
 struct ComparisonRow {
     run_slug: String,
     is_baseline: bool,
-    baseline_slug: String,
-    delta_scheduled_tasks: i64,
-    delta_scheduled_task_rate: f64,
-    delta_scheduled_requested_hours: f64,
-    delta_scheduled_requested_fraction: f64,
-    delta_scheduled_priority_total: f64,
-    delta_gap_count: i64,
-    delta_gap_total_hours: f64,
-    delta_gap_mean_hours: f64,
-    delta_largest_gap_hours: f64,
-    delta_est_elapsed_sec: f64,
-    delta_total_elapsed_sec: f64,
-    vs_baseline_newly_scheduled_count: usize,
-    vs_baseline_newly_unscheduled_count: usize,
-    vs_baseline_retimed_count: usize,
-    vs_baseline_mean_abs_start_shift_hours: f64,
+    scheduled_task_count: usize,
+    fitness_priority_sum: f64,
+    scheduled_priority_p25: f64,
+    scheduled_priority_p50: f64,
+    scheduled_priority_p75: f64,
+    scheduled_priority_p90: f64,
 }
 
 #[test]
@@ -47,20 +38,66 @@ fn est_experiment_pipeline_writes_expected_artifacts() {
 
     assert_eq!(execution.run_count, 4);
     assert_eq!(execution.schedule_paths.len(), 4);
+    assert!(execution.output_dir.exists());
+    assert_eq!(
+        execution.output_dir.parent(),
+        Some(resolved.output_dir.as_path())
+    );
+    let run_dir_name = execution
+        .output_dir
+        .file_name()
+        .and_then(|name| name.to_str())
+        .expect("output run directory should have UTF-8 name");
+    assert!(run_dir_name.starts_with("run-"));
     assert!(execution.manifest_path.exists());
     assert!(execution.comparison_csv_path.exists());
+    assert!(execution.manifest_path.starts_with(&execution.output_dir));
+    assert!(
+        execution
+            .comparison_csv_path
+            .starts_with(&execution.output_dir)
+    );
+
+    let expected_schedule_names = HashSet::from([
+        "e1-k1-b1-count.json".to_string(),
+        "e1-k1-b1-fitness.json".to_string(),
+        "e2-k1-b1-count.json".to_string(),
+        "e2-k1-b1-fitness.json".to_string(),
+    ]);
+    let actual_schedule_names: HashSet<String> = execution
+        .schedule_paths
+        .iter()
+        .map(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .expect("schedule path should have UTF-8 file name")
+                .to_string()
+        })
+        .collect();
+    assert_eq!(actual_schedule_names, expected_schedule_names);
+
     for schedule_path in &execution.schedule_paths {
         assert!(
             schedule_path.exists(),
             "{} should exist",
             schedule_path.display()
         );
+        assert!(schedule_path.starts_with(execution.output_dir.join("schedules")));
     }
 
     let manifest: Value = serde_json::from_str(
         &fs::read_to_string(&execution.manifest_path).expect("manifest should be readable"),
     )
     .expect("manifest JSON should parse");
+
+    let manifest_output_dir = manifest
+        .get("output_dir")
+        .and_then(Value::as_str)
+        .expect("manifest should contain output_dir");
+    assert_eq!(
+        Path::new(manifest_output_dir),
+        execution.output_dir.as_path()
+    );
 
     let baseline_slug = manifest
         .get("baseline_slug")
@@ -74,13 +111,36 @@ fn est_experiment_pipeline_writes_expected_artifacts() {
         .expect("manifest should contain runs");
     assert_eq!(runs.len(), 4);
 
+    let baseline_run_entry = runs
+        .iter()
+        .find(|entry| {
+            entry
+                .get("slug")
+                .and_then(Value::as_str)
+                .is_some_and(|slug| slug == baseline_slug)
+        })
+        .expect("manifest should include baseline run entry");
+    let baseline_schedule_json = baseline_run_entry
+        .get("schedule_json")
+        .and_then(Value::as_str)
+        .expect("manifest run should contain schedule_json");
+    assert_eq!(baseline_schedule_json, "schedules/e1-k1-b1-count.json");
+
     let mut reader =
         Reader::from_path(&execution.comparison_csv_path).expect("comparison csv should load");
     let headers = reader.headers().expect("csv headers should exist").clone();
-    assert!(
-        headers
-            .iter()
-            .any(|header| header == "vs_baseline_retimed_count")
+    assert_eq!(
+        headers.iter().collect::<Vec<_>>(),
+        vec![
+            "run_slug",
+            "is_baseline",
+            "scheduled_task_count",
+            "fitness_priority_sum",
+            "scheduled_priority_p25",
+            "scheduled_priority_p50",
+            "scheduled_priority_p75",
+            "scheduled_priority_p90",
+        ]
     );
 
     let rows: Vec<ComparisonRow> = reader
@@ -94,23 +154,29 @@ fn est_experiment_pipeline_writes_expected_artifacts() {
         .find(|row| row.is_baseline)
         .expect("baseline row should exist");
 
-    assert_eq!(baseline_row.run_slug, baseline_slug);
-    assert_eq!(baseline_row.baseline_slug, baseline_slug);
-    assert_eq!(baseline_row.delta_scheduled_tasks, 0);
-    assert_eq!(baseline_row.delta_gap_count, 0);
-    assert_eq!(baseline_row.vs_baseline_newly_scheduled_count, 0);
-    assert_eq!(baseline_row.vs_baseline_newly_unscheduled_count, 0);
-    assert_eq!(baseline_row.vs_baseline_retimed_count, 0);
-    assert!(baseline_row.delta_scheduled_task_rate.abs() < 1e-9);
-    assert!(baseline_row.delta_scheduled_requested_hours.abs() < 1e-9);
-    assert!(baseline_row.delta_scheduled_requested_fraction.abs() < 1e-9);
-    assert!(baseline_row.delta_scheduled_priority_total.abs() < 1e-9);
-    assert!(baseline_row.delta_gap_total_hours.abs() < 1e-9);
-    assert!(baseline_row.delta_gap_mean_hours.abs() < 1e-9);
-    assert!(baseline_row.delta_largest_gap_hours.abs() < 1e-9);
-    assert!(baseline_row.delta_est_elapsed_sec.abs() < 1e-9);
-    assert!(baseline_row.delta_total_elapsed_sec.abs() < 1e-9);
-    assert!(baseline_row.vs_baseline_mean_abs_start_shift_hours.abs() < 1e-9);
+    assert_eq!(
+        baseline_row.run_slug,
+        resolved.baseline.schedule_file_stem()
+    );
+    assert!(baseline_row.scheduled_task_count <= 2);
+    assert!(baseline_row.fitness_priority_sum >= 0.0);
+    assert!(baseline_row.fitness_priority_sum <= 15.0);
+
+    for row in &rows {
+        assert!(row.scheduled_priority_p25 <= row.scheduled_priority_p50);
+        assert!(row.scheduled_priority_p50 <= row.scheduled_priority_p75);
+        assert!(row.scheduled_priority_p75 <= row.scheduled_priority_p90);
+
+        if row.scheduled_task_count == 0 {
+            assert!(row.fitness_priority_sum.abs() < 1e-9);
+            assert!(row.scheduled_priority_p25.abs() < 1e-9);
+            assert!(row.scheduled_priority_p50.abs() < 1e-9);
+            assert!(row.scheduled_priority_p75.abs() < 1e-9);
+            assert!(row.scheduled_priority_p90.abs() < 1e-9);
+        } else {
+            assert!(row.fitness_priority_sum >= row.scheduled_priority_p90);
+        }
+    }
 }
 
 fn write_input_fixture(base_dir: &Path) {

@@ -94,12 +94,26 @@ Generated output layout:
 
 ```text
 <output_dir>/
-  manifest.json
-  comparison.csv
-  schedules/
-    fom-task_count__e-1__k-1__b-1.json
-    ...
+  run-<timestamp>/
+    manifest.json
+    comparison.csv
+    schedules/
+      e1-k1-b1-count.json
+      ...
 ```
+
+  `comparison.csv` is intentionally compact and contains only:
+
+  - `run_slug`
+  - `is_baseline`
+  - `scheduled_task_count`
+  - `fitness_priority_sum` (sum of priorities of scheduled tasks)
+  - `scheduled_priority_p25`
+  - `scheduled_priority_p50`
+  - `scheduled_priority_p75`
+  - `scheduled_priority_p90`
+
+  `run_slug` uses the compact naming stem `e{endangered_threshold}-k{k_beams}-b{branching_factor}-{count|fitness}`.
 
 Example experiment-spec JSON:
 
