@@ -4,11 +4,10 @@ use serde_json::Value;
 use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
+use std::process::Command;
 use tempfile::TempDir;
 
-use scheduler::experiment::est::{
-    EstExperimentCliOverrides, load_experiment_spec, resolve_experiment, run_experiment,
-};
+const EST_EXPERIMENT_BIN: &str = env!("CARGO_BIN_EXE_est_experiment");
 
 #[derive(Debug, Deserialize)]
 struct ComparisonRow {
@@ -28,35 +27,40 @@ fn est_experiment_pipeline_writes_expected_artifacts() {
     write_input_fixture(temp_dir.path());
     let spec_path = write_spec_fixture(temp_dir.path());
 
-    let spec = load_experiment_spec(&spec_path).expect("spec should load");
-    let resolved = resolve_experiment(Some(spec), EstExperimentCliOverrides::default())
-        .expect("experiment should resolve");
+    let status = Command::new(EST_EXPERIMENT_BIN)
+        .args(["--spec", spec_path.to_str().unwrap()])
+        .status()
+        .expect("est_experiment binary should run");
+    assert!(status.success(), "est_experiment exited with failure");
 
-    assert_eq!(resolved.runs.len(), 4);
+    let results_dir = temp_dir.path().join("results");
+    assert!(results_dir.is_dir(), "results directory should exist");
 
-    let execution = run_experiment(&resolved).expect("experiment should run");
-
-    assert_eq!(execution.run_count, 4);
-    assert_eq!(execution.schedule_paths.len(), 4);
-    assert!(execution.output_dir.exists());
+    let run_dirs: Vec<_> = fs::read_dir(&results_dir)
+        .expect("results dir should be readable")
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
+        .collect();
     assert_eq!(
-        execution.output_dir.parent(),
-        Some(resolved.output_dir.as_path())
+        run_dirs.len(),
+        1,
+        "exactly one timestamped run dir expected"
     );
-    let run_dir_name = execution
-        .output_dir
+
+    let run_dir = run_dirs[0].path();
+    let run_dir_name = run_dir
         .file_name()
-        .and_then(|name| name.to_str())
-        .expect("output run directory should have UTF-8 name");
+        .and_then(|n| n.to_str())
+        .expect("run dir should have UTF-8 name");
     assert!(run_dir_name.starts_with("run-"));
-    assert!(execution.manifest_path.exists());
-    assert!(execution.comparison_csv_path.exists());
-    assert!(execution.manifest_path.starts_with(&execution.output_dir));
-    assert!(
-        execution
-            .comparison_csv_path
-            .starts_with(&execution.output_dir)
-    );
+
+    let manifest_path = run_dir.join("manifest.json");
+    let comparison_csv_path = run_dir.join("comparison.csv");
+    let schedules_dir = run_dir.join("schedules");
+
+    assert!(manifest_path.exists(), "manifest.json should exist");
+    assert!(comparison_csv_path.exists(), "comparison.csv should exist");
+    assert!(schedules_dir.is_dir(), "schedules/ directory should exist");
 
     let expected_schedule_names = HashSet::from([
         "e1-k1-b1-count.json".to_string(),
@@ -64,29 +68,24 @@ fn est_experiment_pipeline_writes_expected_artifacts() {
         "e2-k1-b1-count.json".to_string(),
         "e2-k1-b1-fitness.json".to_string(),
     ]);
-    let actual_schedule_names: HashSet<String> = execution
-        .schedule_paths
-        .iter()
-        .map(|path| {
-            path.file_name()
-                .and_then(|name| name.to_str())
-                .expect("schedule path should have UTF-8 file name")
+    let actual_schedule_names: HashSet<String> = fs::read_dir(&schedules_dir)
+        .expect("schedules dir should be readable")
+        .filter_map(|e| e.ok())
+        .map(|e| {
+            e.file_name()
+                .to_str()
+                .expect("schedule file should have UTF-8 name")
                 .to_string()
         })
         .collect();
     assert_eq!(actual_schedule_names, expected_schedule_names);
 
-    for schedule_path in &execution.schedule_paths {
-        assert!(
-            schedule_path.exists(),
-            "{} should exist",
-            schedule_path.display()
-        );
-        assert!(schedule_path.starts_with(execution.output_dir.join("schedules")));
+    for name in &expected_schedule_names {
+        assert!(schedules_dir.join(name).exists(), "{name} should exist");
     }
 
     let manifest: Value = serde_json::from_str(
-        &fs::read_to_string(&execution.manifest_path).expect("manifest should be readable"),
+        &fs::read_to_string(&manifest_path).expect("manifest should be readable"),
     )
     .expect("manifest JSON should parse");
 
@@ -94,15 +93,12 @@ fn est_experiment_pipeline_writes_expected_artifacts() {
         .get("output_dir")
         .and_then(Value::as_str)
         .expect("manifest should contain output_dir");
-    assert_eq!(
-        Path::new(manifest_output_dir),
-        execution.output_dir.as_path()
-    );
+    assert_eq!(Path::new(manifest_output_dir), run_dir.as_path());
 
     let baseline_slug = manifest
         .get("baseline_slug")
         .and_then(Value::as_str)
-        .expect("manifest should contain baseline slug");
+        .expect("manifest should contain baseline_slug");
     assert_eq!(baseline_slug, "fom-task_count__e-1__k-1__b-1");
 
     let runs = manifest
@@ -126,8 +122,7 @@ fn est_experiment_pipeline_writes_expected_artifacts() {
         .expect("manifest run should contain schedule_json");
     assert_eq!(baseline_schedule_json, "schedules/e1-k1-b1-count.json");
 
-    let mut reader =
-        Reader::from_path(&execution.comparison_csv_path).expect("comparison csv should load");
+    let mut reader = Reader::from_path(&comparison_csv_path).expect("comparison csv should load");
     let headers = reader.headers().expect("csv headers should exist").clone();
     assert_eq!(
         headers.iter().collect::<Vec<_>>(),
@@ -153,11 +148,7 @@ fn est_experiment_pipeline_writes_expected_artifacts() {
         .iter()
         .find(|row| row.is_baseline)
         .expect("baseline row should exist");
-
-    assert_eq!(
-        baseline_row.run_slug,
-        resolved.baseline.schedule_file_stem()
-    );
+    assert_eq!(baseline_row.run_slug, "e1-k1-b1-count");
     assert!(baseline_row.scheduled_task_count <= 2);
     assert!(baseline_row.fitness_priority_sum >= 0.0);
     assert!(baseline_row.fitness_priority_sum <= 15.0);
@@ -177,6 +168,45 @@ fn est_experiment_pipeline_writes_expected_artifacts() {
             assert!(row.fitness_priority_sum >= row.scheduled_priority_p90);
         }
     }
+}
+
+#[test]
+fn est_experiment_range_syntax_produces_correct_run_count() {
+    let temp_dir = TempDir::new().expect("temp dir should exist");
+    write_input_fixture(temp_dir.path());
+    let output_dir = temp_dir.path().join("out");
+
+    let status = Command::new(EST_EXPERIMENT_BIN)
+        .args([
+            temp_dir.path().join("input.json").to_str().unwrap(),
+            "--output-dir",
+            output_dir.to_str().unwrap(),
+            "--est-e-values",
+            "1-3",
+            "--est-k-values",
+            "1,5",
+            "--est-b-values",
+            "1",
+            "--est-fom-values",
+            "task_count",
+        ])
+        .status()
+        .expect("est_experiment binary should run");
+    assert!(status.success(), "est_experiment exited with failure");
+
+    let run_dirs: Vec<_> = fs::read_dir(&output_dir)
+        .expect("output dir should be readable")
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
+        .collect();
+    assert_eq!(run_dirs.len(), 1);
+
+    let schedules_dir = run_dirs[0].path().join("schedules");
+    let schedule_count = fs::read_dir(&schedules_dir)
+        .expect("schedules dir should be readable")
+        .count();
+    // e=[1,2,3] × k=[1,5] × b=[1] × fom=[task_count] = 6 runs
+    assert_eq!(schedule_count, 6);
 }
 
 fn write_input_fixture(base_dir: &Path) {

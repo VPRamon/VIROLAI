@@ -1,7 +1,7 @@
-use crate::prescheduler::{TaskPeriodMap, preschedule};
-use crate::schedule::SchedulingProblem;
-use crate::task::Task;
-use crate::time::{MJD, Period, TaskId, Time};
+use scheduler::prescheduler::{TaskPeriodMap, preschedule};
+use scheduler::schedule::SchedulingProblem;
+use scheduler::scheduling_block::task::Task;
+use scheduler::time::{MJD, Period, TaskId, Time};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::fs;
@@ -12,19 +12,18 @@ use super::config::HorizonOverride;
 /// A scheduling problem loaded from disk and preprocessed, shared across all runs.
 ///
 /// The prescheduling step (computing feasible windows per task) is expensive and
-/// independent of scheduler configuration, so it runs once here and is reused.
-#[derive(Debug)]
-pub(crate) struct PreparedProblem {
+/// independent of scheduler configuration, so it runs once and is reused.
+pub struct PreparedProblem {
     /// Original JSON, preserved for embedding in schedule output files.
-    pub(crate) raw_json: Value,
-    pub(crate) tasks: Vec<Task>,
-    pub(crate) possible_periods: TaskPeriodMap,
-    pub(crate) horizon: Period<MJD>,
-    pub(crate) priority_by_task: HashMap<TaskId, f64>,
+    pub raw_json: Value,
+    pub tasks: Vec<Task>,
+    pub possible_periods: TaskPeriodMap,
+    pub horizon: Period<MJD>,
+    pub priority_by_task: HashMap<TaskId, f64>,
 }
 
 /// Loads `input_path`, runs the prescheduler, and returns a [`PreparedProblem`].
-pub(crate) fn prepare_problem(
+pub fn prepare_problem(
     input_path: &Path,
     horizon_override: Option<HorizonOverride>,
 ) -> Result<PreparedProblem, String> {
@@ -73,27 +72,24 @@ fn build_horizon(
     detected: Option<Period<MJD>>,
     override_range: Option<HorizonOverride>,
 ) -> Result<Period<MJD>, String> {
-    if let Some(override_range) = override_range {
-        return period_from_mjd(override_range.start_mjd, override_range.end_mjd);
+    if let Some(h) = override_range {
+        if !h.start_mjd.is_finite() || !h.end_mjd.is_finite() {
+            return Err("horizon bounds must be finite numbers".to_string());
+        }
+        if h.start_mjd >= h.end_mjd {
+            return Err(format!(
+                "invalid horizon: start ({}) must be before end ({})",
+                h.start_mjd, h.end_mjd
+            ));
+        }
+        return Ok(Period::new(
+            Time::<MJD>::new(h.start_mjd),
+            Time::<MJD>::new(h.end_mjd),
+        ));
     }
     detected.ok_or_else(|| {
         "missing schedule_time_window in input and no horizon override was provided".to_string()
     })
-}
-
-fn period_from_mjd(start_mjd: f64, end_mjd: f64) -> Result<Period<MJD>, String> {
-    if !start_mjd.is_finite() || !end_mjd.is_finite() {
-        return Err("horizon bounds must be finite numbers".to_string());
-    }
-    if start_mjd >= end_mjd {
-        return Err(format!(
-            "invalid horizon: start ({start_mjd}) must be before end ({end_mjd})"
-        ));
-    }
-    Ok(Period::new(
-        Time::<MJD>::new(start_mjd),
-        Time::<MJD>::new(end_mjd),
-    ))
 }
 
 /// Extracts `soft_constraints.priority` for every task in the input JSON.
@@ -140,16 +136,8 @@ mod tests {
                 "scheduling_blocks": [
                     {
                         "tasks": [
-                            {
-                                "id": 1,
-                                "soft_constraints": {
-                                    "priority": 10.0
-                                }
-                            },
-                            {
-                                "id": 2,
-                                "soft_constraints": {}
-                            }
+                            { "id": 1, "soft_constraints": { "priority": 10.0 } },
+                            { "id": 2, "soft_constraints": {} }
                         ]
                     }
                 ]

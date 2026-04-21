@@ -21,7 +21,7 @@ path = "webapp/scripts/phd_tsi_server.rs"
 
 [[bin]]
 name = "est_experiment"
-path = "scripts/est_experiment.rs"
+path = "scripts/est_experiment/main.rs"
 
 [dependencies]
 siderust      = { path = "siderust" }

@@ -1,6 +1,5 @@
 pub mod constraints;
 pub mod error;
-pub mod experiment;
 pub mod prescheduler;
 pub mod schedule;
 pub mod scheduler;

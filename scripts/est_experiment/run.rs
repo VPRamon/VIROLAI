@@ -1,48 +1,45 @@
-use crate::schedule::{Schedule, ScheduleOutput};
-use crate::time::TaskId;
+use scheduler::schedule::{Schedule, ScheduleOutput};
+use scheduler::time::TaskId;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use super::config::EstRunConfig;
+use super::config::RunConfig;
 use super::problem::PreparedProblem;
-use super::stats::percentile;
 
 /// The result of a single scheduler run.
-#[derive(Debug, Clone)]
-pub(crate) struct RunOutcome {
-    pub(crate) config: EstRunConfig,
-    pub(crate) schedule_path: PathBuf,
-    pub(crate) metrics: RunMetrics,
+pub struct RunOutcome {
+    pub config: RunConfig,
+    pub schedule_path: PathBuf,
+    pub metrics: RunMetrics,
 }
 
 /// Per-run performance metrics derived from the produced schedule.
-#[derive(Debug, Clone)]
-pub(crate) struct RunMetrics {
-    pub(crate) scheduled_task_count: usize,
-    pub(crate) fitness_priority_sum: f64,
-    pub(crate) scheduled_priority_p25: f64,
-    pub(crate) scheduled_priority_p50: f64,
-    pub(crate) scheduled_priority_p75: f64,
-    pub(crate) scheduled_priority_p90: f64,
+pub struct RunMetrics {
+    pub scheduled_task_count: usize,
+    pub fitness_priority_sum: f64,
+    pub scheduled_priority_p25: f64,
+    pub scheduled_priority_p50: f64,
+    pub scheduled_priority_p75: f64,
+    pub scheduled_priority_p90: f64,
 }
 
 /// Runs the scheduler, writes the schedule JSON to `schedule_path`, and computes metrics.
-pub(crate) fn execute_run(
-    run: &EstRunConfig,
-    prepared_problem: &PreparedProblem,
+pub fn execute_run(
+    run: &RunConfig,
+    prepared: &PreparedProblem,
     schedule_path: &Path,
 ) -> Result<RunOutcome, String> {
     let scheduler = run.build_scheduler()?;
     let schedule = scheduler
         .run_scheduler(
-            &prepared_problem.tasks,
-            &prepared_problem.possible_periods,
-            &prepared_problem.horizon,
+            &prepared.tasks,
+            &prepared.possible_periods,
+            &prepared.horizon,
         )
         .map_err(|e| format!("EST run {} failed: {e}", run.slug()))?;
 
-    let output = ScheduleOutput::new(prepared_problem.raw_json.clone(), &schedule);
+    let output = ScheduleOutput::new(prepared.raw_json.clone(), &schedule);
     let output_text = serde_json::to_string_pretty(&output)
         .map_err(|e| format!("failed to serialize schedule output {}: {e}", run.slug()))?;
     fs::write(schedule_path, output_text).map_err(|e| {
@@ -52,7 +49,7 @@ pub(crate) fn execute_run(
         )
     })?;
 
-    let metrics = compute_run_metrics(&schedule, &prepared_problem.priority_by_task);
+    let metrics = compute_run_metrics(&schedule, &prepared.priority_by_task);
 
     Ok(RunOutcome {
         config: *run,
@@ -61,7 +58,7 @@ pub(crate) fn execute_run(
     })
 }
 
-pub(crate) fn compute_run_metrics(
+pub fn compute_run_metrics(
     schedule: &Schedule,
     priority_by_task: &HashMap<TaskId, f64>,
 ) -> RunMetrics {
@@ -83,21 +80,44 @@ pub(crate) fn compute_run_metrics(
     }
 }
 
+/// Linear-interpolation percentile over `[0.0, 1.0]`. Returns `0.0` for an empty slice.
+fn percentile(values: &[f64], quantile: f64) -> f64 {
+    if values.is_empty() {
+        return 0.0;
+    }
+    if values.len() == 1 {
+        return values[0];
+    }
+    let quantile = quantile.clamp(0.0, 1.0);
+    let mut sorted = values.to_vec();
+    sorted.sort_by(|a, b| a.total_cmp(b));
+    let rank = quantile * (sorted.len() as f64 - 1.0);
+    let lower = rank.floor() as usize;
+    let upper = rank.ceil() as usize;
+    if lower == upper {
+        sorted[lower]
+    } else {
+        let fraction = rank - lower as f64;
+        sorted[lower] + fraction * (sorted[upper] - sorted[lower])
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::schedule::TaskPlacement;
-    use crate::time::{JD, MJD, TaskId, Time};
+    use scheduler::time::{JD, MJD, TaskId, Time};
+    use scheduler::{Schedule, TaskPlacement};
 
     fn schedule_with_slots(slots: &[(u64, f64, f64)]) -> Schedule {
         let mut schedule = Schedule::new();
-        for (task_id, start, end) in slots {
-            schedule.insert_placement(TaskPlacement {
-                task_id: TaskId(*task_id),
-                start: Time::<MJD>::new(*start).to::<JD>(),
-                end: Time::<MJD>::new(*end).to::<JD>(),
+        for &(task_id, start, end) in slots {
+            let placement = TaskPlacement {
+                task_id: TaskId(task_id),
+                start: Time::<MJD>::new(start).to::<JD>(),
+                end: Time::<MJD>::new(end).to::<JD>(),
                 block_id: None,
-            });
+            };
+            schedule.placements.insert(TaskId(task_id), placement);
         }
         schedule
     }
@@ -133,5 +153,19 @@ mod tests {
         assert_eq!(metrics.scheduled_task_count, 2);
         assert!((metrics.fitness_priority_sum - 10.0).abs() < 1e-9);
         assert!((metrics.scheduled_priority_p50 - 5.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn percentile_uses_linear_interpolation() {
+        let values = [10.0, 20.0, 30.0, 40.0];
+        assert!((percentile(&values, 0.25) - 17.5).abs() < 1e-9);
+        assert!((percentile(&values, 0.50) - 25.0).abs() < 1e-9);
+        assert!((percentile(&values, 0.75) - 32.5).abs() < 1e-9);
+        assert!((percentile(&values, 0.90) - 37.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn percentile_returns_zero_for_empty_input() {
+        assert_eq!(percentile(&[], 0.90), 0.0);
     }
 }
