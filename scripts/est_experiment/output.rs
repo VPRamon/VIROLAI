@@ -25,7 +25,6 @@ pub struct ExperimentManifest {
 pub struct ManifestRunEntry {
     pub slug: String,
     pub fom: scheduler::scheduler::est::EstFomKind,
-    pub endangered_threshold: u32,
     pub k_beams: usize,
     pub branching_factor: usize,
     /// Path to the schedule JSON, relative to the output directory.
@@ -64,7 +63,6 @@ pub fn build_manifest(
             .map(|o| ManifestRunEntry {
                 slug: o.config.slug(),
                 fom: o.config.fom,
-                endangered_threshold: o.config.endangered_threshold,
                 k_beams: o.config.k_beams,
                 branching_factor: o.config.branching_factor,
                 schedule_json: relative_to_output(output_dir, &o.schedule_path),

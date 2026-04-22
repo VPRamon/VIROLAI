@@ -197,7 +197,7 @@ fn place_valid_task() {
         .place_task(&mut schedule, TaskId(1), interval, None, &site)
         .unwrap();
 
-    assert!(schedule.placements.contains_key(&TaskId(1)));
+    assert!(schedule.contains(TaskId(1)));
 }
 
 #[test]
@@ -257,7 +257,7 @@ fn unplace_task() {
         .unwrap();
     schedule.unplace_task(TaskId(1)).unwrap();
 
-    assert!(!schedule.placements.contains_key(&TaskId(1)));
+    assert!(!schedule.contains(TaskId(1)));
 }
 
 #[test]
@@ -277,7 +277,7 @@ fn move_task() {
         .move_task(&mut schedule, TaskId(1), i2, None, &site)
         .unwrap();
 
-    let p = schedule.placements.get(&TaskId(1)).unwrap();
+    let p = schedule.get(TaskId(1)).unwrap();
     assert!((p.start.value() - i2.start.value()).abs() < 1e-9);
 }
 

@@ -4,8 +4,6 @@ pub const MAX_K_BEAMS: usize = 100;
 /// EST configuration — plain data, `Copy`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EstConfig {
-    /// Flexibility threshold below which a candidate is considered endangered.
-    pub endangered_threshold: u32,
     /// Number of schedule states kept alive after each beam expansion round.
     pub k_beams: usize,
     /// Number of distinct candidates tried per beam per round.
@@ -23,7 +21,6 @@ impl Default for EstConfig {
     /// only a single live state at each round.
     fn default() -> Self {
         Self {
-            endangered_threshold: 1,
             k_beams: 1,
             branching_factor: 1,
         }

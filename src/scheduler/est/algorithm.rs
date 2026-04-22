@@ -1,6 +1,6 @@
 use super::candidate::IntoTaskPlacement;
 use super::config::EstConfig;
-use super::fom::{EstFomKind, ScheduleFom, TaskCountFom};
+use super::fom::{EstFomKind, ScheduleFom, SoftConstraintFom};
 use super::queue::CandidateQueue;
 use super::validation;
 use crate::error::ScheduleError;
@@ -27,22 +27,22 @@ pub struct EstScheduler {
 }
 
 impl Default for EstScheduler {
-    /// Construct the default single-beam EST scheduler scored by task count.
+    /// Construct the default single-beam EST scheduler scored by soft constraints.
     fn default() -> Self {
         Self {
             config: EstConfig::default(),
-            fom: Arc::new(TaskCountFom),
+            fom: Arc::new(SoftConstraintFom),
         }
     }
 }
 
 impl EstScheduler {
     /// Create an `EstScheduler` with the given config and the default
-    /// [`TaskCountFom`] figure of merit.
+    /// [`SoftConstraintFom`] figure of merit.
     pub fn new(config: EstConfig) -> Result<Self, ScheduleError> {
         let scheduler = Self {
             config,
-            fom: Arc::new(TaskCountFom),
+            fom: Arc::new(SoftConstraintFom),
         };
         validation::validate_scheduler(&scheduler)?;
         Ok(scheduler)
@@ -86,9 +86,8 @@ impl EstScheduler {
         horizon: &Period<MJD>,
     ) -> Result<Schedule, ScheduleError> {
         log::info!(
-            "est: starting scheduler — tasks={}, endangered_threshold={}, k_beams={}, branching_factor={}, horizon=[{:.4}, {:.4}]",
+            "est: starting scheduler — tasks={}, k_beams={}, branching_factor={}, horizon=[{:.4}, {:.4}]",
             tasks.len(),
-            self.config.endangered_threshold,
             self.config.k_beams,
             self.config.branching_factor,
             horizon.start.value(),
@@ -103,12 +102,7 @@ impl EstScheduler {
             filtered_tasks.len()
         );
 
-        let initial_candidates = CandidateQueue::build(
-            &filtered_tasks,
-            possible_periods,
-            horizon,
-            self.config.endangered_threshold,
-        );
+        let initial_candidates = CandidateQueue::build(&filtered_tasks, possible_periods, horizon);
 
         let initial_state = super::ScheduleState {
             cursor: horizon.start,
@@ -166,7 +160,7 @@ impl EstScheduler {
 
         log::info!(
             "est: done — scheduled {} task(s) in {} round(s)",
-            best.schedule.placements.len(),
+            best.schedule.len(),
             round,
         );
 
@@ -187,10 +181,9 @@ impl EstScheduler {
     ) -> BeamExpansion<'a> {
         // Recompute EST metadata from the beam cursor to the end of the
         // global horizon before deciding what can branch next.
-        state.candidates.refresh(
-            &Period::new(state.cursor, horizon.end),
-            self.config.endangered_threshold,
-        );
+        state
+            .candidates
+            .refresh(&Period::new(state.cursor, horizon.end));
 
         let schedulable = state.candidates.count_schedulable();
         let branches = branching_factor.min(schedulable);

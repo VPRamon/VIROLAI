@@ -101,7 +101,7 @@ Rust CLI that runs one scheduling problem across a resolved sweep of EST configu
 
 Schedule files use this naming pattern:
 
-- `e{endangered_threshold}-k{k_beams}-b{branching_factor}-{count|fitness}.json`
+- `e{endangered_threshold}-k{k_beams}-b{branching_factor}-fitness.json`
 
 The comparison CSV includes only these columns:
 
@@ -114,11 +114,11 @@ The comparison CSV includes only these columns:
 - `scheduled_priority_p75`
 - `scheduled_priority_p90`
 
-`run_slug` encodes configuration as `e{endangered_threshold}-k{k_beams}-b{branching_factor}-{count|fitness}`.
+`run_slug` encodes configuration as `e{endangered_threshold}-k{k_beams}-b{branching_factor}`.
 
-The default baseline is the classic greedy EST configuration:
+The default baseline EST configuration is:
 
-- `fom = "task_count"`
+- `fom = "soft_constraint"`
 - `endangered_threshold = 1`
 - `k_beams = 1`
 - `branching_factor = 1`
@@ -134,7 +134,6 @@ cargo run --bin est_experiment -- --spec experiments/ctao_n_est.json
 ```bash
 cargo run --bin est_experiment -- data/CTA-N/scheduling_problem.json \
   --output-dir out/ctao_n_est \
-  --est-fom-values task_count,soft_constraint \
   --est-e-values 1,2 \
   --est-k-values 1,4 \
   --est-b-values 1,2
@@ -150,14 +149,7 @@ cargo run --bin est_experiment -- data/CTA-N/scheduling_problem.json \
     "start_mjd": 61710.0,
     "end_mjd": 61720.0
   },
-  "baseline": {
-    "fom": "task_count",
-    "endangered_threshold": 1,
-    "k_beams": 1,
-    "branching_factor": 1
-  },
   "sweep": {
-    "foms": ["task_count", "soft_constraint"],
     "endangered_thresholds": [1, 2],
     "k_beams": [1, 4],
     "branching_factors": [1, 2]

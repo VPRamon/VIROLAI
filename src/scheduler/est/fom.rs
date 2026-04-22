@@ -2,7 +2,6 @@
 //!
 //! Implement [`ScheduleFom`] to supply a custom scoring function. Built-in
 //! implementations cover the two most common cases:
-//! - [`TaskCountFom`]: maximise the number of placed tasks.
 //! - [`SoftConstraintFom`]: maximise the sum of soft-constraint scores.
 //! - [`CompositeFom`]: lexicographic combination of two FOMs.
 
@@ -31,21 +30,18 @@ pub trait ScheduleFom: std::fmt::Debug + Send + Sync {
 #[serde(rename_all = "snake_case")]
 pub enum EstFomKind {
     #[default]
-    TaskCount,
     SoftConstraint,
 }
 
 impl EstFomKind {
     pub const fn as_str(self) -> &'static str {
         match self {
-            Self::TaskCount => "task_count",
             Self::SoftConstraint => "soft_constraint",
         }
     }
 
     pub fn into_fom(self) -> Arc<dyn ScheduleFom> {
         match self {
-            Self::TaskCount => Arc::new(TaskCountFom),
             Self::SoftConstraint => Arc::new(SoftConstraintFom),
         }
     }
@@ -62,23 +58,11 @@ impl FromStr for EstFomKind {
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value.trim() {
-            "task_count" => Ok(Self::TaskCount),
             "soft_constraint" => Ok(Self::SoftConstraint),
             other => Err(format!(
-                "invalid EST FOM '{other}' (expected 'task_count' or 'soft_constraint')"
+                "invalid EST FOM '{other}' (expected 'soft_constraint')"
             )),
         }
-    }
-}
-
-/// FOM: number of scheduled tasks (maximize).
-#[derive(Debug, Clone, Default)]
-pub struct TaskCountFom;
-
-impl ScheduleFom for TaskCountFom {
-    /// Score by the number of placed tasks.
-    fn evaluate(&self, schedule: &Schedule, _tasks: &[Task]) -> f64 {
-        schedule.placements.len() as f64
     }
 }
 
@@ -94,10 +78,9 @@ impl ScheduleFom for SoftConstraintFom {
     fn evaluate(&self, schedule: &Schedule, tasks: &[Task]) -> f64 {
         let task_map: HashMap<_, _> = tasks.iter().map(|t| (t.id, t)).collect();
         schedule
-            .placements
-            .iter()
-            .map(|(id, placement)| {
-                let Some(task) = task_map.get(id) else {
+            .placements()
+            .map(|placement| {
+                let Some(task) = task_map.get(&placement.task_id) else {
                     // Missing task metadata should not panic during ranking; it
                     // simply contributes no additional soft score.
                     return 0.0;

@@ -22,7 +22,7 @@ use std::collections::HashMap;
 /// All mutations keep the placement map and interval tree consistent.
 #[derive(Debug, Default, Clone)]
 pub struct Schedule {
-    pub placements: HashMap<TaskId, TaskPlacement>,
+    placements: HashMap<TaskId, TaskPlacement>,
     interval_tree: IntervalTree<JD>,
 }
 
@@ -56,8 +56,33 @@ impl Schedule {
         self.interval_tree.remove(placement.task_id);
     }
 
-    pub(crate) fn insert_placement(&mut self, placement: TaskPlacement) {
+    pub fn insert_placement(&mut self, placement: TaskPlacement) {
         self.index_insert(&placement);
         self.placements.insert(placement.task_id, placement);
+    }
+
+    /// Iterate over all placed tasks.
+    pub fn placements(&self) -> impl Iterator<Item = &TaskPlacement> {
+        self.placements.values()
+    }
+
+    /// Look up the placement for `task_id`, if any.
+    pub fn get(&self, task_id: TaskId) -> Option<&TaskPlacement> {
+        self.placements.get(&task_id)
+    }
+
+    /// Number of placed tasks.
+    pub fn len(&self) -> usize {
+        self.placements.len()
+    }
+
+    /// `true` when no tasks have been placed.
+    pub fn is_empty(&self) -> bool {
+        self.placements.is_empty()
+    }
+
+    /// `true` when `task_id` has been placed.
+    pub fn contains(&self, task_id: TaskId) -> bool {
+        self.placements.contains_key(&task_id)
     }
 }

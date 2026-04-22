@@ -1,9 +1,39 @@
+//! Bounded-context adapter: PhD scheduler model → TSI analysis model.
+//!
+//! # What this adapter does
+//!
+//! This adapter translates a PhD scheduling-problem JSON payload into the TSI
+//! internal analysis model consumed by the TSI backend.  It is an explicit
+//! **bounded-context** translation: the two models serve different purposes and
+//! share only a subset of their concepts.
+//!
+//! ## Preserved
+//! - Task identity (`task_id` / `original_task_id`)
+//! - Scheduled time intervals (start / end MJD UTC)
+//! - Task priority
+//! - Per-task azimuth and altitude constraints
+//! - Observing-site location (from `resources[0]` or legacy top-level `location`)
+//! - Astronomical observability constraints (twilight type, moon altitude bounds)
+//! - Block membership tracked as `original_block_id` on each TSI block
+//!
+//! ## Deliberately dropped
+//! - Multi-resource schedules: only `resources[0]` is used; passing more than
+//!   one resource is a hard error (see below).
+//! - Intra-block dependency edges: TSI has no concept of task ordering within a
+//!   block; dependencies are satisfied before export by the scheduler.
+//! - Unscheduled tasks: tasks without `scheduled_start/end_mjd_utc` are silently
+//!   skipped (they carry no placement information).
+//!
+//! ## Multi-resource rejection
+//! TSI is a single-site analysis tool.  If the payload contains more than one
+//! resource the adapter returns a hard error rather than silently discarding
+//! data.
+
 use std::sync::Arc;
 
 use anyhow::{Context, bail};
 use rayon::prelude::*;
 use serde::Deserialize;
-use tracing::warn;
 use tsi_rust::api::{self, Schedule};
 use tsi_rust::models::ModifiedJulianDate;
 use tsi_rust::qtty;
@@ -169,9 +199,10 @@ fn resolve_location_and_name(
 )> {
     if let Some(primary) = input.resources.first() {
         if input.resources.len() > 1 {
-            warn!(
-                resources = input.resources.len(),
-                "Multiple resources provided; using resources[0] for TSI single-site analytics"
+            bail!(
+                "multi-resource schedules are not supported: payload contains {} resources, \
+                 expected exactly 1 (TSI is a single-site analysis tool)",
+                input.resources.len()
             );
         }
 

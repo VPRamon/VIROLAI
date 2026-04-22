@@ -37,7 +37,7 @@ Notes:
 Run the scheduler on a `scheduling_problem.json` file:
 
 ```bash
-cargo run --bin scheduler -- <input_json> [horizon_start_mjd horizon_end_mjd] [--est-fom <task_count|soft_constraint>] [--est-endangered-threshold <u32>] [--est-k <usize>] [--est-b <usize>]
+cargo run --bin scheduler -- <input_json> [horizon_start_mjd horizon_end_mjd] [--est-fom <soft_constraint>] [--est-k <usize>] [--est-b <usize>]
 ```
 
 Examples:
@@ -56,7 +56,7 @@ cargo run --bin scheduler -- data/CTA-N/scheduling_problem.json 61710.0 61720.0
 Optional EST configuration override:
 
 ```bash
-cargo run --bin scheduler -- data/CTA-N/scheduling_problem.json --est-fom soft_constraint --est-endangered-threshold 2 --est-k 5 --est-b 3
+cargo run --bin scheduler -- data/CTA-N/scheduling_problem.json --est-fom soft_constraint --est-k 5 --est-b 3
 ```
 
 The scheduler writes a result file next to the input using the pattern:
@@ -83,8 +83,7 @@ You can also drive the sweep directly from CLI overrides:
 
 ```bash
 cargo run --bin est_experiment -- data/CTA-N/scheduling_problem.json \
-  --output-dir out/ctao_n_est \
-  --est-fom-values task_count,soft_constraint \
+  --output-dir out/ \
   --est-e-values 1,2 \
   --est-k-values 1,4 \
   --est-b-values 1,2
@@ -98,7 +97,7 @@ Generated output layout:
     manifest.json
     comparison.csv
     schedules/
-      e1-k1-b1-count.json
+      e1-k1-b1-fitness.json
       ...
 ```
 
@@ -113,7 +112,7 @@ Generated output layout:
   - `scheduled_priority_p75`
   - `scheduled_priority_p90`
 
-  `run_slug` uses the compact naming stem `e{endangered_threshold}-k{k_beams}-b{branching_factor}-{count|fitness}`.
+  `run_slug` uses the compact naming stem `k{k_beams}-b{branching_factor}`.
 
 Example experiment-spec JSON:
 
@@ -121,15 +120,7 @@ Example experiment-spec JSON:
 {
   "input_json": "data/CTA-N/scheduling_problem.json",
   "output_dir": "out/ctao_n_est",
-  "baseline": {
-    "fom": "task_count",
-    "endangered_threshold": 1,
-    "k_beams": 1,
-    "branching_factor": 1
-  },
   "sweep": {
-    "foms": ["task_count", "soft_constraint"],
-    "endangered_thresholds": [1, 2],
     "k_beams": [1, 4],
     "branching_factors": [1, 2]
   }

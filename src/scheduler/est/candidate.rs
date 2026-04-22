@@ -107,14 +107,13 @@ impl<'a> EstCandidate<'a> {
         }
 
         log::trace!(
-            "est: candidate task={} refreshed — est={}, deadline={}, flexibility={:.2}, endangered={}",
+            "est: candidate task={} refreshed — est={}, deadline={}, flexibility={:.2}",
             self.task.id.0,
             self.est
                 .map_or("none".to_string(), |t| format!("{:.4}", t.value())),
             self.deadline
                 .map_or("none".to_string(), |t| format!("{:.4}", t.value())),
             self.flexibility,
-            self.is_endangered(1),
         );
     }
 
@@ -125,14 +124,6 @@ impl<'a> EstCandidate<'a> {
             .as_ref()
             .map(|expr| expr.score(&at, None, Some(&task.target)))
             .unwrap_or(0.0)
-    }
-
-    /// Return `true` when the candidate is below the endangered threshold.
-    ///
-    /// Endangered tasks are usually prioritised unless a flexible task can be
-    /// safely placed before them without violating their deadline.
-    pub const fn is_endangered(&self, endangered_threshold: u32) -> bool {
-        self.flexibility < endangered_threshold as f64
     }
 
     /// Return `true` when the remaining feasible time is less than one task.

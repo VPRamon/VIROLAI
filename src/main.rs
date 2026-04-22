@@ -93,11 +93,8 @@ fn run() -> Result<(), String> {
         preschedule_elapsed.as_secs_f64()
     );
     println!(
-        "EST config: fom={}, endangered_threshold={}, k={}, b={}",
-        cli.est_fom,
-        cli.est_config.endangered_threshold,
-        cli.est_config.k_beams,
-        cli.est_config.branching_factor,
+        "EST config: fom={}, k={}, b={}",
+        cli.est_fom, cli.est_config.k_beams, cli.est_config.branching_factor,
     );
     println!("EST elapsed: {:.3}s", est_elapsed.as_secs_f64());
     println!(
@@ -135,24 +132,11 @@ fn parse_cli_args(program: &str, args: &[String]) -> Result<CliArgs, String> {
                 let Some(value) = args.get(i + 1) else {
                     print_usage(program);
                     return Err(format!(
-                        "missing value for {flag} (expected 'task_count' or 'soft_constraint')"
+                        "missing value for {flag} (expected 'soft_constraint')"
                     ));
                 };
                 est_fom = value
                     .parse::<est::EstFomKind>()
-                    .map_err(|e| format!("invalid {flag} value '{value}': {e}"))?;
-                i += 2;
-            }
-            "--est-e" | "--est-endangered-threshold" => {
-                let flag = args[i].as_str();
-                let Some(value) = args.get(i + 1) else {
-                    print_usage(program);
-                    return Err(format!(
-                        "missing value for {flag} (expected an unsigned integer)"
-                    ));
-                };
-                est_config.endangered_threshold = value
-                    .parse::<u32>()
                     .map_err(|e| format!("invalid {flag} value '{value}': {e}"))?;
                 i += 2;
             }
@@ -219,9 +203,9 @@ fn parse_cli_args(program: &str, args: &[String]) -> Result<CliArgs, String> {
 
 fn print_usage(program: &str) {
     eprintln!(
-        "Usage: {program} <input_json> [horizon_start_mjd horizon_end_mjd] [--est-fom <task_count|soft_constraint>] [--est-e <u32>] [--est-k <usize>] [--est-b <usize>]\n\
-         Aliases: --est-endangered-threshold <u32> for --est-e, --est-schedule-states <usize> for --est-k, --est-branching-factor <usize> for --est-b\n\
-         Example: {program} data/ctao_n.json --est-fom soft_constraint --est-e 2 --est-k 5 --est-b 3"
+        "Usage: {program} <input_json> [horizon_start_mjd horizon_end_mjd] [--est-fom <soft_constraint>] [--est-k <usize>] [--est-b <usize>]\n\
+         Aliases: --est-schedule-states <usize> for --est-k, --est-branching-factor <usize> for --est-b\n\
+         Example: {program} data/ctao_n.json --est-fom soft_constraint --est-k 5 --est-b 3"
     );
 }
 
@@ -237,9 +221,9 @@ fn print_telescope(telescope: &Telescope) {
 }
 
 fn print_schedule(schedule: &Schedule) {
-    println!("EST placed {} tasks", schedule.placements.len());
+    println!("EST placed {} tasks", schedule.len());
 
-    let mut placements: Vec<_> = schedule.placements.values().collect();
+    let mut placements: Vec<_> = schedule.placements().collect();
     placements.sort_by(|a, b| {
         a.start
             .to::<MJD>()

@@ -63,15 +63,14 @@ pub fn compute_run_metrics(
     priority_by_task: &HashMap<TaskId, f64>,
 ) -> RunMetrics {
     let scheduled_priorities: Vec<f64> = schedule
-        .placements
-        .keys()
-        .map(|task_id| *priority_by_task.get(task_id).unwrap_or(&0.0))
+        .placements()
+        .map(|p| *priority_by_task.get(&p.task_id).unwrap_or(&0.0))
         .collect();
 
     let fitness_priority_sum: f64 = scheduled_priorities.iter().sum();
 
     RunMetrics {
-        scheduled_task_count: schedule.placements.len(),
+        scheduled_task_count: schedule.len(),
         fitness_priority_sum,
         scheduled_priority_p25: percentile(&scheduled_priorities, 0.25),
         scheduled_priority_p50: percentile(&scheduled_priorities, 0.50),
@@ -117,7 +116,7 @@ mod tests {
                 end: Time::<MJD>::new(end).to::<JD>(),
                 block_id: None,
             };
-            schedule.placements.insert(TaskId(task_id), placement);
+            schedule.insert_placement(placement);
         }
         schedule
     }

@@ -62,12 +62,8 @@ fn est_experiment_pipeline_writes_expected_artifacts() {
     assert!(comparison_csv_path.exists(), "comparison.csv should exist");
     assert!(schedules_dir.is_dir(), "schedules/ directory should exist");
 
-    let expected_schedule_names = HashSet::from([
-        "e1-k1-b1-count.json".to_string(),
-        "e1-k1-b1-fitness.json".to_string(),
-        "e2-k1-b1-count.json".to_string(),
-        "e2-k1-b1-fitness.json".to_string(),
-    ]);
+    let expected_schedule_names =
+        HashSet::from(["k1-b1.json".to_string(), "k2-b1.json".to_string()]);
     let actual_schedule_names: HashSet<String> = fs::read_dir(&schedules_dir)
         .expect("schedules dir should be readable")
         .filter_map(|e| e.ok())
@@ -99,13 +95,13 @@ fn est_experiment_pipeline_writes_expected_artifacts() {
         .get("baseline_slug")
         .and_then(Value::as_str)
         .expect("manifest should contain baseline_slug");
-    assert_eq!(baseline_slug, "fom-task_count__e-1__k-1__b-1");
+    assert_eq!(baseline_slug, "k1-b1");
 
     let runs = manifest
         .get("runs")
         .and_then(Value::as_array)
         .expect("manifest should contain runs");
-    assert_eq!(runs.len(), 4);
+    assert_eq!(runs.len(), 2);
 
     let baseline_run_entry = runs
         .iter()
@@ -120,7 +116,7 @@ fn est_experiment_pipeline_writes_expected_artifacts() {
         .get("schedule_json")
         .and_then(Value::as_str)
         .expect("manifest run should contain schedule_json");
-    assert_eq!(baseline_schedule_json, "schedules/e1-k1-b1-count.json");
+    assert_eq!(baseline_schedule_json, "schedules/k1-b1.json");
 
     let mut reader = Reader::from_path(&comparison_csv_path).expect("comparison csv should load");
     let headers = reader.headers().expect("csv headers should exist").clone();
@@ -142,13 +138,13 @@ fn est_experiment_pipeline_writes_expected_artifacts() {
         .deserialize()
         .map(|row| row.expect("row should deserialize"))
         .collect();
-    assert_eq!(rows.len(), 4);
+    assert_eq!(rows.len(), 2);
 
     let baseline_row = rows
         .iter()
         .find(|row| row.is_baseline)
         .expect("baseline row should exist");
-    assert_eq!(baseline_row.run_slug, "e1-k1-b1-count");
+    assert_eq!(baseline_row.run_slug, "k1-b1");
     assert!(baseline_row.scheduled_task_count <= 2);
     assert!(baseline_row.fitness_priority_sum >= 0.0);
     assert!(baseline_row.fitness_priority_sum <= 15.0);
@@ -181,14 +177,10 @@ fn est_experiment_range_syntax_produces_correct_run_count() {
             temp_dir.path().join("input.json").to_str().unwrap(),
             "--output-dir",
             output_dir.to_str().unwrap(),
-            "--est-e-values",
-            "1-3",
             "--est-k-values",
             "1,5",
             "--est-b-values",
             "1",
-            "--est-fom-values",
-            "task_count",
         ])
         .status()
         .expect("est_experiment binary should run");
@@ -205,8 +197,8 @@ fn est_experiment_range_syntax_produces_correct_run_count() {
     let schedule_count = fs::read_dir(&schedules_dir)
         .expect("schedules dir should be readable")
         .count();
-    // e=[1,2,3] × k=[1,5] × b=[1] × fom=[task_count] = 6 runs
-    assert_eq!(schedule_count, 6);
+    // k=[1,5] × b=[1] = 2 runs
+    assert_eq!(schedule_count, 2);
 }
 
 fn write_input_fixture(base_dir: &Path) {
@@ -276,9 +268,7 @@ fn write_spec_fixture(base_dir: &Path) -> std::path::PathBuf {
   "input_json": "input.json",
   "output_dir": "results",
   "sweep": {
-    "foms": ["task_count", "soft_constraint"],
-    "endangered_thresholds": [1, 2],
-    "k_beams": [1],
+    "k_beams": [1, 2],
     "branching_factors": [1]
   }
 }"#;

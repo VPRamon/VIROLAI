@@ -5,7 +5,6 @@ mod run;
 
 use config::{ExperimentSpec, HorizonOverride, RunConfig, SweepAxes};
 use rayon::prelude::*;
-use scheduler::scheduler::est::EstFomKind;
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -111,11 +110,6 @@ fn load_spec(path: &Path) -> Result<ExperimentSpec, String> {
 /// Merges CLI axes with spec axes; CLI takes precedence.
 fn merge_axes(cli: SweepAxes, spec: Option<&SweepAxes>) -> SweepAxes {
     SweepAxes {
-        foms: pick_axis(cli.foms, spec.map(|s| &s.foms)),
-        endangered_thresholds: pick_axis(
-            cli.endangered_thresholds,
-            spec.map(|s| &s.endangered_thresholds),
-        ),
         k_beams: pick_axis(cli.k_beams, spec.map(|s| &s.k_beams)),
         branching_factors: pick_axis(cli.branching_factors, spec.map(|s| &s.branching_factors)),
     }
@@ -140,16 +134,6 @@ fn pick_axis<T: Clone>(cli: Vec<T>, spec: Option<&Vec<T>>) -> Vec<T> {
 /// by attempting to construct its scheduler before returning.
 fn build_run_list(axes: &SweepAxes) -> Result<Vec<RunConfig>, String> {
     let def = RunConfig::default();
-    let foms = if axes.foms.is_empty() {
-        vec![def.fom]
-    } else {
-        axes.foms.clone()
-    };
-    let endangered_thresholds = if axes.endangered_thresholds.is_empty() {
-        vec![def.endangered_threshold]
-    } else {
-        axes.endangered_thresholds.clone()
-    };
     let k_beams = if axes.k_beams.is_empty() {
         vec![def.k_beams]
     } else {
@@ -162,18 +146,13 @@ fn build_run_list(axes: &SweepAxes) -> Result<Vec<RunConfig>, String> {
     };
 
     let mut run_set = BTreeSet::new();
-    for &fom in &foms {
-        for &e in &endangered_thresholds {
-            for &k in &k_beams {
-                for &b in &branching_factors {
-                    run_set.insert(RunConfig {
-                        fom,
-                        endangered_threshold: e,
-                        k_beams: k,
-                        branching_factor: b,
-                    });
-                }
-            }
+    for &k in &k_beams {
+        for &b in &branching_factors {
+            run_set.insert(RunConfig {
+                fom: def.fom,
+                k_beams: k,
+                branching_factor: b,
+            });
         }
     }
 
@@ -251,13 +230,6 @@ fn parse_cli(program: &str, args: &[String]) -> Result<CliArgs, String> {
             "--output-dir" => {
                 output_dir = Some(PathBuf::from(flag_arg(args, &mut i, "--output-dir")?));
             }
-            "--est-fom-values" => {
-                cli_axes.foms = parse_fom_list(flag_arg(args, &mut i, "--est-fom-values")?)?;
-            }
-            "--est-e-values" => {
-                cli_axes.endangered_thresholds =
-                    parse_range_list(flag_arg(args, &mut i, "--est-e-values")?, "--est-e-values")?;
-            }
             "--est-k-values" => {
                 cli_axes.k_beams =
                     parse_range_list(flag_arg(args, &mut i, "--est-k-values")?, "--est-k-values")?;
@@ -320,16 +292,6 @@ fn flag_arg<'a>(args: &'a [String], i: &mut usize, flag: &str) -> Result<&'a str
     }
 }
 
-fn parse_fom_list(value: &str) -> Result<Vec<EstFomKind>, String> {
-    if value.trim().is_empty() {
-        return Err("empty value list for --est-fom-values".to_string());
-    }
-    value
-        .split(',')
-        .map(|s| s.trim().parse::<EstFomKind>())
-        .collect()
-}
-
 /// Parses a comma-separated list of integer values or inclusive ranges.
 ///
 /// Each segment is either `N` (a single value) or `N-M` (all integers from N to M inclusive).
@@ -388,21 +350,20 @@ fn parse_f64(label: &str, value: &str) -> Result<f64, String> {
 fn print_usage(program: &str) {
     eprintln!(
         "Usage: {program} [--spec <spec.json>] [<input_json> [horizon_start_mjd horizon_end_mjd]]\n\
-         \x20  [--output-dir <dir>] [--est-fom-values <task_count,soft_constraint>]\n\
-         \x20  [--est-e-values <ranges>] [--est-k-values <ranges>] [--est-b-values <ranges>]\n\
+         \x20  [--output-dir <dir>]\n\
+         \x20  [--est-k-values <ranges>] [--est-b-values <ranges>]\n\
          \n\
          Ranges: comma-separated values or inclusive integer ranges, e.g. 1-5 or 1,3-5,8\n\
          \n\
          Examples:\n\
          \x20  {program} --spec experiments/est.json\n\
-         \x20  {program} data/ctao_n.json --output-dir out/ --est-e-values 1-5 --est-k-values 1,10 --est-b-values 1-10"
+         \x20  {program} data/ctao_n.json --output-dir out/ --est-k-values 1,10 --est-b-values 1-10"
     );
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use scheduler::scheduler::est::EstFomKind;
 
     #[test]
     fn parse_range_list_handles_single_values() {
@@ -437,23 +398,19 @@ mod tests {
     #[test]
     fn build_run_list_computes_cartesian_product() {
         let axes = SweepAxes {
-            foms: vec![EstFomKind::TaskCount],
-            endangered_thresholds: vec![1, 2],
-            k_beams: vec![1],
+            k_beams: vec![1, 2],
             branching_factors: vec![1],
         };
         let runs = build_run_list(&axes).unwrap();
         assert_eq!(runs.len(), 2);
-        assert!(runs.iter().any(|r| r.endangered_threshold == 1));
-        assert!(runs.iter().any(|r| r.endangered_threshold == 2));
+        assert!(runs.iter().any(|r| r.k_beams == 1));
+        assert!(runs.iter().any(|r| r.k_beams == 2));
     }
 
     #[test]
     fn build_run_list_deduplicates() {
         let axes = SweepAxes {
-            foms: vec![EstFomKind::TaskCount, EstFomKind::TaskCount],
-            endangered_thresholds: vec![1],
-            k_beams: vec![1],
+            k_beams: vec![1, 1],
             branching_factors: vec![1],
         };
         let runs = build_run_list(&axes).unwrap();

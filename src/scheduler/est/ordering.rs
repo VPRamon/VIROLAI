@@ -5,13 +5,9 @@ use std::cmp::Ordering;
 /// Sort EST candidates by their current EST metadata using a total order.
 ///
 /// Queue ordering is recomputed from scratch on every refresh so candidates
-/// can move freely between schedulable, endangered, and impossible states.
-pub fn sort_candidates(
-    candidates: &mut [EstCandidate<'_>],
-    _endangered_threshold: u32,
-    priority_at: Time<MJD>,
-) {
-    candidates.sort_by(|left, right| compare_candidates(left, right, 0, priority_at));
+/// can move freely between schedulable and impossible states.
+pub fn sort_candidates(candidates: &mut [EstCandidate<'_>], priority_at: Time<MJD>) {
+    candidates.sort_by(|left, right| compare_candidates(left, right, priority_at));
 }
 
 /// Comparator implementing the EST queue's total ordering.
@@ -25,7 +21,6 @@ pub fn sort_candidates(
 pub fn compare_candidates(
     left: &EstCandidate<'_>,
     right: &EstCandidate<'_>,
-    _endangered_threshold: u32,
     priority_at: Time<MJD>,
 ) -> Ordering {
     left.is_impossible()

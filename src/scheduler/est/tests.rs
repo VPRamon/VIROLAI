@@ -80,7 +80,7 @@ fn comparator_puts_impossible_candidates_last() {
     candidates[1].deadline = Some(Time::<MJD>::new(2.0));
     candidates[1].flexibility = 3.0;
 
-    candidates.sort_by(|a, b| compare_candidates(a, b, 2, horizon.start));
+    candidates.sort_by(|a, b| compare_candidates(a, b, horizon.start));
     assert_eq!(candidates[1].task_id(), TaskId(1));
 }
 
@@ -100,7 +100,7 @@ fn comparator_orders_by_earlier_est_first() {
     later.flexibility = 1.0;
 
     assert_eq!(
-        compare_candidates(&earlier, &later, 2, horizon.start),
+        compare_candidates(&earlier, &later, horizon.start),
         Ordering::Less
     );
 }
@@ -121,7 +121,7 @@ fn comparator_orders_by_lower_flexibility_before_priority() {
     high_flex.flexibility = 3.0;
 
     assert_eq!(
-        compare_candidates(&low_flex, &high_flex, 2, horizon.start),
+        compare_candidates(&low_flex, &high_flex, horizon.start),
         Ordering::Less
     );
 }
@@ -142,7 +142,7 @@ fn comparator_orders_by_higher_soft_priority_after_est_and_flexibility() {
     high_priority.flexibility = 2.0;
 
     assert_eq!(
-        compare_candidates(&high_priority, &low_priority, 2, horizon.start),
+        compare_candidates(&high_priority, &low_priority, horizon.start),
         Ordering::Less
     );
 }
@@ -163,7 +163,7 @@ fn comparator_orders_by_task_id_after_other_keys_tie() {
     higher_id.flexibility = 2.0;
 
     assert_eq!(
-        compare_candidates(&lower_id, &higher_id, 2, horizon.start),
+        compare_candidates(&lower_id, &higher_id, horizon.start),
         Ordering::Less
     );
 }
@@ -184,7 +184,7 @@ fn comparator_sorts_missing_est_after_candidates_with_est() {
     missing_est.flexibility = 2.0;
 
     assert_eq!(
-        compare_candidates(&with_est, &missing_est, 2, horizon.start),
+        compare_candidates(&with_est, &missing_est, horizon.start),
         Ordering::Less
     );
 }
@@ -232,9 +232,9 @@ fn candidate_queue_refresh_resorts_mixed_candidates_without_panicking() {
 
     let horizon = period(0.0, 5.0);
     let task_refs: Vec<_> = tasks.iter().collect();
-    let mut queue = CandidateQueue::build(&task_refs, &possible, &horizon, 10);
+    let mut queue = CandidateQueue::build(&task_refs, &possible, &horizon);
 
-    queue.refresh(&period(0.5, 5.0), 10);
+    queue.refresh(&period(0.5, 5.0));
 
     assert_eq!(queue.count_schedulable(), 3);
     assert_eq!(queue.pop_at(0).task_id(), TaskId(1));
@@ -255,13 +255,10 @@ fn run_scheduler_schedules_feasible_and_marks_unplanned() {
     let horizon = period(0.0, 5.0);
     let schedule = run_scheduler(&tasks, &possible, &horizon).expect("run should pass");
 
-    assert_eq!(schedule.placements.len(), 1);
-    let placement = schedule
-        .placements
-        .get(&TaskId(1))
-        .expect("task 1 should be placed");
+    assert_eq!(schedule.len(), 1);
+    let placement = schedule.get(TaskId(1)).expect("task 1 should be placed");
     assert!((placement.start.to::<MJD>().value() - 0.0).abs() < 1e-9);
-    assert!(!schedule.placements.contains_key(&TaskId(2)));
+    assert!(!schedule.contains(TaskId(2)));
 }
 
 #[test]
@@ -276,8 +273,8 @@ fn run_scheduler_filters_tasks_missing_possible_periods() {
     let horizon = period(0.0, 5.0);
     let schedule = run_scheduler(&tasks, &possible, &horizon).expect("run should pass");
 
-    assert!(schedule.placements.contains_key(&TaskId(1)));
-    assert!(!schedule.placements.contains_key(&TaskId(2)));
+    assert!(schedule.contains(TaskId(1)));
+    assert!(!schedule.contains(TaskId(2)));
 }
 
 #[test]
@@ -293,8 +290,8 @@ fn run_scheduler_filters_tasks_with_empty_possible_periods() {
     let horizon = period(0.0, 5.0);
     let schedule = run_scheduler(&tasks, &possible, &horizon).expect("run should pass");
 
-    assert!(schedule.placements.contains_key(&TaskId(1)));
-    assert!(!schedule.placements.contains_key(&TaskId(2)));
+    assert!(schedule.contains(TaskId(1)));
+    assert!(!schedule.contains(TaskId(2)));
 }
 
 #[test]
@@ -310,15 +307,9 @@ fn run_scheduler_uses_earliest_start_order() {
     let horizon = period(0.0, 4.0);
     let schedule = run_scheduler(&tasks, &possible, &horizon).expect("run should pass");
 
-    assert_eq!(schedule.placements.len(), 2);
-    let task_1 = schedule
-        .placements
-        .get(&TaskId(1))
-        .expect("task 1 should be placed");
-    let task_2 = schedule
-        .placements
-        .get(&TaskId(2))
-        .expect("task 2 should be placed");
+    assert_eq!(schedule.len(), 2);
+    let task_1 = schedule.get(TaskId(1)).expect("task 1 should be placed");
+    let task_2 = schedule.get(TaskId(2)).expect("task 2 should be placed");
     assert!((task_2.start.to::<MJD>().value() - 0.0).abs() < 1e-9);
     assert!((task_1.start.to::<MJD>().value() - 2.0).abs() < 1e-9);
 }
@@ -336,26 +327,17 @@ fn run_scheduler_recomputes_est_from_remaining_horizon() {
     let horizon = period(0.0, 4.0);
     let schedule = run_scheduler(&tasks, &possible, &horizon).expect("run should pass");
 
-    assert_eq!(schedule.placements.len(), 2);
-    let task_1 = schedule
-        .placements
-        .get(&TaskId(1))
-        .expect("task 1 should be placed");
-    let task_2 = schedule
-        .placements
-        .get(&TaskId(2))
-        .expect("task 2 should be placed");
+    assert_eq!(schedule.len(), 2);
+    let task_1 = schedule.get(TaskId(1)).expect("task 1 should be placed");
+    let task_2 = schedule.get(TaskId(2)).expect("task 2 should be placed");
     assert!((task_1.start.to::<MJD>().value() - 0.0).abs() < 1e-9);
     assert!((task_2.start.to::<MJD>().value() - 1.0).abs() < 1e-9);
     assert!(task_1.end <= task_2.start);
 }
 
 #[test]
-fn zero_threshold_is_allowed() {
-    let scheduler = EstScheduler::new(EstConfig {
-        endangered_threshold: 0,
-        ..EstConfig::default()
-    });
+fn default_config_is_valid() {
+    let scheduler = EstScheduler::new(EstConfig::default());
     assert!(scheduler.is_ok());
 }
 
@@ -464,16 +446,15 @@ fn beam_search_k1_b1_matches_greedy() {
     let config = EstConfig {
         k_beams: 1,
         branching_factor: 1,
-        ..EstConfig::default()
     };
     let beam = EstScheduler::new(config)
         .expect("config should be valid")
         .run_scheduler(&tasks_b, &possible, &horizon)
         .expect("beam run should pass");
 
-    assert_eq!(greedy.placements.len(), beam.placements.len());
-    for (id, p) in &greedy.placements {
-        let q = beam.placements.get(id).expect("same task should be placed");
+    assert_eq!(greedy.len(), beam.len());
+    for p in greedy.placements() {
+        let q = beam.get(p.task_id).expect("same task should be placed");
         assert_eq!(p.start, q.start);
     }
 }
@@ -504,7 +485,6 @@ fn beam_search_k2_b2_places_both_tasks_in_disjoint_windows() {
     let config = EstConfig {
         k_beams: 2,
         branching_factor: 2,
-        ..EstConfig::default()
     };
     let beam = EstScheduler::new(config)
         .expect("config should be valid")
@@ -512,7 +492,7 @@ fn beam_search_k2_b2_places_both_tasks_in_disjoint_windows() {
         .expect("beam run should pass");
 
     // Beam search must place at least as many tasks as greedy.
-    assert!(beam.placements.len() >= greedy.placements.len());
+    assert!(beam.len() >= greedy.len());
 }
 
 #[test]
@@ -533,14 +513,13 @@ fn beam_search_wide_branching_does_not_panic_with_mixed_candidate_states() {
     let config = EstConfig {
         k_beams: 1,
         branching_factor: 4,
-        ..EstConfig::default()
     };
     let schedule = EstScheduler::new(config)
         .expect("config should be valid")
         .run_scheduler(&tasks, &possible, &horizon)
         .expect("wide-branch EST run should pass");
 
-    assert!(!schedule.placements.is_empty());
+    assert!(!schedule.is_empty());
 }
 
 /// `SoftConstraintFom` should prefer the schedule that maximises priority sum.
@@ -562,7 +541,6 @@ fn beam_search_soft_constraint_fom_prefers_high_priority() {
     let config = EstConfig {
         k_beams: 2,
         branching_factor: 2,
-        ..EstConfig::default()
     };
     let schedule = EstScheduler::with_fom(config, Arc::new(SoftConstraintFom))
         .expect("config should be valid")
@@ -570,6 +548,6 @@ fn beam_search_soft_constraint_fom_prefers_high_priority() {
         .expect("run should pass");
 
     // Only one task fits; with SoftConstraintFom it should be the high-priority one.
-    assert_eq!(schedule.placements.len(), 1);
-    assert!(schedule.placements.contains_key(&TaskId(1)));
+    assert_eq!(schedule.len(), 1);
+    assert!(schedule.contains(TaskId(1)));
 }
