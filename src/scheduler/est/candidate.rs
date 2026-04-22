@@ -1,6 +1,6 @@
 use crate::schedule::TaskPlacement;
 use crate::task::Task;
-use crate::time::{JD, MJD, Period, PeriodSet, SchedulingBlockId, TaskId, Time};
+use crate::time::{MJD, Period, PeriodSet, SchedulingBlockId, TaskId, Time};
 use qtty::Day;
 
 /// Convert a refreshed EST candidate into a concrete scheduled placement.
@@ -129,6 +129,12 @@ impl<'a> EstCandidate<'a> {
             .unwrap_or(0.0)
     }
 
+    /// Return `true` when the task has little scheduling slack relative to
+    /// `threshold`.  A threshold of 0 disables the protection entirely.
+    pub fn is_endangered(&self, threshold: u32) -> bool {
+        threshold > 0 && self.flexibility < threshold as f64
+    }
+
     /// Return `true` when the remaining feasible time is less than one task.
     ///
     /// Such candidates cannot be scheduled from the current beam cursor.
@@ -151,8 +157,8 @@ impl IntoTaskPlacement for EstCandidate<'_> {
 
         TaskPlacement {
             task_id: self.task_id(),
-            start: start.to::<JD>(),
-            end: end.to::<JD>(),
+            start,
+            end,
             block_id: self.block_id,
         }
     }

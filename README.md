@@ -37,7 +37,7 @@ Notes:
 Run the scheduler on a `scheduling_problem.json` file:
 
 ```bash
-cargo run --bin scheduler -- <input_json> [horizon_start_mjd horizon_end_mjd] [--est-fom <soft_constraint>] [--est-k <usize>] [--est-b <usize>]
+cargo run --bin scheduler -- <input_json> [horizon_start_mjd horizon_end_mjd] [--est-fom <soft_constraint>] [--est-e <u32>] [--est-k <usize>] [--est-b <usize>]
 ```
 
 Examples:
@@ -56,7 +56,7 @@ cargo run --bin scheduler -- data/CTA-N/scheduling_problem.json 61710.0 61720.0
 Optional EST configuration override:
 
 ```bash
-cargo run --bin scheduler -- data/CTA-N/scheduling_problem.json --est-fom soft_constraint --est-k 5 --est-b 3
+cargo run --bin scheduler -- data/CTA-N/scheduling_problem.json --est-fom soft_constraint --est-e 2 --est-k 5 --est-b 3
 ```
 
 The scheduler writes a result file next to the input using the pattern:
@@ -97,7 +97,7 @@ Generated output layout:
     manifest.json
     comparison.csv
     schedules/
-      e1-k1-b1-fitness.json
+      e1-k1-b1.json
       ...
 ```
 
@@ -112,7 +112,7 @@ Generated output layout:
   - `scheduled_priority_p75`
   - `scheduled_priority_p90`
 
-  `run_slug` uses the compact naming stem `k{k_beams}-b{branching_factor}`.
+  `run_slug` uses the compact naming stem `e{endangered_threshold}-k{k_beams}-b{branching_factor}`.
 
 Example experiment-spec JSON:
 
@@ -121,6 +121,7 @@ Example experiment-spec JSON:
   "input_json": "data/CTA-N/scheduling_problem.json",
   "output_dir": "out/ctao_n_est",
   "sweep": {
+    "endangered_thresholds": [1, 2],
     "k_beams": [1, 4],
     "branching_factors": [1, 2]
   }

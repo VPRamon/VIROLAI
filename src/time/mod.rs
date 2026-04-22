@@ -17,11 +17,11 @@ pub use period::{Period, PeriodError, PeriodExt};
 pub use period_set::PeriodSet;
 pub(crate) use tempoch::Period as TempochPeriod;
 
-/// A point in time expressed as Julian Date.
-pub type TimePoint = Time<JD>;
+/// A point in time expressed as Modified Julian Date.
+pub type TimePoint = Time<MJD>;
 
-/// A half-open interval `[start, end)` in Julian Date.
-pub type TimeInterval = Period<JD>;
+/// A half-open interval `[start, end)` in Modified Julian Date.
+pub type TimeInterval = Period<MJD>;
 
 /// Opaque identifier for a [`Task`](crate::task::Task).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

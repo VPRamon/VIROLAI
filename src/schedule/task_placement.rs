@@ -11,7 +11,7 @@ pub struct TaskPlacement {
 }
 
 impl TaskPlacement {
-    /// Convenience: return the interval `[start, end)` as a [`Period<JD>`].
+    /// Convenience: return the interval `[start, end)` as a [`Period<MJD>`].
     pub fn interval(&self) -> TimeInterval {
         TimeInterval::new(self.start, self.end)
     }

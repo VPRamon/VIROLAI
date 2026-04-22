@@ -21,6 +21,7 @@ impl<'a> CandidateQueue<'a> {
         possible_periods: &'a TaskPeriodMap,
         horizon: &Period<MJD>,
         task_block_map: Option<&HashMap<TaskId, SchedulingBlockId>>,
+        threshold: u32,
     ) -> Self {
         let mut candidates = tasks
             .iter()
@@ -36,7 +37,7 @@ impl<'a> CandidateQueue<'a> {
             })
             .collect::<Vec<_>>();
 
-        sort_candidates(&mut candidates, horizon.start);
+        sort_candidates(&mut candidates, horizon.start, threshold);
 
         log::debug!(
             "est: built candidate queue — {} candidate(s)",
@@ -77,7 +78,7 @@ impl<'a> CandidateQueue<'a> {
     }
 
     /// Refresh every candidate against the new beam horizon and re-sort the queue.
-    pub(super) fn refresh(&mut self, horizon: &Period<MJD>) {
+    pub(super) fn refresh(&mut self, horizon: &Period<MJD>, threshold: u32) {
         log::trace!(
             "est: refreshing {} candidate(s) at cursor={:.4}",
             self.candidates.len(),
@@ -90,7 +91,7 @@ impl<'a> CandidateQueue<'a> {
 
         // Candidate ordering is derived entirely from the refreshed EST
         // metadata, so the queue must be fully re-sorted after every refresh.
-        sort_candidates(&mut self.candidates, horizon.start);
+        sort_candidates(&mut self.candidates, horizon.start, threshold);
     }
 
     #[cfg(test)]

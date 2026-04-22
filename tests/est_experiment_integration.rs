@@ -63,7 +63,7 @@ fn est_experiment_pipeline_writes_expected_artifacts() {
     assert!(schedules_dir.is_dir(), "schedules/ directory should exist");
 
     let expected_schedule_names =
-        HashSet::from(["k1-b1.json".to_string(), "k2-b1.json".to_string()]);
+        HashSet::from(["e1-k1-b1.json".to_string(), "e2-k1-b1.json".to_string()]);
     let actual_schedule_names: HashSet<String> = fs::read_dir(&schedules_dir)
         .expect("schedules dir should be readable")
         .filter_map(|e| e.ok())
@@ -95,7 +95,7 @@ fn est_experiment_pipeline_writes_expected_artifacts() {
         .get("baseline_slug")
         .and_then(Value::as_str)
         .expect("manifest should contain baseline_slug");
-    assert_eq!(baseline_slug, "k1-b1");
+    assert_eq!(baseline_slug, "e1-k1-b1");
 
     let runs = manifest
         .get("runs")
@@ -116,7 +116,7 @@ fn est_experiment_pipeline_writes_expected_artifacts() {
         .get("schedule_json")
         .and_then(Value::as_str)
         .expect("manifest run should contain schedule_json");
-    assert_eq!(baseline_schedule_json, "schedules/k1-b1.json");
+    assert_eq!(baseline_schedule_json, "schedules/e1-k1-b1.json");
 
     let mut reader = Reader::from_path(&comparison_csv_path).expect("comparison csv should load");
     let headers = reader.headers().expect("csv headers should exist").clone();
@@ -144,7 +144,7 @@ fn est_experiment_pipeline_writes_expected_artifacts() {
         .iter()
         .find(|row| row.is_baseline)
         .expect("baseline row should exist");
-    assert_eq!(baseline_row.run_slug, "k1-b1");
+    assert_eq!(baseline_row.run_slug, "e1-k1-b1");
     assert!(baseline_row.scheduled_task_count <= 2);
     assert!(baseline_row.fitness_priority_sum >= 0.0);
     assert!(baseline_row.fitness_priority_sum <= 15.0);
@@ -177,6 +177,8 @@ fn est_experiment_range_syntax_produces_correct_run_count() {
             temp_dir.path().join("input.json").to_str().unwrap(),
             "--output-dir",
             output_dir.to_str().unwrap(),
+            "--est-e-values",
+            "1-3",
             "--est-k-values",
             "1,5",
             "--est-b-values",
@@ -197,8 +199,8 @@ fn est_experiment_range_syntax_produces_correct_run_count() {
     let schedule_count = fs::read_dir(&schedules_dir)
         .expect("schedules dir should be readable")
         .count();
-    // k=[1,5] × b=[1] = 2 runs
-    assert_eq!(schedule_count, 2);
+    // e=[1,2,3] × k=[1,5] × b=[1] = 6 runs
+    assert_eq!(schedule_count, 6);
 }
 
 fn write_input_fixture(base_dir: &Path) {
@@ -268,7 +270,8 @@ fn write_spec_fixture(base_dir: &Path) -> std::path::PathBuf {
   "input_json": "input.json",
   "output_dir": "results",
   "sweep": {
-    "k_beams": [1, 2],
+    "endangered_thresholds": [1, 2],
+    "k_beams": [1],
     "branching_factors": [1]
   }
 }"#;

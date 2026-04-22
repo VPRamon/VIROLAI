@@ -101,7 +101,7 @@ Rust CLI that runs one scheduling problem across a resolved sweep of EST configu
 
 Schedule files use this naming pattern:
 
-- `e{endangered_threshold}-k{k_beams}-b{branching_factor}-fitness.json`
+- `e{endangered_threshold}-k{k_beams}-b{branching_factor}.json`
 
 The comparison CSV includes only these columns:
 

@@ -24,7 +24,7 @@
 //! Interval endpoints are typed [`Period<S>`](tempoch::Period) values,
 //! making the tree generic over any [`TimeScale`](tempoch::TimeScale):
 //! `JD`, `MJD`, and so on.  [`Schedule`](crate::schedule::Schedule) uses
-//! `IntervalTree<JD>`.
+//! `IntervalTree<MJD>`.
 
 use crate::time::{Period, TaskId, TimeScale, interval};
 

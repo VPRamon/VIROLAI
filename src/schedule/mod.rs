@@ -2,7 +2,7 @@
 //!
 //! [`Schedule`] owns:
 //! - a set of [`TaskPlacement`]s keyed by [`TaskId`]
-//! - an [`IntervalTree<JD>`](crate::time::IntervalTree) for fast overlap queries
+//! - an [`IntervalTree<MJD>`](crate::time::IntervalTree) for fast overlap queries
 
 mod output;
 mod problem;
@@ -14,7 +14,7 @@ pub use problem::SchedulingProblem;
 pub use task_placement::TaskPlacement;
 
 use crate::error::ScheduleError;
-use crate::time::{IntervalTree, JD, TaskId, TimeInterval};
+use crate::time::{IntervalTree, MJD, TaskId, TimeInterval};
 use std::collections::HashMap;
 
 /// The placement result.
@@ -23,7 +23,7 @@ use std::collections::HashMap;
 #[derive(Debug, Default, Clone)]
 pub struct Schedule {
     placements: HashMap<TaskId, TaskPlacement>,
-    interval_tree: IntervalTree<JD>,
+    interval_tree: IntervalTree<MJD>,
 }
 
 impl Schedule {

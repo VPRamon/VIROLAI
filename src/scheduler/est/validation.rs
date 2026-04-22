@@ -1,5 +1,5 @@
 use super::algorithm::EstScheduler;
-use super::config::MAX_K_BEAMS;
+use super::configuration::MAX_K_BEAMS;
 use crate::error::ScheduleError;
 use crate::prescheduler::TaskPeriodMap;
 use crate::task::Task;

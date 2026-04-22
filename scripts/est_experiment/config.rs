@@ -1,4 +1,4 @@
-use scheduler::scheduler::est::{EstConfig, EstFomKind, EstScheduler};
+use scheduler::scheduler::est::{Configuration, EstFomKind, EstScheduler};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -14,6 +14,8 @@ pub struct HorizonOverride {
 /// Empty axes fall back to the EST defaults when building the run list.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SweepAxes {
+    #[serde(default)]
+    pub endangered_thresholds: Vec<u32>,
     #[serde(default)]
     pub k_beams: Vec<usize>,
     #[serde(default)]
@@ -38,6 +40,7 @@ pub struct ExperimentSpec {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct RunConfig {
     pub fom: EstFomKind,
+    pub endangered_threshold: u32,
     pub k_beams: usize,
     pub branching_factor: usize,
 }
@@ -46,6 +49,7 @@ impl Default for RunConfig {
     fn default() -> Self {
         Self {
             fom: EstFomKind::SoftConstraint,
+            endangered_threshold: 1,
             k_beams: 1,
             branching_factor: 1,
         }
@@ -53,26 +57,33 @@ impl Default for RunConfig {
 }
 
 impl RunConfig {
-    pub const fn est_config(self) -> EstConfig {
-        EstConfig {
+    pub const fn est_config(self) -> Configuration {
+        Configuration {
             k_beams: self.k_beams,
             branching_factor: self.branching_factor,
+            endangered_threshold: self.endangered_threshold,
         }
     }
 
     pub fn build_scheduler(self) -> Result<EstScheduler, String> {
-        EstScheduler::with_kind(self.est_config(), self.fom)
+        EstScheduler::with_fom(self.est_config(), self.fom.into_fom())
             .map_err(|e| format!("invalid EST configuration for {}: {e}", self.slug()))
     }
 
     /// A filesystem-safe string that uniquely encodes all configuration axes.
     pub fn slug(self) -> String {
-        format!("k{}-b{}", self.k_beams, self.branching_factor)
+        format!(
+            "e{}-k{}-b{}",
+            self.endangered_threshold, self.k_beams, self.branching_factor
+        )
     }
 
     /// Compact filename stem for schedule outputs.
     pub fn schedule_file_stem(self) -> String {
-        format!("k{}-b{}", self.k_beams, self.branching_factor)
+        format!(
+            "e{}-k{}-b{}",
+            self.endangered_threshold, self.k_beams, self.branching_factor
+        )
     }
 }
 
@@ -84,19 +95,21 @@ mod tests {
     fn slug_encodes_all_configuration_axes() {
         let run = RunConfig {
             fom: EstFomKind::SoftConstraint,
+            endangered_threshold: 2,
             k_beams: 5,
             branching_factor: 3,
         };
-        assert_eq!(run.slug(), "k5-b3");
+        assert_eq!(run.slug(), "e2-k5-b3");
     }
 
     #[test]
     fn schedule_file_stem_uses_compact_pattern() {
         let fitness_run = RunConfig {
             fom: EstFomKind::SoftConstraint,
+            endangered_threshold: 2,
             k_beams: 5,
             branching_factor: 3,
         };
-        assert_eq!(fitness_run.schedule_file_stem(), "k5-b3");
+        assert_eq!(fitness_run.schedule_file_stem(), "e2-k5-b3");
     }
 }
