@@ -6,6 +6,7 @@ use scheduler::{
         MoonAltitudeConstraint, MoonSeparationConstraint, NightConstraint, PrioritySoftConstraint,
         SoftConstraint, SoftConstraintExpr, TimeConstraint,
     },
+    error::ScheduleError,
     task::IcrsTarget,
     time::{MJD, PeriodSet, Time},
 };
@@ -41,8 +42,8 @@ impl Constraint for FixedConstraint {
         _timeline: &Period<MJD>,
         _location: Option<&Geodetic<ECEF>>,
         _target: Option<&IcrsTarget>,
-    ) -> PeriodSet<MJD> {
-        self.out.clone()
+    ) -> Result<PeriodSet<MJD>, ScheduleError> {
+        Ok(self.out.clone())
     }
 }
 
@@ -55,7 +56,7 @@ impl Constraint for PanicConstraint {
         _timeline: &Period<MJD>,
         _location: Option<&Geodetic<ECEF>>,
         _target: Option<&IcrsTarget>,
-    ) -> PeriodSet<MJD> {
+    ) -> Result<PeriodSet<MJD>, ScheduleError> {
         panic!("panic constraint was evaluated unexpectedly");
     }
 }
@@ -82,7 +83,7 @@ fn constraint_expr_atom_delegates_to_inner_constraint() {
         out: PeriodSet::from_periods(vec![p(1.0, 2.0)]),
     });
 
-    let out = expr.check(&p(0.0, 3.0), None, None);
+    let out = expr.check(&p(0.0, 3.0), None, None).unwrap();
     assert_eq!(out.as_slice(), &[p(1.0, 2.0)]);
 }
 
@@ -97,14 +98,14 @@ fn constraint_expr_union_merges_children() {
         }),
     ]);
 
-    let out = expr.check(&p(0.0, 5.0), None, None);
+    let out = expr.check(&p(0.0, 5.0), None, None).unwrap();
     assert_eq!(out.as_slice(), &[p(0.0, 4.0)]);
 }
 
 #[test]
 fn constraint_expr_union_empty_children_is_empty() {
     let expr = ConstraintExpr::Union(vec![]);
-    let out = expr.check(&p(0.0, 10.0), None, None);
+    let out = expr.check(&p(0.0, 10.0), None, None).unwrap();
     assert!(out.is_empty());
 }
 
@@ -112,7 +113,7 @@ fn constraint_expr_union_empty_children_is_empty() {
 fn constraint_expr_intersection_empty_children_returns_timeline() {
     let timeline = p(10.0, 20.0);
     let expr = ConstraintExpr::Intersection(vec![]);
-    let out = expr.check(&timeline, None, None);
+    let out = expr.check(&timeline, None, None).unwrap();
     assert_eq!(out.as_slice(), &[timeline]);
 }
 
@@ -128,7 +129,7 @@ fn constraint_expr_intersection_short_circuits_when_empty() {
         ConstraintExpr::atom(PanicConstraint),
     ]);
 
-    let out = expr.check(&p(0.0, 10.0), None, None);
+    let out = expr.check(&p(0.0, 10.0), None, None).unwrap();
     assert!(out.is_empty());
 }
 
@@ -143,7 +144,7 @@ fn constraint_expr_intersection_combines_children() {
         }),
     ]);
 
-    let out = expr.check(&p(0.0, 10.0), None, None);
+    let out = expr.check(&p(0.0, 10.0), None, None).unwrap();
     assert_eq!(out.as_slice(), &[p(2.0, 6.0)]);
 }
 
@@ -265,7 +266,7 @@ fn time_constraint_returns_overlap_period() {
     let c = TimeConstraint {
         window: p(2.0, 6.0),
     };
-    let out = c.check(&p(4.0, 8.0), None, None);
+    let out = c.check(&p(4.0, 8.0), None, None).unwrap();
     assert_eq!(out.as_slice(), &[p(4.0, 6.0)]);
 }
 
@@ -274,17 +275,19 @@ fn time_constraint_returns_empty_when_disjoint() {
     let c = TimeConstraint {
         window: p(2.0, 6.0),
     };
-    let out = c.check(&p(6.0, 8.0), None, None);
+    let out = c.check(&p(6.0, 8.0), None, None).unwrap();
     assert!(out.is_empty());
 }
 
 #[test]
-#[should_panic(expected = "missing location for night constraint evaluation")]
-fn night_constraint_panics_when_location_missing() {
+fn night_constraint_errors_when_location_missing() {
     let c = NightConstraint {
         twilight: Twilight::Astronomical,
     };
-    let _ = c.check(&p(60000.0, 60001.0), None, None);
+    assert!(matches!(
+        c.check(&p(60000.0, 60001.0), None, None),
+        Err(ScheduleError::MissingLocation)
+    ));
 }
 
 #[test]
@@ -293,7 +296,7 @@ fn night_constraint_returns_periods_with_location() {
         twilight: Twilight::Astronomical,
     };
     let timeline = p(60000.0, 60002.0);
-    let out = c.check(&timeline, Some(&roque()), None);
+    let out = c.check(&timeline, Some(&roque()), None).unwrap();
 
     assert!(!out.is_empty());
     assert!(out.iter().all(|period| {
@@ -302,33 +305,39 @@ fn night_constraint_returns_periods_with_location() {
 }
 
 #[test]
-#[should_panic(expected = "invalid altitude range")]
-fn altitude_constraint_panics_for_invalid_range() {
+fn altitude_constraint_errors_for_invalid_range() {
     let c = AltitudeConstraint {
         min: Degrees::new(80.0),
         max: Degrees::new(20.0),
     };
-    let _ = c.check(&p(60000.0, 60001.0), Some(&roque()), Some(&sirius_target()));
+    assert!(matches!(
+        c.check(&p(60000.0, 60001.0), Some(&roque()), Some(&sirius_target())),
+        Err(ScheduleError::InvalidBounds(_))
+    ));
 }
 
 #[test]
-#[should_panic(expected = "missing target for altitude constraint evaluation")]
-fn altitude_constraint_panics_when_target_missing() {
+fn altitude_constraint_errors_when_target_missing() {
     let c = AltitudeConstraint {
         min: Degrees::new(-90.0),
         max: Degrees::new(90.0),
     };
-    let _ = c.check(&p(60000.0, 60001.0), Some(&roque()), None);
+    assert!(matches!(
+        c.check(&p(60000.0, 60001.0), Some(&roque()), None),
+        Err(ScheduleError::MissingTarget)
+    ));
 }
 
 #[test]
-#[should_panic(expected = "missing location for altitude constraint evaluation")]
-fn altitude_constraint_panics_when_location_missing() {
+fn altitude_constraint_errors_when_location_missing() {
     let c = AltitudeConstraint {
         min: Degrees::new(-90.0),
         max: Degrees::new(90.0),
     };
-    let _ = c.check(&p(60000.0, 60001.0), None, Some(&sirius_target()));
+    assert!(matches!(
+        c.check(&p(60000.0, 60001.0), None, Some(&sirius_target())),
+        Err(ScheduleError::MissingLocation)
+    ));
 }
 
 #[test]
@@ -338,28 +347,34 @@ fn altitude_constraint_wide_band_contains_midpoint() {
         max: Degrees::new(90.0),
     };
     let timeline = p(60000.0, 60001.0);
-    let out = c.check(&timeline, Some(&roque()), Some(&sirius_target()));
+    let out = c
+        .check(&timeline, Some(&roque()), Some(&sirius_target()))
+        .unwrap();
     assert!(out.contains_point(Time::<MJD>::new(60000.5)));
 }
 
 #[test]
-#[should_panic(expected = "missing target for azimuth constraint evaluation")]
-fn azimuth_constraint_panics_when_target_missing() {
+fn azimuth_constraint_errors_when_target_missing() {
     let c = AzimuthConstraint {
         min: Degrees::new(0.0),
         max: Degrees::new(360.0),
     };
-    let _ = c.check(&p(60000.0, 60001.0), Some(&roque()), None);
+    assert!(matches!(
+        c.check(&p(60000.0, 60001.0), Some(&roque()), None),
+        Err(ScheduleError::MissingTarget)
+    ));
 }
 
 #[test]
-#[should_panic(expected = "missing location for azimuth constraint evaluation")]
-fn azimuth_constraint_panics_when_location_missing() {
+fn azimuth_constraint_errors_when_location_missing() {
     let c = AzimuthConstraint {
         min: Degrees::new(0.0),
         max: Degrees::new(360.0),
     };
-    let _ = c.check(&p(60000.0, 60001.0), None, Some(&sirius_target()));
+    assert!(matches!(
+        c.check(&p(60000.0, 60001.0), None, Some(&sirius_target())),
+        Err(ScheduleError::MissingLocation)
+    ));
 }
 
 #[test]
@@ -368,28 +383,34 @@ fn azimuth_constraint_wide_band_has_some_feasible_time() {
         min: Degrees::new(0.0),
         max: Degrees::new(360.0),
     };
-    let out = c.check(&p(60000.0, 60003.0), Some(&roque()), Some(&sirius_target()));
+    let out = c
+        .check(&p(60000.0, 60003.0), Some(&roque()), Some(&sirius_target()))
+        .unwrap();
     assert!(!out.is_empty());
 }
 
 #[test]
-#[should_panic(expected = "invalid moon altitude range")]
-fn moon_altitude_constraint_panics_for_invalid_range() {
+fn moon_altitude_constraint_errors_for_invalid_range() {
     let c = MoonAltitudeConstraint {
         min: Degrees::new(20.0),
         max: Degrees::new(10.0),
     };
-    let _ = c.check(&p(60000.0, 60001.0), Some(&roque()), None);
+    assert!(matches!(
+        c.check(&p(60000.0, 60001.0), Some(&roque()), None),
+        Err(ScheduleError::InvalidBounds(_))
+    ));
 }
 
 #[test]
-#[should_panic(expected = "missing location for moon-altitude constraint evaluation")]
-fn moon_altitude_constraint_panics_when_location_missing() {
+fn moon_altitude_constraint_errors_when_location_missing() {
     let c = MoonAltitudeConstraint {
         min: Degrees::new(-90.0),
         max: Degrees::new(90.0),
     };
-    let _ = c.check(&p(60000.0, 60001.0), None, None);
+    assert!(matches!(
+        c.check(&p(60000.0, 60001.0), None, None),
+        Err(ScheduleError::MissingLocation)
+    ));
 }
 
 #[test]
@@ -398,17 +419,19 @@ fn moon_altitude_constraint_wide_band_has_some_feasible_time() {
         min: Degrees::new(-90.0),
         max: Degrees::new(90.0),
     };
-    let out = c.check(&p(60000.0, 60001.0), Some(&roque()), None);
+    let out = c.check(&p(60000.0, 60001.0), Some(&roque()), None).unwrap();
     assert!(!out.is_empty());
 }
 
 #[test]
-#[should_panic(expected = "missing target for moon-separation constraint evaluation")]
-fn moon_separation_constraint_panics_when_target_missing() {
+fn moon_separation_constraint_errors_when_target_missing() {
     let c = MoonSeparationConstraint {
         min_separation: Degrees::new(1.0),
     };
-    let _ = c.check(&p(60000.0, 60001.0), None, None);
+    assert!(matches!(
+        c.check(&p(60000.0, 60001.0), None, None),
+        Err(ScheduleError::MissingTarget)
+    ));
 }
 
 #[test]
@@ -417,7 +440,7 @@ fn moon_separation_constraint_accepts_zero_minimum() {
         min_separation: Degrees::new(0.0),
     };
     let timeline = p(60000.0, 60001.0);
-    let out = c.check(&timeline, None, Some(&sirius_target()));
+    let out = c.check(&timeline, None, Some(&sirius_target())).unwrap();
     assert_eq!(out.as_slice(), &[timeline]);
 }
 
@@ -426,6 +449,8 @@ fn moon_separation_constraint_rejects_threshold_over_180_degrees() {
     let c = MoonSeparationConstraint {
         min_separation: Degrees::new(181.0),
     };
-    let out = c.check(&p(60000.0, 60001.0), None, Some(&sirius_target()));
+    let out = c
+        .check(&p(60000.0, 60001.0), None, Some(&sirius_target()))
+        .unwrap();
     assert!(out.is_empty());
 }

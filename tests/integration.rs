@@ -162,6 +162,7 @@ fn time_window_constraint_accepts_inside() {
     };
     assert!(
         !c.check(&timeline, Some(&site), Some(&task_for_ctx.target))
+            .unwrap()
             .is_empty()
     );
 }
@@ -178,7 +179,9 @@ fn time_window_constraint_rejects_outside() {
     let c = TimeWindowConstraint {
         window: Period::<MJD>::new(window.start.to::<MJD>(), window.end.to::<MJD>()),
     };
-    let periods = c.check(&timeline, Some(&site), Some(&task_for_ctx.target));
+    let periods = c
+        .check(&timeline, Some(&site), Some(&task_for_ctx.target))
+        .unwrap();
     assert!(periods.is_empty());
 }
 

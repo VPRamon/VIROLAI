@@ -1,5 +1,6 @@
 //! Constraint expression tree.
 
+use crate::error::ScheduleError;
 use crate::task::IcrsTarget;
 use crate::time::{Period, PeriodSet};
 use siderust::coordinates::centers::Geodetic;
@@ -11,13 +12,14 @@ use siderust::time::MJD;
 /// Implementors should be `Send + Sync` so that constraint trees can be
 /// shared across threads in future parallel scheduling loops.
 pub trait Constraint: Send + Sync + std::fmt::Debug {
-    /// Return the feasible periods in MJD for this constraint.
+    /// Return the feasible periods in MJD for this constraint, or an error if
+    /// required context (location, target, or valid bounds) is missing.
     fn check(
         &self,
         timeline: &Period<MJD>,
         location: Option<&Geodetic<ECEF>>,
         target: Option<&IcrsTarget>,
-    ) -> PeriodSet<MJD>;
+    ) -> Result<PeriodSet<MJD>, ScheduleError>;
 }
 
 /// A logical constraint expression tree.
@@ -57,42 +59,42 @@ impl ConstraintExpr {
         timeline: &Period<MJD>,
         location: Option<&Geodetic<ECEF>>,
         target: Option<&IcrsTarget>,
-    ) -> PeriodSet<MJD> {
+    ) -> Result<PeriodSet<MJD>, ScheduleError> {
         match self {
             ConstraintExpr::Atom(c) => c.check(timeline, location, target),
 
             ConstraintExpr::Union(children) => {
                 let mut out = PeriodSet::new();
                 for child in children {
-                    let set = child.check(timeline, location, target);
+                    let set = child.check(timeline, location, target)?;
                     out = out.union(&set);
                 }
-                out
+                Ok(out)
             }
 
             ConstraintExpr::Intersection(children) => {
                 if children.is_empty() {
-                    return PeriodSet::from_periods(vec![Period::new(
+                    return Ok(PeriodSet::from_periods(vec![Period::new(
                         timeline.start,
                         timeline.end,
-                    )]);
+                    )]));
                 }
 
                 let mut iter = children.iter();
                 let mut out = iter
                     .next()
                     .expect("checked non-empty")
-                    .check(timeline, location, target);
+                    .check(timeline, location, target)?;
 
                 for child in iter {
-                    let set = child.check(timeline, location, target);
+                    let set = child.check(timeline, location, target)?;
                     out = out.intersection(&set);
                     if out.is_empty() {
                         break;
                     }
                 }
 
-                out
+                Ok(out)
             }
         }
     }

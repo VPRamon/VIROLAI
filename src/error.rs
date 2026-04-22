@@ -31,4 +31,13 @@ pub enum ScheduleError {
 
     #[error("constraint violated: {0}")]
     ConstraintViolation(String),
+
+    #[error("constraint requires an observer location")]
+    MissingLocation,
+
+    #[error("constraint requires an observation target")]
+    MissingTarget,
+
+    #[error("invalid constraint bounds: {0}")]
+    InvalidBounds(String),
 }

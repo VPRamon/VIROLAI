@@ -334,7 +334,8 @@ mod tests {
                 max: Degrees::new(0.0),
             }),
         ])
-        .check(&timeline, Some(&telescope.location), None);
+        .check(&timeline, Some(&telescope.location), None)
+        .expect("expected telescope constraints should evaluate");
         assert_eq!(telescope_out, expected_telescope);
 
         // Task carries only its own constraints — telescope constraints are
@@ -348,7 +349,8 @@ mod tests {
             min: Degrees::new(20.0),
             max: Degrees::new(90.0),
         })
-        .check(&timeline, Some(&roque()), Some(&task.target));
+        .check(&timeline, Some(&roque()), Some(&task.target))
+        .expect("expected task constraints should evaluate");
         assert_eq!(task_out, expected_task);
     }
 

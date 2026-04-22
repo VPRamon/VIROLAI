@@ -57,9 +57,9 @@ fn dynamic_feasible(
     telescope: &Telescope,
     candidate_windows: &PeriodSet<MJD>,
     cache: &Mutex<HashMap<(DynamicKey, PeriodSetKey), PeriodSet<MJD>>>,
-) -> PeriodSet<MJD> {
+) -> Result<PeriodSet<MJD>, ScheduleError> {
     if task.hard_constraints.hard_dynamic.is_unconstrained() {
-        return candidate_windows.clone();
+        return Ok(candidate_windows.clone());
     }
 
     let key = (
@@ -67,7 +67,7 @@ fn dynamic_feasible(
         PeriodSetKey::from(candidate_windows),
     );
     if let Some(cached) = cache.lock().unwrap().get(&key) {
-        return cached.clone();
+        return Ok(cached.clone());
     }
 
     let mut out = PeriodSet::new();
@@ -76,12 +76,12 @@ fn dynamic_feasible(
             window,
             Some(&telescope.location),
             Some(&task.target),
-        );
+        )?;
         out = out.union(&dynamic);
     }
 
     cache.lock().unwrap().insert(key, out.clone());
-    out
+    Ok(out)
 }
 
 /// Hashable fingerprint of a `PeriodSet` (treated by start/end value pairs).
@@ -161,13 +161,13 @@ impl Prescheduler {
                 timeline,
                 Some(&telescope.location),
                 Some(&task.target),
-            );
+            )?;
             let candidate = task_static.intersection(&telescope_feasible);
             if candidate.is_empty() {
                 return Ok((*task_id, candidate));
             }
 
-            let feasible = dynamic_feasible(task, telescope, &candidate, &cache);
+            let feasible = dynamic_feasible(task, telescope, &candidate, &cache)?;
             Ok((*task_id, feasible))
         };
 

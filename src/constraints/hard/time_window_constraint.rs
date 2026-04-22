@@ -1,4 +1,5 @@
 use super::super::expr::Constraint;
+use crate::error::ScheduleError;
 use crate::task::IcrsTarget;
 use crate::time::{Period, PeriodSet};
 use siderust::coordinates::centers::Geodetic;
@@ -19,11 +20,11 @@ impl Constraint for TimeConstraint {
         timeline: &Period<MJD>,
         _location: Option<&Geodetic<ECEF>>,
         _target: Option<&IcrsTarget>,
-    ) -> PeriodSet<MJD> {
+    ) -> Result<PeriodSet<MJD>, ScheduleError> {
         if let Some(overlap) = self.window.intersection(timeline) {
-            PeriodSet::from_periods(vec![overlap])
+            Ok(PeriodSet::from_periods(vec![overlap]))
         } else {
-            PeriodSet::new()
+            Ok(PeriodSet::new())
         }
     }
 }

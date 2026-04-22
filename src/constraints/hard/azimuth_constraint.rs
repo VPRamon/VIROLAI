@@ -1,4 +1,5 @@
 use super::super::expr::Constraint;
+use crate::error::ScheduleError;
 use crate::task::IcrsTarget;
 use crate::time::{Period, PeriodSet};
 use qtty::Degrees;
@@ -26,18 +27,9 @@ impl Constraint for AzimuthConstraint {
         timeline: &Period<MJD>,
         location: Option<&Geodetic<ECEF>>,
         target: Option<&IcrsTarget>,
-    ) -> PeriodSet<MJD> {
-        assert!(
-            target.is_some(),
-            "missing target for azimuth constraint evaluation"
-        );
-        assert!(
-            location.is_some(),
-            "missing location for azimuth constraint evaluation"
-        );
-
-        let target = target.unwrap();
-        let site = location.unwrap();
+    ) -> Result<PeriodSet<MJD>, ScheduleError> {
+        let target = target.ok_or(ScheduleError::MissingTarget)?;
+        let site = location.ok_or(ScheduleError::MissingLocation)?;
 
         let window = siderust::time::Interval::new(timeline.start, timeline.end);
 
@@ -53,6 +45,6 @@ impl Constraint for AzimuthConstraint {
 
         let periods = icrs_dir.azimuth_periods(&query);
 
-        PeriodSet::from_periods(periods)
+        Ok(PeriodSet::from_periods(periods))
     }
 }

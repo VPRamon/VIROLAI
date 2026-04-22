@@ -1,4 +1,5 @@
 use super::super::expr::Constraint;
+use crate::error::ScheduleError;
 use crate::task::IcrsTarget;
 use crate::time::{Period, PeriodSet};
 use qtty::Degrees;
@@ -24,18 +25,15 @@ impl Constraint for MoonAltitudeConstraint {
         timeline: &Period<MJD>,
         location: Option<&Geodetic<ECEF>>,
         _target: Option<&IcrsTarget>,
-    ) -> PeriodSet<MJD> {
-        assert!(
-            self.min <= self.max,
-            "invalid moon altitude range: min is greater than max"
-        );
+    ) -> Result<PeriodSet<MJD>, ScheduleError> {
+        if self.min > self.max {
+            return Err(ScheduleError::InvalidBounds(format!(
+                "moon altitude min ({}) > max ({})",
+                self.min, self.max
+            )));
+        }
 
-        assert!(
-            location.is_some(),
-            "missing location for moon-altitude constraint evaluation"
-        );
-
-        let site = location.unwrap();
+        let site = location.ok_or(ScheduleError::MissingLocation)?;
 
         let window = siderust::time::Interval::new(timeline.start, timeline.end);
         let query = AltitudeQuery {
@@ -47,6 +45,6 @@ impl Constraint for MoonAltitudeConstraint {
 
         let periods = Moon.altitude_periods(&query);
 
-        PeriodSet::from_periods(periods)
+        Ok(PeriodSet::from_periods(periods))
     }
 }

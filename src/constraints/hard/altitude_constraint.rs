@@ -1,4 +1,5 @@
 use super::super::expr::Constraint;
+use crate::error::ScheduleError;
 use crate::task::IcrsTarget;
 use crate::time::{Period, PeriodSet};
 use qtty::Degrees;
@@ -27,23 +28,16 @@ impl Constraint for AltitudeConstraint {
         timeline: &Period<MJD>,
         location: Option<&Geodetic<ECEF>>,
         target: Option<&IcrsTarget>,
-    ) -> PeriodSet<MJD> {
-        assert!(
-            self.min <= self.max,
-            "invalid altitude range: min is greater than max"
-        );
+    ) -> Result<PeriodSet<MJD>, ScheduleError> {
+        if self.min > self.max {
+            return Err(ScheduleError::InvalidBounds(format!(
+                "altitude min ({}) > max ({})",
+                self.min, self.max
+            )));
+        }
 
-        assert!(
-            target.is_some(),
-            "missing target for altitude constraint evaluation"
-        );
-        assert!(
-            location.is_some(),
-            "missing location for altitude constraint evaluation"
-        );
-
-        let target = target.unwrap();
-        let site = location.unwrap();
+        let target = target.ok_or(ScheduleError::MissingTarget)?;
+        let site = location.ok_or(ScheduleError::MissingLocation)?;
 
         let window = siderust::time::Interval::new(timeline.start, timeline.end);
 
@@ -59,6 +53,6 @@ impl Constraint for AltitudeConstraint {
 
         let periods = icrs_dir.altitude_periods(&query);
 
-        PeriodSet::from_periods(periods)
+        Ok(PeriodSet::from_periods(periods))
     }
 }

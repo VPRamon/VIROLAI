@@ -1,4 +1,5 @@
 use super::super::expr::Constraint;
+use crate::error::ScheduleError;
 use crate::task::IcrsTarget;
 use crate::time::{Period, PeriodSet};
 use qtty::{Degree, Degrees};
@@ -22,13 +23,8 @@ impl Constraint for MoonSeparationConstraint {
         timeline: &Period<MJD>,
         _location: Option<&Geodetic<ECEF>>,
         target: Option<&IcrsTarget>,
-    ) -> PeriodSet<MJD> {
-        assert!(
-            target.is_some(),
-            "missing target for moon-separation constraint evaluation"
-        );
-
-        let target = target.unwrap();
+    ) -> Result<PeriodSet<MJD>, ScheduleError> {
+        let target = target.ok_or(ScheduleError::MissingTarget)?;
 
         let mid_jd = JulianDate::new((timeline.start.value() + timeline.end.value()) / 2.0);
 
@@ -39,9 +35,12 @@ impl Constraint for MoonSeparationConstraint {
         let sep = target.angular_separation(&moon_dir);
 
         if sep >= self.min_separation {
-            PeriodSet::from_periods(vec![Period::new(timeline.start, timeline.end)])
+            Ok(PeriodSet::from_periods(vec![Period::new(
+                timeline.start,
+                timeline.end,
+            )]))
         } else {
-            PeriodSet::new()
+            Ok(PeriodSet::new())
         }
     }
 }
