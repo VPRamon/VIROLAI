@@ -12,7 +12,7 @@ use crate::error::ScheduleError;
 use crate::scheduling_block::SchedulingBlock;
 use crate::task::Task;
 use crate::telescope::Telescope;
-use crate::time::{MJD, Period, PeriodSet, TaskId};
+use crate::time::{MJD, Period, PeriodSet, SchedulingBlockId, TaskId};
 use rayon::prelude::*;
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -112,7 +112,7 @@ impl Prescheduler {
     /// constraints and any dynamic constraints are evaluated only on those
     /// narrowed windows.
     pub fn run(
-        blocks: &[SchedulingBlock],
+        blocks: &HashMap<SchedulingBlockId, SchedulingBlock>,
         tasks: &HashMap<TaskId, Task>,
         timeline: &Period<MJD>,
         telescope: &Telescope,
@@ -135,7 +135,7 @@ impl Prescheduler {
             telescope_feasible.as_slice().len(),
         );
 
-        let task_ids: Vec<TaskId> = blocks.iter().flat_map(SchedulingBlock::iter).collect();
+        let task_ids: Vec<TaskId> = blocks.values().flat_map(SchedulingBlock::iter).collect();
 
         if telescope_feasible.is_empty() {
             log::warn!("prescheduler: telescope has no feasibility on this horizon");
@@ -203,7 +203,7 @@ impl Prescheduler {
 }
 
 pub fn preschedule(
-    blocks: &[SchedulingBlock],
+    blocks: &HashMap<SchedulingBlockId, SchedulingBlock>,
     tasks: &HashMap<TaskId, Task>,
     timeline: &Period<MJD>,
     telescope: &Telescope,

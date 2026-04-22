@@ -56,7 +56,6 @@ fn run() -> Result<(), String> {
     let telescope = telescope.ok_or_else(|| {
         "missing observing site in input; expected resources[0] or legacy location".to_string()
     })?;
-    let blocks: Vec<_> = blocks.into_values().collect();
     let total_tasks = tasks.len();
 
     let preschedule_start = Instant::now();
@@ -72,7 +71,7 @@ fn run() -> Result<(), String> {
     let est_scheduler = est::EstScheduler::with_kind(cli.est_config, cli.est_fom)
         .map_err(|e| format!("invalid EST configuration: {e}"))?;
     let schedule = est_scheduler
-        .run_scheduler(&tasks, &possible_periods, &horizon)
+        .run_with_problem(&tasks, &possible_periods, &horizon, &blocks)
         .map_err(|e| format!("EST run failed: {e}"))?;
     let est_elapsed = est_start.elapsed();
 

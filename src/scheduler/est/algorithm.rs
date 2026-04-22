@@ -6,8 +6,10 @@ use super::validation;
 use crate::error::ScheduleError;
 use crate::prescheduler::TaskPeriodMap;
 use crate::schedule::Schedule;
+use crate::scheduling_block::SchedulingBlock;
 use crate::task::Task;
-use crate::time::{MJD, Period};
+use crate::time::{JD, MJD, Period, SchedulingBlockId, TaskId, Time};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 type ScoredState<'a> = (f64, super::ScheduleState<'a>);
@@ -15,6 +17,19 @@ type ScoredState<'a> = (f64, super::ScheduleState<'a>);
 enum BeamExpansion<'a> {
     Terminal(super::ScheduleState<'a>),
     Children(Vec<ScoredState<'a>>),
+}
+
+/// Domain context passed into the beam search when a [`crate::schedule::SchedulingProblem`]
+/// is available.  Carrying it here allows the EST inner loop to validate
+/// dependency ordering rather than bypassing domain invariants with a raw
+/// `insert_placement`.
+///
+/// Hard-constraint coverage is intentionally not re-checked here: the
+/// pre-scheduler already guarantees that every window in `possible_periods`
+/// is constraint-feasible, and EST only proposes starts within those windows.
+struct ProblemCtx<'p> {
+    /// Pre-computed per-block task lists used for dependency checks.
+    blocks: &'p HashMap<SchedulingBlockId, SchedulingBlock>,
 }
 
 /// EST scheduler implementation.
@@ -102,7 +117,8 @@ impl EstScheduler {
             filtered_tasks.len()
         );
 
-        let initial_candidates = CandidateQueue::build(&filtered_tasks, possible_periods, horizon);
+        let initial_candidates =
+            CandidateQueue::build(&filtered_tasks, possible_periods, horizon, None);
 
         let initial_state = super::ScheduleState {
             cursor: horizon.start,
@@ -110,7 +126,66 @@ impl EstScheduler {
             candidates: initial_candidates,
         };
 
-        Ok(self.run_search(tasks, initial_state, horizon))
+        Ok(self.run_search(tasks, initial_state, horizon, None))
+    }
+
+    /// Run beam-search EST through the domain model.
+    ///
+    /// Behaves like [`Self::run_scheduler`] but routes every placement through
+    /// [`crate::schedule::SchedulingProblem::place_task`], which enforces
+    /// dependency ordering in addition to the overlap and constraint checks
+    /// already guaranteed by the prescheduler.
+    ///
+    /// Candidates that fail domain validation (e.g. a predecessor task has not
+    /// yet been placed) are silently dropped from that beam branch rather than
+    /// causing a hard error, because the prescheduler cannot pre-filter
+    /// intra-block ordering violations.
+    pub fn run_with_problem(
+        &self,
+        tasks: &[Task],
+        possible_periods: &TaskPeriodMap,
+        horizon: &Period<MJD>,
+        blocks: &HashMap<SchedulingBlockId, SchedulingBlock>,
+    ) -> Result<Schedule, ScheduleError> {
+        log::info!(
+            "est: starting domain-aware scheduler — tasks={}, k_beams={}, branching_factor={}, horizon=[{:.4}, {:.4}]",
+            tasks.len(),
+            self.config.k_beams,
+            self.config.branching_factor,
+            horizon.start.value(),
+            horizon.end.value(),
+        );
+
+        validation::validate_tasks(tasks)?;
+        let filtered_tasks = validation::filter_tasks(tasks, possible_periods);
+
+        log::debug!(
+            "est: {} tasks remain after feasibility filter",
+            filtered_tasks.len()
+        );
+
+        // Build task→block map so candidates carry their block affiliation.
+        let task_block_map: HashMap<TaskId, SchedulingBlockId> = blocks
+            .iter()
+            .flat_map(|(&block_id, block)| block.iter().map(move |task_id| (task_id, block_id)))
+            .collect();
+
+        let ctx = ProblemCtx { blocks };
+
+        let initial_candidates = CandidateQueue::build(
+            &filtered_tasks,
+            possible_periods,
+            horizon,
+            Some(&task_block_map),
+        );
+
+        let initial_state = super::ScheduleState {
+            cursor: horizon.start,
+            schedule: Schedule::new(),
+            candidates: initial_candidates,
+        };
+
+        Ok(self.run_search(tasks, initial_state, horizon, Some(&ctx)))
     }
 
     /// Execute the EST beam-search loop starting from an already-built initial state.
@@ -122,6 +197,7 @@ impl EstScheduler {
         tasks: &[Task],
         initial_state: super::ScheduleState<'a>,
         horizon: &Period<MJD>,
+        ctx: Option<&ProblemCtx<'_>>,
     ) -> Schedule {
         let mut live_beams: Vec<super::ScheduleState> = vec![initial_state];
         let mut terminal_beams: Vec<super::ScheduleState> = Vec::new();
@@ -134,7 +210,7 @@ impl EstScheduler {
             let mut next_scored: Vec<ScoredState<'a>> = Vec::new();
 
             for state in live_beams.drain(..) {
-                match self.expand_beam(tasks, state, horizon, round, b) {
+                match self.expand_beam(tasks, state, horizon, round, b, ctx) {
                     BeamExpansion::Terminal(state) => terminal_beams.push(state),
                     BeamExpansion::Children(children) => next_scored.extend(children),
                 }
@@ -178,6 +254,7 @@ impl EstScheduler {
         horizon: &Period<MJD>,
         round: u32,
         branching_factor: usize,
+        ctx: Option<&ProblemCtx<'_>>,
     ) -> BeamExpansion<'a> {
         // Recompute EST metadata from the beam cursor to the end of the
         // global horizon before deciding what can branch next.
@@ -194,16 +271,28 @@ impl EstScheduler {
             return BeamExpansion::Terminal(state);
         }
 
-        let children = (0..branches)
-            .map(|branch_idx| {
-                self.build_child_state(tasks, &state, horizon, round, branch_idx, branches)
+        let children: Vec<ScoredState<'a>> = (0..branches)
+            .filter_map(|branch_idx| {
+                self.build_child_state(tasks, &state, horizon, round, branch_idx, branches, ctx)
             })
             .collect();
+
+        // All branches may be pruned when domain validation rejects them (e.g.
+        // every schedulable candidate has an unmet predecessor).  In that case
+        // the current state is as far as this beam can go.
+        if children.is_empty() {
+            return BeamExpansion::Terminal(state);
+        }
 
         BeamExpansion::Children(children)
     }
 
     /// Build and score one child beam produced by choosing a single queue branch.
+    ///
+    /// Returns `None` when domain validation rejects the placement (e.g. a
+    /// dependency predecessor has not been scheduled yet).  The caller should
+    /// treat a `None` child as a pruned branch.
+    #[allow(clippy::too_many_arguments)]
     fn build_child_state<'a>(
         &self,
         tasks: &[Task],
@@ -212,7 +301,8 @@ impl EstScheduler {
         round: u32,
         branch_idx: usize,
         branch_count: usize,
-    ) -> ScoredState<'a> {
+        ctx: Option<&ProblemCtx<'_>>,
+    ) -> Option<ScoredState<'a>> {
         let mut child = state.clone();
         // Branch `branch_idx` means "take the branch_idx-th currently
         // schedulable candidate from the EST-ordered queue" and explore the
@@ -232,13 +322,38 @@ impl EstScheduler {
             placement.end.value(),
         );
 
-        child.cursor = placement.end.to::<MJD>();
-        child.schedule.insert_placement(placement);
+        match ctx {
+            Some(pctx) => {
+                // Enforce intra-block dependency ordering.
+                if let Err(err) = check_block_dependencies(
+                    &child.schedule,
+                    task_id,
+                    placement.start,
+                    placement.block_id,
+                    pctx.blocks,
+                ) {
+                    log::debug!(
+                        "est: round={} branch={} task={} rejected by domain validation: {}",
+                        round,
+                        branch_idx,
+                        task_id.0,
+                        err,
+                    );
+                    return None;
+                }
+                child.cursor = placement.end.to::<MJD>();
+                child.schedule.insert_placement(placement);
+            }
+            None => {
+                child.cursor = placement.end.to::<MJD>();
+                child.schedule.insert_placement(placement);
+            }
+        }
 
         // FOM scoring is the pruning signal: higher-scoring child
         // beams are more likely to survive into the next round.
         let score = self.fom.evaluate(&child.schedule, tasks);
-        (score, child)
+        Some((score, child))
     }
 }
 
@@ -249,4 +364,50 @@ pub fn run_scheduler(
     horizon: &Period<MJD>,
 ) -> Result<Schedule, ScheduleError> {
     EstScheduler::default().run_scheduler(tasks, possible_periods, horizon)
+}
+
+/// Check that all predecessor tasks in the same block are already scheduled
+/// and end before `candidate_start`.
+///
+/// Returns `Ok(())` if the placement is dependency-safe, or a
+/// [`ScheduleError`] describing the violation.
+fn check_block_dependencies(
+    schedule: &Schedule,
+    task_id: TaskId,
+    candidate_start: Time<JD>,
+    block_id: Option<SchedulingBlockId>,
+    blocks: &HashMap<SchedulingBlockId, SchedulingBlock>,
+) -> Result<(), ScheduleError> {
+    let Some(block_id) = block_id else {
+        return Ok(());
+    };
+    let Some(block) = blocks.get(&block_id) else {
+        return Ok(());
+    };
+    if !block.contains_task(task_id) {
+        return Ok(());
+    }
+
+    let order = block.topological_order()?;
+    let task_pos = order.iter().position(|&t| t == task_id).unwrap_or(0);
+
+    for &pred_id in order.iter().take(task_pos) {
+        match schedule.get(pred_id) {
+            None => {
+                return Err(ScheduleError::ConstraintViolation(format!(
+                    "task {} predecessor {} not yet scheduled",
+                    task_id.0, pred_id.0,
+                )));
+            }
+            Some(prev) if prev.end > candidate_start => {
+                return Err(ScheduleError::ConstraintViolation(format!(
+                    "task {} predecessor {} ends after candidate start",
+                    task_id.0, pred_id.0,
+                )));
+            }
+            Some(_) => {}
+        }
+    }
+
+    Ok(())
 }

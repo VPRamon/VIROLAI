@@ -51,8 +51,6 @@ pub fn prepare_problem(
     let telescope = telescope.ok_or_else(|| {
         "missing observing site in input; expected resources[0] or legacy location".to_string()
     })?;
-    let blocks: Vec<_> = blocks.into_values().collect();
-
     let possible_periods = preschedule(&blocks, &tasks, &horizon, &telescope)
         .map_err(|e| format!("prescheduling failed: {e}"))?;
 

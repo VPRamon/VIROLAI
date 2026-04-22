@@ -2,7 +2,8 @@ use super::candidate::EstCandidate;
 use super::ordering::sort_candidates;
 use crate::prescheduler::TaskPeriodMap;
 use crate::task::Task;
-use crate::time::{MJD, Period};
+use crate::time::{MJD, Period, SchedulingBlockId, TaskId};
+use std::collections::HashMap;
 
 /// Refreshable EST candidate queue kept in EST sort order.
 #[derive(Debug, Clone)]
@@ -12,10 +13,14 @@ pub(super) struct CandidateQueue<'a> {
 
 impl<'a> CandidateQueue<'a> {
     /// Build the initial candidate queue from validated tasks and feasible windows.
+    ///
+    /// When `task_block_map` is provided, each candidate's `block_id` is
+    /// populated so that the scheduler can enforce dependency ordering.
     pub(super) fn build(
         tasks: &'a [&Task],
         possible_periods: &'a TaskPeriodMap,
         horizon: &Period<MJD>,
+        task_block_map: Option<&HashMap<TaskId, SchedulingBlockId>>,
     ) -> Self {
         let mut candidates = tasks
             .iter()
@@ -23,7 +28,11 @@ impl<'a> CandidateQueue<'a> {
                 let windows = possible_periods
                     .get(&task.id)
                     .expect("EST invariant violated: filtered task missing possible periods");
-                EstCandidate::new(task, windows, horizon)
+                let mut c = EstCandidate::new(task, windows, horizon);
+                if let Some(map) = task_block_map {
+                    c.block_id = map.get(&task.id).copied();
+                }
+                c
             })
             .collect::<Vec<_>>();
 

@@ -232,7 +232,7 @@ fn candidate_queue_refresh_resorts_mixed_candidates_without_panicking() {
 
     let horizon = period(0.0, 5.0);
     let task_refs: Vec<_> = tasks.iter().collect();
-    let mut queue = CandidateQueue::build(&task_refs, &possible, &horizon);
+    let mut queue = CandidateQueue::build(&task_refs, &possible, &horizon, None);
 
     queue.refresh(&period(0.5, 5.0));
 

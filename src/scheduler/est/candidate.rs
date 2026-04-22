@@ -1,6 +1,6 @@
 use crate::schedule::TaskPlacement;
 use crate::task::Task;
-use crate::time::{JD, MJD, Period, PeriodSet, TaskId, Time};
+use crate::time::{JD, MJD, Period, PeriodSet, SchedulingBlockId, TaskId, Time};
 use qtty::Day;
 
 /// Convert a refreshed EST candidate into a concrete scheduled placement.
@@ -20,6 +20,8 @@ pub struct EstCandidate<'a> {
     pub est: Option<Time<MJD>>,
     pub deadline: Option<Time<MJD>>,
     pub flexibility: f64,
+    /// Block this task belongs to, used for dependency-aware placement.
+    pub(super) block_id: Option<SchedulingBlockId>,
 }
 
 impl<'a> EstCandidate<'a> {
@@ -32,6 +34,7 @@ impl<'a> EstCandidate<'a> {
             est: None,
             deadline: None,
             flexibility: 0.0,
+            block_id: None,
         };
         candidate.refresh(horizon);
         candidate
@@ -150,7 +153,7 @@ impl IntoTaskPlacement for EstCandidate<'_> {
             task_id: self.task_id(),
             start: start.to::<JD>(),
             end: end.to::<JD>(),
-            block_id: None,
+            block_id: self.block_id,
         }
     }
 }
