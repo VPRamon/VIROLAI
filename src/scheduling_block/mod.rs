@@ -106,6 +106,53 @@ impl SchedulingBlock {
             .into_par_iter()
     }
 
+    /// Direct predecessor task IDs of `task_id` (tasks that must be
+    /// scheduled before it).
+    ///
+    /// Returns an empty `Vec` if `task_id` is not a node in this block.
+    pub fn predecessors(&self, task_id: TaskId) -> Vec<TaskId> {
+        let Some(&node) = self.node_map.get(&task_id) else {
+            return vec![];
+        };
+        self.graph
+            .neighbors_directed(node, petgraph::Direction::Incoming)
+            .map(|n| self.graph[n])
+            .collect()
+    }
+
+    /// Direct successor task IDs of `task_id` (tasks that must be scheduled
+    /// after it).
+    ///
+    /// Returns an empty `Vec` if `task_id` is not a node in this block.
+    pub fn successors(&self, task_id: TaskId) -> Vec<TaskId> {
+        let Some(&node) = self.node_map.get(&task_id) else {
+            return vec![];
+        };
+        self.graph
+            .neighbors_directed(node, petgraph::Direction::Outgoing)
+            .map(|n| self.graph[n])
+            .collect()
+    }
+
+    /// All transitive descendant task IDs (BFS over successors).
+    ///
+    /// Returns an empty set if `task_id` is not a node in this block.
+    pub fn all_descendants(&self, task_id: TaskId) -> std::collections::HashSet<TaskId> {
+        let mut visited = std::collections::HashSet::new();
+        let mut queue = std::collections::VecDeque::new();
+        for s in self.successors(task_id) {
+            queue.push_back(s);
+        }
+        while let Some(current) = queue.pop_front() {
+            if visited.insert(current) {
+                for s in self.successors(current) {
+                    queue.push_back(s);
+                }
+            }
+        }
+        visited
+    }
+
     /// Return task IDs in topological order (predecessors first).
     ///
     /// Returns `Err(DependencyCycle)` if the graph contains a cycle.
@@ -203,5 +250,62 @@ mod tests {
         let ids: HashSet<_> = (&block).into_par_iter().collect();
         let expected: HashSet<_> = [TaskId(10), TaskId(20), TaskId(30)].into_iter().collect();
         assert_eq!(ids, expected);
+    }
+
+    /// Build a chain: 10 → 20 → 30
+    fn chain_block() -> SchedulingBlock {
+        let mut block = SchedulingBlock::new(SchedulingBlockId(2));
+        block
+            .add_dependency(TaskId(10), TaskId(20), Dependency::DependsOn)
+            .unwrap();
+        block
+            .add_dependency(TaskId(20), TaskId(30), Dependency::DependsOn)
+            .unwrap();
+        block
+    }
+
+    #[test]
+    fn predecessors_returns_direct_predecessors() {
+        let block = chain_block();
+        let preds_20: HashSet<_> = block.predecessors(TaskId(20)).into_iter().collect();
+        assert_eq!(preds_20, HashSet::from([TaskId(10)]));
+
+        let preds_10: Vec<_> = block.predecessors(TaskId(10));
+        assert!(preds_10.is_empty());
+    }
+
+    #[test]
+    fn successors_returns_direct_successors() {
+        let block = chain_block();
+        let succs_20: HashSet<_> = block.successors(TaskId(20)).into_iter().collect();
+        assert_eq!(succs_20, HashSet::from([TaskId(30)]));
+
+        let succs_30: Vec<_> = block.successors(TaskId(30));
+        assert!(succs_30.is_empty());
+    }
+
+    #[test]
+    fn all_descendants_is_transitive() {
+        let block = chain_block();
+        let desc_10 = block.all_descendants(TaskId(10));
+        assert_eq!(desc_10, HashSet::from([TaskId(20), TaskId(30)]));
+
+        let desc_20 = block.all_descendants(TaskId(20));
+        assert_eq!(desc_20, HashSet::from([TaskId(30)]));
+
+        let desc_30 = block.all_descendants(TaskId(30));
+        assert!(desc_30.is_empty());
+    }
+
+    #[test]
+    fn predecessors_unknown_task_returns_empty() {
+        let block = chain_block();
+        assert!(block.predecessors(TaskId(999)).is_empty());
+    }
+
+    #[test]
+    fn all_descendants_unknown_task_returns_empty() {
+        let block = chain_block();
+        assert!(block.all_descendants(TaskId(999)).is_empty());
     }
 }
