@@ -9,10 +9,10 @@
 //! target, so dynamic results are memoized on a `(signature, target)` key.
 
 use crate::error::ScheduleError;
-use crate::scheduling_block::SchedulingBlock;
+use crate::schedule::SchedulingProblem;
 use crate::task::Task;
 use crate::telescope::Telescope;
-use crate::time::{MJD, Period, PeriodSet, SchedulingBlockId, TaskId};
+use crate::time::{MJD, Period, PeriodSet, TaskId};
 use rayon::prelude::*;
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -112,15 +112,14 @@ impl Prescheduler {
     /// constraints and any dynamic constraints are evaluated only on those
     /// narrowed windows.
     pub fn run(
-        blocks: &HashMap<SchedulingBlockId, SchedulingBlock>,
-        tasks: &HashMap<TaskId, Task>,
+        problem: &SchedulingProblem,
         timeline: &Period<MJD>,
         telescope: &Telescope,
     ) -> Result<TaskPeriodMap, ScheduleError> {
         log::info!(
             "prescheduler: starting — blocks={}, tasks={}, timeline=[{:.4}, {:.4}]",
-            blocks.len(),
-            tasks.len(),
+            problem.block_count(),
+            problem.task_count(),
             timeline.start.value(),
             timeline.end.value(),
         );
@@ -135,7 +134,7 @@ impl Prescheduler {
             telescope_feasible.as_slice().len(),
         );
 
-        let task_ids: Vec<TaskId> = blocks.values().flat_map(SchedulingBlock::iter).collect();
+        let task_ids: Vec<TaskId> = problem.iter_tasks().map(|task| task.id).collect();
 
         if telescope_feasible.is_empty() {
             log::warn!("prescheduler: telescope has no feasibility on this horizon");
@@ -156,7 +155,7 @@ impl Prescheduler {
         );
 
         let eval = |task_id: &TaskId| -> Result<(TaskId, PeriodSet<MJD>), ScheduleError> {
-            let task = tasks.get(task_id).ok_or(ScheduleError::TaskNotFound)?;
+            let task = problem.task(*task_id).ok_or(ScheduleError::TaskNotFound)?;
             let task_static = task.hard_constraints.hard_static.check(
                 timeline,
                 Some(&telescope.location),
@@ -203,10 +202,9 @@ impl Prescheduler {
 }
 
 pub fn preschedule(
-    blocks: &HashMap<SchedulingBlockId, SchedulingBlock>,
-    tasks: &HashMap<TaskId, Task>,
+    problem: &SchedulingProblem,
     timeline: &Period<MJD>,
     telescope: &Telescope,
 ) -> Result<TaskPeriodMap, ScheduleError> {
-    Prescheduler::run(blocks, tasks, timeline, telescope)
+    Prescheduler::run(problem, timeline, telescope)
 }

@@ -1,52 +1,101 @@
-use super::conflict::compute_min_positive_priority;
-use super::rng::Xorshift64;
+use super::conflict::{compute_conflict_cost, compute_min_positive_priority};
+use super::rng::CruRng;
 use super::selection::choose_candidate;
-use crate::schedule::Schedule;
-use crate::time::{MJD, Period, PeriodSet, Time};
+use crate::constraints::ConstraintExpr;
+use crate::constraints::SoftConstraintExpr;
+use crate::constraints::soft::PrioritySoftConstraint;
+use crate::schedule::{Schedule, SchedulingProblem, TaskPlacement};
+use crate::scheduler::hap::Configuration;
+use crate::scheduling_block::SchedulingBlock;
+use crate::task::Task;
+use crate::time::{MJD, Period, PeriodSet, SchedulingBlockId, TaskId, Time};
+use qtty::{Degrees, Seconds};
+use siderust::coordinates::frames::ICRS;
+use siderust::coordinates::spherical::Direction;
+use std::collections::HashMap;
 
-#[test]
-fn xorshift64_is_deterministic() {
-    let mut r1 = Xorshift64::new(42);
-    let mut r2 = Xorshift64::new(42);
-    for _ in 0..200 {
-        assert_eq!(r1.next(), r2.next());
+fn make_task(id: u64, priority: f64) -> Task {
+    Task::new(
+        TaskId(id),
+        format!("task-{id}"),
+        Direction::<ICRS>::new_raw(Degrees::new(-16.716), Degrees::new(101.287)),
+        Seconds::new(600.0),
+        ConstraintExpr::Intersection(vec![]),
+        Some(SoftConstraintExpr::atom(PrioritySoftConstraint::new(
+            priority,
+        ))),
+    )
+    .expect("task construction must succeed")
+}
+
+fn make_block(id: u64, task_specs: &[(u64, f64)]) -> SchedulingBlock {
+    SchedulingBlock::from_tasks(
+        SchedulingBlockId(id),
+        task_specs
+            .iter()
+            .map(|(task_id, priority)| make_task(*task_id, *priority))
+            .collect(),
+    )
+    .unwrap()
+}
+
+fn make_problem(blocks: Vec<SchedulingBlock>) -> SchedulingProblem {
+    SchedulingProblem::from_blocks(blocks).unwrap()
+}
+
+fn placement(task_id: u64, start: f64, end: f64) -> TaskPlacement {
+    TaskPlacement {
+        task_id: TaskId(task_id),
+        start: Time::<MJD>::new(start),
+        end: Time::<MJD>::new(end),
     }
 }
 
 #[test]
-fn xorshift64_seed_zero_avoids_degenerate_state() {
-    let mut r = Xorshift64::new(0);
-    // Must produce non-zero values (zero seed is replaced with 1)
-    assert_ne!(r.next(), 0);
+fn cru_rng_is_deterministic_for_same_seed() {
+    let mut r1 = CruRng::new(42);
+    let mut r2 = CruRng::new(42);
+    for _ in 0..200 {
+        assert_eq!(r1.next_u64(), r2.next_u64());
+    }
 }
 
 #[test]
-fn xorshift64_different_seeds_differ() {
-    let mut r1 = Xorshift64::new(1);
-    let mut r2 = Xorshift64::new(2);
+fn cru_rng_seed_zero_is_deterministic() {
+    let mut r1 = CruRng::new(0);
+    let mut r2 = CruRng::new(0);
+    for _ in 0..20 {
+        assert_eq!(r1.next_u64(), r2.next_u64());
+    }
+}
+
+#[test]
+fn cru_rng_different_seeds_differ() {
+    let mut r1 = CruRng::new(1);
+    let mut r2 = CruRng::new(2);
     // It would be astronomically unlikely for 10 consecutive outputs to match
-    let seq1: Vec<u64> = (0..10).map(|_| r1.next()).collect();
-    let seq2: Vec<u64> = (0..10).map(|_| r2.next()).collect();
+    let seq1: Vec<u64> = (0..10).map(|_| r1.next_u64()).collect();
+    let seq2: Vec<u64> = (0..10).map(|_| r2.next_u64()).collect();
     assert_ne!(seq1, seq2);
 }
 
 #[test]
 fn choose_candidate_picks_zero_cost_first() {
     let costs = vec![2.0, 0.0, 1.0];
-    let mut rng = Xorshift64::new(1);
+    let mut rng = CruRng::new(1);
     assert_eq!(choose_candidate(&costs, 3, &mut rng), 1);
 }
 
 #[test]
 fn choose_candidate_returns_zero_for_empty() {
-    let mut rng = Xorshift64::new(1);
+    let mut rng = CruRng::new(1);
     assert_eq!(choose_candidate(&[], 3, &mut rng), 0);
 }
 
 #[test]
 fn choose_candidate_stochastic_stays_within_range() {
     let costs = vec![3.0, 1.0, 2.0, 4.0, 5.0];
-    let mut rng = Xorshift64::new(99);
+    let mut rng = CruRng::new(99);
     // With stochastic_range=2 we should only ever pick index of 1.0 or 2.0
     for _ in 0..50 {
         let idx = choose_candidate(&costs, 2, &mut rng);
@@ -57,7 +106,80 @@ fn choose_candidate_stochastic_stays_within_range() {
 
 #[test]
 fn compute_min_positive_priority_fallback() {
-    assert_eq!(compute_min_positive_priority(&[]), 1.0);
+    let problem = SchedulingProblem::new();
+
+    assert_eq!(
+        compute_min_positive_priority(&problem, Time::<MJD>::new(60000.0)),
+        1.0
+    );
+}
+
+#[test]
+fn compute_conflict_cost_penalizes_complete_conflicting_blocks() {
+    let horizon_start = Time::<MJD>::new(60000.0);
+    let problem = make_problem(vec![make_block(1, &[(1, 2.0)]), make_block(2, &[(2, 3.0)])]);
+    let possible_periods = HashMap::from([(
+        TaskId(1),
+        PeriodSet::from_periods(vec![Period::new(
+            Time::<MJD>::new(60000.0),
+            Time::<MJD>::new(60001.0),
+        )]),
+    )]);
+    let min_positive_priority = compute_min_positive_priority(&problem, horizon_start);
+
+    let mut schedule = Schedule::new();
+    schedule.insert_placement(placement(2, 60000.0, 60000.5));
+
+    let cost = compute_conflict_cost(
+        Time::<MJD>::new(60000.25),
+        problem.task(TaskId(1)).unwrap(),
+        &schedule,
+        &problem,
+        problem.block(SchedulingBlockId(1)).unwrap(),
+        &possible_periods,
+        horizon_start,
+        min_positive_priority,
+        &Configuration::default(),
+    );
+
+    assert!(
+        (cost - 5.0).abs() < 1e-10,
+        "unexpected conflict cost {cost}"
+    );
+}
+
+#[test]
+fn compute_conflict_cost_ignores_incomplete_conflicting_blocks() {
+    let horizon_start = Time::<MJD>::new(60000.0);
+    let problem = make_problem(vec![
+        make_block(1, &[(1, 2.0)]),
+        make_block(2, &[(2, 3.0), (3, 4.0)]),
+    ]);
+    let possible_periods = HashMap::from([(
+        TaskId(1),
+        PeriodSet::from_periods(vec![Period::new(
+            Time::<MJD>::new(60000.0),
+            Time::<MJD>::new(60001.0),
+        )]),
+    )]);
+    let min_positive_priority = compute_min_positive_priority(&problem, horizon_start);
+
+    let mut schedule = Schedule::new();
+    schedule.insert_placement(placement(2, 60000.0, 60000.5));
+
+    let cost = compute_conflict_cost(
+        Time::<MJD>::new(60000.25),
+        problem.task(TaskId(1)).unwrap(),
+        &schedule,
+        &problem,
+        problem.block(SchedulingBlockId(1)).unwrap(),
+        &possible_periods,
+        horizon_start,
+        min_positive_priority,
+        &Configuration::default(),
+    );
+
+    assert_eq!(cost, 0.0);
 }
 
 #[test]

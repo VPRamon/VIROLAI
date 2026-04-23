@@ -191,8 +191,7 @@ impl<'de> Deserialize<'de> for SchedulingProblem {
             }
         };
 
-        let mut problem = SchedulingProblem::new();
-        problem.telescope = telescope;
+        let mut blocks = Vec::with_capacity(block_reprs.len());
         let mut min_start = f64::INFINITY;
         let mut max_end = f64::NEG_INFINITY;
 
@@ -201,22 +200,11 @@ impl<'de> Deserialize<'de> for SchedulingProblem {
             let mut block = SchedulingBlock::new(SchedulingBlockId(block_id));
 
             for task_repr in block_repr.tasks {
-                let task_id = TaskId(task_repr.id);
-
                 // Capture time_window before task_repr is consumed.
                 let time_window = task_repr.hard_constraints.time_window;
 
                 let task = task_from_repr(task_repr).map_err(serde::de::Error::custom)?;
-
-                if problem.tasks.contains_key(&task_id) {
-                    return Err(serde::de::Error::custom(format!(
-                        "duplicate task id {} in block {}",
-                        task_id.0, block_id
-                    )));
-                }
-
-                problem.add_task(task);
-                block.add_task(task_id);
+                block.push_task(task).map_err(serde::de::Error::custom)?;
 
                 if let Some(tw) = time_window {
                     min_start = min_start.min(tw.start_mjd_utc);
@@ -242,8 +230,12 @@ impl<'de> Deserialize<'de> for SchedulingProblem {
                     })?;
             }
 
-            problem.add_block(block);
+            blocks.push(block);
         }
+
+        let mut problem =
+            SchedulingProblem::from_blocks(blocks).map_err(serde::de::Error::custom)?;
+        problem.telescope = telescope;
 
         if let Some(horizon) = explicit_horizon {
             problem.detected_horizon = Some(horizon);
@@ -340,7 +332,7 @@ mod tests {
 
         // Task carries only its own constraints — telescope constraints are
         // not merged in at deserialization time.
-        let task = problem.tasks.get(&TaskId(10)).expect("task parsed");
+        let task = problem.task(TaskId(10)).expect("task parsed");
         let task_out = task
             .hard_constraints
             .check_hard(&timeline, Some(&task.target), Some(&roque()))

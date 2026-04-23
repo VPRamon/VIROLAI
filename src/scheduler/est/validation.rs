@@ -36,10 +36,18 @@ pub fn validate_scheduler(scheduler: &EstScheduler) -> Result<(), ScheduleError>
 /// 1. reject non-positive durations,
 /// 2. reject duplicate task identifiers.
 pub fn validate_tasks(tasks: &[Task]) -> Result<(), ScheduleError> {
+    validate_task_refs(tasks.iter())
+}
+
+pub fn validate_task_refs<'a, I>(tasks: I) -> Result<(), ScheduleError>
+where
+    I: IntoIterator<Item = &'a Task>,
+{
+    let tasks: Vec<&Task> = tasks.into_iter().collect();
     log::debug!("est: validating {} task(s)", tasks.len());
     let mut seen_ids = HashSet::with_capacity(tasks.len());
 
-    for task in tasks {
+    for task in &tasks {
         if task.duration.value() <= 0.0 {
             log::warn!("est: task {} has non-positive duration", task.id.0);
             return Err(ScheduleError::InvalidDuration);
@@ -60,12 +68,14 @@ pub fn validate_tasks(tasks: &[Task]) -> Result<(), ScheduleError> {
     Ok(())
 }
 
-#[inline]
-/// Drop tasks that have no feasible windows in the pre-scheduler output.
-pub fn filter_tasks<'a>(tasks: &'a [Task], possible_periods: &TaskPeriodMap) -> Vec<&'a Task> {
+pub fn filter_task_refs<'a, I>(tasks: I, possible_periods: &TaskPeriodMap) -> Vec<&'a Task>
+where
+    I: IntoIterator<Item = &'a Task>,
+{
+    let tasks: Vec<&Task> = tasks.into_iter().collect();
     let before = tasks.len();
     let filtered: Vec<&Task> = tasks
-        .iter()
+        .into_iter()
         .filter(|task| {
             // EST only builds candidates for tasks with at least one feasible
             // prescheduled period.

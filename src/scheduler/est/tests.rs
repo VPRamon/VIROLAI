@@ -373,7 +373,7 @@ fn candidate_queue_refresh_resorts_mixed_candidates_without_panicking() {
 
     let horizon = period(0.0, 5.0);
     let task_refs: Vec<_> = tasks.iter().collect();
-    let mut queue = CandidateQueue::build(&task_refs, &possible, &horizon, None, 0);
+    let mut queue = CandidateQueue::build(&task_refs, &possible, &horizon, 0);
 
     queue.refresh(&period(0.5, 5.0), 0);
 
@@ -394,7 +394,7 @@ fn run_scheduler_schedules_feasible_and_marks_unplanned() {
     possible.insert(TaskId(2), windows(&[(10.0, 12.0)]));
 
     let horizon = period(0.0, 5.0);
-    let schedule = run_scheduler(&tasks, &possible, &horizon).expect("run should pass");
+    let schedule = run_scheduler(tasks, &possible, &horizon).expect("run should pass");
 
     assert_eq!(schedule.len(), 1);
     let placement = schedule.get(TaskId(1)).expect("task 1 should be placed");
@@ -412,7 +412,7 @@ fn run_scheduler_filters_tasks_missing_possible_periods() {
     possible.insert(TaskId(1), windows(&[(0.0, 2.0)]));
 
     let horizon = period(0.0, 5.0);
-    let schedule = run_scheduler(&tasks, &possible, &horizon).expect("run should pass");
+    let schedule = run_scheduler(tasks, &possible, &horizon).expect("run should pass");
 
     assert!(schedule.contains(TaskId(1)));
     assert!(!schedule.contains(TaskId(2)));
@@ -429,7 +429,7 @@ fn run_scheduler_filters_tasks_with_empty_possible_periods() {
     possible.insert(TaskId(2), crate::time::PeriodSet::new());
 
     let horizon = period(0.0, 5.0);
-    let schedule = run_scheduler(&tasks, &possible, &horizon).expect("run should pass");
+    let schedule = run_scheduler(tasks, &possible, &horizon).expect("run should pass");
 
     assert!(schedule.contains(TaskId(1)));
     assert!(!schedule.contains(TaskId(2)));
@@ -446,7 +446,7 @@ fn run_scheduler_uses_earliest_start_order() {
     possible.insert(TaskId(2), windows(&[(0.0, 1.0)]));
 
     let horizon = period(0.0, 4.0);
-    let schedule = run_scheduler(&tasks, &possible, &horizon).expect("run should pass");
+    let schedule = run_scheduler(tasks, &possible, &horizon).expect("run should pass");
 
     assert_eq!(schedule.len(), 2);
     let task_1 = schedule.get(TaskId(1)).expect("task 1 should be placed");
@@ -466,7 +466,7 @@ fn run_scheduler_recomputes_est_from_remaining_horizon() {
     possible.insert(TaskId(2), windows(&[(0.5, 3.0)]));
 
     let horizon = period(0.0, 4.0);
-    let schedule = run_scheduler(&tasks, &possible, &horizon).expect("run should pass");
+    let schedule = run_scheduler(tasks, &possible, &horizon).expect("run should pass");
 
     assert_eq!(schedule.len(), 2);
     let task_1 = schedule.get(TaskId(1)).expect("task 1 should be placed");
@@ -547,7 +547,7 @@ fn run_scheduler_rejects_duplicate_task_ids() {
     let possible = TaskPeriodMap::new();
     let horizon = period(0.0, 5.0);
 
-    let error = run_scheduler(&tasks, &possible, &horizon).expect_err("run should fail");
+    let error = run_scheduler(tasks, &possible, &horizon).expect_err("run should fail");
 
     assert!(
         matches!(error, ScheduleError::InvalidTask(message) if message.contains("duplicate task id 1"))
@@ -563,7 +563,7 @@ fn run_scheduler_rejects_zero_duration_tasks() {
     let possible = TaskPeriodMap::new();
     let horizon = period(0.0, 5.0);
 
-    let error = run_scheduler(&tasks, &possible, &horizon).expect_err("run should fail");
+    let error = run_scheduler(tasks, &possible, &horizon).expect_err("run should fail");
 
     assert!(matches!(error, ScheduleError::InvalidDuration));
 }
@@ -585,7 +585,7 @@ fn beam_search_k1_b1_matches_greedy() {
 
     let horizon = period(0.0, 4.0);
 
-    let greedy = run_scheduler(&tasks_a, &possible, &horizon).expect("greedy run should pass");
+    let greedy = run_scheduler(tasks_a, &possible, &horizon).expect("greedy run should pass");
 
     let config = Configuration {
         k_beams: 1,
@@ -594,7 +594,7 @@ fn beam_search_k1_b1_matches_greedy() {
     };
     let beam = EstScheduler::new(config)
         .expect("config should be valid")
-        .run_scheduler(&tasks_b, &possible, &horizon)
+        .run_scheduler(tasks_b, &possible, &horizon)
         .expect("beam run should pass");
 
     assert_eq!(greedy.len(), beam.len());
@@ -625,7 +625,7 @@ fn beam_search_k2_b2_places_both_tasks_in_disjoint_windows() {
 
     let horizon = period(0.0, 5.0);
 
-    let greedy = run_scheduler(&tasks_a, &possible, &horizon).expect("greedy should pass");
+    let greedy = run_scheduler(tasks_a, &possible, &horizon).expect("greedy should pass");
 
     let config = Configuration {
         k_beams: 2,
@@ -634,7 +634,7 @@ fn beam_search_k2_b2_places_both_tasks_in_disjoint_windows() {
     };
     let beam = EstScheduler::new(config)
         .expect("config should be valid")
-        .run_scheduler(&tasks_b, &possible, &horizon)
+        .run_scheduler(tasks_b, &possible, &horizon)
         .expect("beam run should pass");
 
     // Beam search must place at least as many tasks as greedy.
@@ -663,7 +663,7 @@ fn beam_search_wide_branching_does_not_panic_with_mixed_candidate_states() {
     };
     let schedule = EstScheduler::new(config)
         .expect("config should be valid")
-        .run_scheduler(&tasks, &possible, &horizon)
+        .run_scheduler(tasks, &possible, &horizon)
         .expect("wide-branch EST run should pass");
 
     assert!(!schedule.is_empty());
@@ -692,7 +692,7 @@ fn beam_search_soft_constraint_fom_prefers_high_priority() {
     };
     let schedule = EstScheduler::with_fom(config, Arc::new(SoftConstraintFom))
         .expect("config should be valid")
-        .run_scheduler(&tasks, &possible, &horizon)
+        .run_scheduler(tasks, &possible, &horizon)
         .expect("run should pass");
 
     // Only one task fits; with SoftConstraintFom it should be the high-priority one.
@@ -702,7 +702,11 @@ fn beam_search_soft_constraint_fom_prefers_high_priority() {
 
 #[test]
 fn endangered_threshold_changes_scheduler_choice_when_earlier_task_blocks_later_task() {
-    let tasks = vec![
+    let tasks_without_protection = vec![
+        task_with_priority(1, 1.0, 1.0),
+        task_with_priority(2, 1.0, 1.0),
+    ];
+    let tasks_with_protection = vec![
         task_with_priority(1, 1.0, 1.0),
         task_with_priority(2, 1.0, 1.0),
     ];
@@ -717,7 +721,7 @@ fn endangered_threshold_changes_scheduler_choice_when_earlier_task_blocks_later_
         ..Configuration::default()
     })
     .expect("config should be valid")
-    .run_scheduler(&tasks, &possible, &horizon)
+    .run_scheduler(tasks_without_protection, &possible, &horizon)
     .expect("run should pass");
 
     let with_protection = EstScheduler::new(Configuration {
@@ -725,7 +729,7 @@ fn endangered_threshold_changes_scheduler_choice_when_earlier_task_blocks_later_
         ..Configuration::default()
     })
     .expect("config should be valid")
-    .run_scheduler(&tasks, &possible, &horizon)
+    .run_scheduler(tasks_with_protection, &possible, &horizon)
     .expect("run should pass");
 
     assert_eq!(without_protection.len(), 1);
@@ -753,7 +757,7 @@ fn schedulable_count_cache_correct_after_build() {
 
     let horizon = period(0.0, 5.0);
     let task_refs: Vec<_> = tasks.iter().collect();
-    let queue = CandidateQueue::build(&task_refs, &possible, &horizon, None, 0);
+    let queue = CandidateQueue::build(&task_refs, &possible, &horizon, 0);
 
     assert_eq!(queue.count_schedulable(), 2);
 }
@@ -772,7 +776,7 @@ fn impossible_candidates_in_suffix_after_sort() {
 
     let horizon = period(0.0, 5.0);
     let task_refs: Vec<_> = tasks.iter().collect();
-    let mut queue = CandidateQueue::build(&task_refs, &possible, &horizon, None, 0);
+    let mut queue = CandidateQueue::build(&task_refs, &possible, &horizon, 0);
 
     assert_eq!(queue.count_schedulable(), 2);
 

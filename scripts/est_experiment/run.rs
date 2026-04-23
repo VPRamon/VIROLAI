@@ -32,8 +32,8 @@ pub fn execute_run(
 ) -> Result<RunOutcome, String> {
     let scheduler = run.build_scheduler()?;
     let schedule = scheduler
-        .run_scheduler(
-            &prepared.tasks,
+        .run(
+            &prepared.problem,
             &prepared.possible_periods,
             &prepared.horizon,
         )
@@ -104,7 +104,7 @@ fn percentile(values: &[f64], quantile: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use scheduler::time::{JD, MJD, TaskId, Time};
+    use scheduler::time::{MJD, TaskId, Time};
     use scheduler::{Schedule, TaskPlacement};
 
     fn schedule_with_slots(slots: &[(u64, f64, f64)]) -> Schedule {
@@ -112,9 +112,8 @@ mod tests {
         for &(task_id, start, end) in slots {
             let placement = TaskPlacement {
                 task_id: TaskId(task_id),
-                start: Time::<MJD>::new(start).to::<JD>(),
-                end: Time::<MJD>::new(end).to::<JD>(),
-                block_id: None,
+                start: Time::<MJD>::new(start),
+                end: Time::<MJD>::new(end),
             };
             schedule.insert_placement(placement);
         }

@@ -1,17 +1,19 @@
-//! Proposal model and fitness functions for the HAP scheduler.
+//! Legacy proposal compatibility types for the HAP scheduler.
 //!
-//! A [`Proposal`] wraps one [`SchedulingBlock`] and carries derived metadata
-//! used by the outer controller and CRU repair engine.
+//! The HAP implementation now operates directly on
+//! [`SchedulingBlock`](crate::scheduling_block::SchedulingBlock) values.
+//! This module remains public for compatibility with existing callers that
+//! still build or inspect a proposal wrapper.
 
 use crate::prescheduler::TaskPeriodMap;
-use crate::schedule::Schedule;
+use crate::schedule::{Schedule, SchedulingProblem};
 use crate::scheduling_block::SchedulingBlock;
-use crate::task::Task;
 use crate::time::{MJD, SchedulingBlockId, TaskId, Time};
-use std::collections::HashMap;
 
-/// A proposal wraps one [`SchedulingBlock`] and pre-computes scheduling
-/// metadata used by the HAP outer loop and CRU workers.
+/// Legacy wrapper around one [`SchedulingBlock`].
+///
+/// HAP no longer uses this type internally, but it remains available for
+/// external callers that depend on the precomputed proposal metadata.
 #[derive(Debug, Clone)]
 pub struct Proposal {
     /// The scheduling block this proposal was derived from.
@@ -31,7 +33,7 @@ impl Proposal {
     /// Derive a proposal from a scheduling block.
     pub fn from_block(
         block: &SchedulingBlock,
-        tasks: &HashMap<TaskId, Task>,
+        problem: &SchedulingProblem,
         possible_periods: &TaskPeriodMap,
         horizon_start: Time<MJD>,
     ) -> Self {
@@ -42,8 +44,8 @@ impl Proposal {
         let priority: f64 = task_ids
             .iter()
             .map(|id| {
-                tasks
-                    .get(id)
+                problem
+                    .task(*id)
                     .and_then(|t| {
                         t.soft_constraints
                             .as_ref()
@@ -131,7 +133,6 @@ mod tests {
             task_id,
             start: Time::<MJD>::new(start),
             end: Time::<MJD>::new(end),
-            block_id: None,
         }
     }
 

@@ -1,6 +1,5 @@
 use scheduler::prescheduler::{TaskPeriodMap, preschedule};
 use scheduler::schedule::SchedulingProblem;
-use scheduler::scheduling_block::task::Task;
 use scheduler::time::{MJD, Period, TaskId, Time};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -16,7 +15,7 @@ use super::config::HorizonOverride;
 pub struct PreparedProblem {
     /// Original JSON, preserved for embedding in schedule output files.
     pub raw_json: Value,
-    pub tasks: Vec<Task>,
+    pub problem: SchedulingProblem,
     pub possible_periods: TaskPeriodMap,
     pub horizon: Period<MJD>,
     pub priority_by_task: HashMap<TaskId, f64>,
@@ -34,32 +33,22 @@ pub fn prepare_problem(
     let problem: SchedulingProblem = serde_json::from_str(&text)
         .map_err(|e| format!("failed to parse {}: {e}", input_path.display()))?;
 
-    if problem.tasks.is_empty() {
+    if problem.task_count() == 0 {
         return Err("input JSON contains no tasks".to_string());
     }
 
     let priority_by_task = extract_task_priorities(&raw_json);
 
-    let SchedulingProblem {
-        tasks,
-        blocks,
-        detected_horizon,
-        telescope,
-    } = problem;
-
-    let horizon = build_horizon(detected_horizon, horizon_override)?;
-    let telescope = telescope.ok_or_else(|| {
+    let horizon = build_horizon(problem.detected_horizon, horizon_override)?;
+    let telescope = problem.telescope.as_ref().ok_or_else(|| {
         "missing observing site in input; expected resources[0] or legacy location".to_string()
     })?;
-    let possible_periods = preschedule(&blocks, &tasks, &horizon, &telescope)
+    let possible_periods = preschedule(&problem, &horizon, telescope)
         .map_err(|e| format!("prescheduling failed: {e}"))?;
-
-    let mut tasks: Vec<_> = tasks.into_values().collect();
-    tasks.sort_by_key(|task| task.id.0);
 
     Ok(PreparedProblem {
         raw_json,
-        tasks,
+        problem,
         possible_periods,
         horizon,
         priority_by_task,

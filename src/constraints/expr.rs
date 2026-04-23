@@ -6,12 +6,13 @@ use crate::time::{Period, PeriodSet};
 use siderust::coordinates::centers::Geodetic;
 use siderust::coordinates::frames::ECEF;
 use siderust::time::MJD;
+use std::any::Any;
 
 /// An atomic, composable scheduling constraint.
 ///
 /// Implementors should be `Send + Sync` so that constraint trees can be
 /// shared across threads in future parallel scheduling loops.
-pub trait Constraint: Send + Sync + std::fmt::Debug {
+pub trait Constraint: Send + Sync + std::fmt::Debug + Any {
     /// Return the feasible periods in MJD for this constraint, or an error if
     /// required context (location, target, or valid bounds) is missing.
     fn check(
@@ -20,6 +21,12 @@ pub trait Constraint: Send + Sync + std::fmt::Debug {
         location: Option<&Geodetic<ECEF>>,
         target: Option<&IcrsTarget>,
     ) -> Result<PeriodSet<MJD>, ScheduleError>;
+}
+
+impl dyn Constraint {
+    pub fn downcast_ref<T: Constraint + 'static>(&self) -> Option<&T> {
+        (self as &dyn Any).downcast_ref::<T>()
+    }
 }
 
 /// A logical constraint expression tree.

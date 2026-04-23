@@ -4,6 +4,7 @@ use crate::task::IcrsTarget;
 use siderust::coordinates::centers::Geodetic;
 use siderust::coordinates::frames::ECEF;
 use siderust::time::{MJD, Time};
+use std::any::Any;
 
 /// A soft scoring constraint that produces a numeric score.
 ///
@@ -11,7 +12,7 @@ use siderust::time::{MJD, Time};
 /// range [0.0, 1.0], where higher values indicate better feasibility.
 /// Implementors should be `Send + Sync` so that constraint trees can be
 /// shared across threads.
-pub trait SoftConstraint: Send + Sync + std::fmt::Debug {
+pub trait SoftConstraint: Send + Sync + std::fmt::Debug + Any {
     /// Return a score for the given context.
     fn score(
         &self,
@@ -19,6 +20,12 @@ pub trait SoftConstraint: Send + Sync + std::fmt::Debug {
         location: Option<&Geodetic<ECEF>>,
         target: Option<&IcrsTarget>,
     ) -> f64;
+}
+
+impl dyn SoftConstraint {
+    pub fn downcast_ref<T: SoftConstraint + 'static>(&self) -> Option<&T> {
+        (self as &dyn Any).downcast_ref::<T>()
+    }
 }
 
 /// A soft constraint expression tree with arithmetic operations.

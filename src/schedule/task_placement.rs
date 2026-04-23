@@ -1,4 +1,4 @@
-use crate::time::{SchedulingBlockId, TaskId, TimeInterval, TimePoint};
+use crate::time::{TaskId, TimeInterval, TimePoint};
 
 /// The concrete scheduled slot for a task.
 #[derive(Debug, Clone)]
@@ -6,8 +6,6 @@ pub struct TaskPlacement {
     pub task_id: TaskId,
     pub start: TimePoint,
     pub end: TimePoint,
-    /// The scheduling block this placement belongs to, if any.
-    pub block_id: Option<SchedulingBlockId>,
 }
 
 impl TaskPlacement {

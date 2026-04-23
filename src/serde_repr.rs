@@ -11,30 +11,30 @@ use crate::constraints::{
 };
 use crate::time::{MJD, Period, Time};
 use qtty::{Degrees, Meters};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use siderust::calculus::solar::Twilight;
 use siderust::coordinates::centers::Geodetic;
 use siderust::coordinates::frames::ECEF;
 
-#[derive(Debug, Clone, Copy, Deserialize)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
 pub(crate) struct TimeWindowRepr {
     pub start_mjd_utc: f64,
     pub end_mjd_utc: f64,
 }
 
-#[derive(Debug, Clone, Copy, Deserialize)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
 pub(crate) struct LocationRepr {
     pub longitude_deg: f64,
     pub latitude_deg: f64,
     pub height_m: f64,
 }
 
-#[derive(Debug, Clone, Copy, Deserialize)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
 pub(crate) struct NightTimeRepr {
     pub twilight: TwilightRepr,
 }
 
-#[derive(Debug, Clone, Copy, Deserialize)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
 pub(crate) enum TwilightRepr {
     Civil,
     Nautical,
@@ -55,13 +55,25 @@ impl From<TwilightRepr> for Twilight {
     }
 }
 
-#[derive(Debug, Clone, Copy, Deserialize)]
+impl From<Twilight> for TwilightRepr {
+    fn from(value: Twilight) -> Self {
+        match value {
+            Twilight::Civil => TwilightRepr::Civil,
+            Twilight::Nautical => TwilightRepr::Nautical,
+            Twilight::Astronomical => TwilightRepr::Astronomical,
+            Twilight::Horizon => TwilightRepr::Horizon,
+            Twilight::ApparentHorizon => TwilightRepr::ApparentHorizon,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
 pub(crate) struct MoonAltitudeRepr {
     pub min_deg: f64,
     pub max_deg: f64,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub(crate) struct HardConstraintsRepr {
     pub altitude_min_deg: Option<f64>,
     pub altitude_max_deg: Option<f64>,

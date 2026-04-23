@@ -2,8 +2,7 @@ use super::candidate::EstCandidate;
 use super::ordering::{compare_by_cached, sort_candidates};
 use crate::prescheduler::TaskPeriodMap;
 use crate::task::Task;
-use crate::time::{MJD, Period, SchedulingBlockId, TaskId, Time};
-use std::collections::HashMap;
+use crate::time::{MJD, Period, Time};
 
 /// Refreshable EST candidate queue kept in EST sort order.
 ///
@@ -22,13 +21,10 @@ pub(super) struct CandidateQueue<'a> {
 impl<'a> CandidateQueue<'a> {
     /// Build the initial candidate queue from validated tasks and feasible windows.
     ///
-    /// When `task_block_map` is provided, each candidate's `block_id` is
-    /// populated so that the scheduler can enforce dependency ordering.
     pub(super) fn build(
         tasks: &'a [&Task],
         possible_periods: &'a TaskPeriodMap,
         horizon: &Period<MJD>,
-        task_block_map: Option<&HashMap<TaskId, SchedulingBlockId>>,
         threshold: u32,
     ) -> Self {
         let mut candidates = tasks
@@ -37,11 +33,7 @@ impl<'a> CandidateQueue<'a> {
                 let windows = possible_periods
                     .get(&task.id)
                     .expect("EST invariant violated: filtered task missing possible periods");
-                let mut c = EstCandidate::new(task, windows, horizon);
-                if let Some(map) = task_block_map {
-                    c.block_id = map.get(&task.id).copied();
-                }
-                c
+                EstCandidate::new(task, windows, horizon)
             })
             .collect::<Vec<_>>();
 
@@ -98,7 +90,8 @@ impl<'a> CandidateQueue<'a> {
         // Collect endangered ESTs into the scratch buffer.
         self.scratch_endangered.clear();
         for c in &self.candidates {
-            if !c.is_impossible() && c.is_endangered(threshold)
+            if !c.is_impossible()
+                && c.is_endangered(threshold)
                 && let Some(est) = c.est
             {
                 self.scratch_endangered.push(est);

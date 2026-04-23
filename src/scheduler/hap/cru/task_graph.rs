@@ -1,22 +1,20 @@
 //! Task dependency helpers for CRU.
 
 use crate::schedule::Schedule;
-use crate::scheduling_block::SchedulingBlock;
-use crate::time::{MJD, Period, SchedulingBlockId, TaskId, Time};
-use std::collections::HashMap;
+use crate::schedule::SchedulingProblem;
+use crate::time::{MJD, Period, TaskId, Time};
 
 /// Returns `true` when all direct predecessors of `task_id` (within its block)
 /// are already placed in `schedule`.
 pub(super) fn predecessors_placed(
     task_id: TaskId,
     schedule: &Schedule,
-    blocks: &HashMap<SchedulingBlockId, SchedulingBlock>,
-    task_to_block: &HashMap<TaskId, SchedulingBlockId>,
+    problem: &SchedulingProblem,
 ) -> bool {
-    let Some(&block_id) = task_to_block.get(&task_id) else {
+    let Some(block_id) = problem.task_block_id(task_id) else {
         return true;
     };
-    let Some(block) = blocks.get(&block_id) else {
+    let Some(block) = problem.block(block_id) else {
         return true;
     };
     block
@@ -30,14 +28,13 @@ pub(super) fn predecessors_placed(
 pub(super) fn predecessor_end_lower_bound(
     task_id: TaskId,
     schedule: &Schedule,
-    blocks: &HashMap<SchedulingBlockId, SchedulingBlock>,
-    task_to_block: &HashMap<TaskId, SchedulingBlockId>,
+    problem: &SchedulingProblem,
     horizon: &Period<MJD>,
 ) -> Time<MJD> {
-    let Some(&block_id) = task_to_block.get(&task_id) else {
+    let Some(block_id) = problem.task_block_id(task_id) else {
         return horizon.start;
     };
-    let Some(block) = blocks.get(&block_id) else {
+    let Some(block) = problem.block(block_id) else {
         return horizon.start;
     };
     block

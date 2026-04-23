@@ -6,7 +6,7 @@ use qtty::Seconds;
 use scheduler::{
     Period, PeriodSet, TaskPeriodMap,
     constraints::ConstraintExpr,
-    schedule::Schedule,
+    schedule::{Schedule, SchedulingProblem},
     scheduler::hap::{Configuration, HapScheduler},
     scheduling_block::{Dependency, SchedulingBlock},
     task::Task,
@@ -39,6 +39,21 @@ fn full_window(h: &Period<MJD>) -> PeriodSet<MJD> {
     PeriodSet::from_periods(vec![*h])
 }
 
+fn make_problem(blocks: Vec<SchedulingBlock>) -> SchedulingProblem {
+    SchedulingProblem::from_blocks(blocks).unwrap()
+}
+
+fn block_from_task_ids(id: u64, task_ids: &[u64]) -> SchedulingBlock {
+    SchedulingBlock::from_tasks(
+        SchedulingBlockId(id),
+        task_ids
+            .iter()
+            .map(|task_id| make_task(*task_id, 600.0))
+            .collect(),
+    )
+    .unwrap()
+}
+
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
 /// Three independent tasks with no dependencies should all be placed.
@@ -46,26 +61,15 @@ fn full_window(h: &Period<MJD>) -> PeriodSet<MJD> {
 fn hap_schedules_independent_tasks() {
     let h = horizon();
 
-    let mut tasks = HashMap::new();
-    for id in 1..=3 {
-        let t = make_task(id, 600.0);
-        tasks.insert(TaskId(id), t);
-    }
+    let problem = make_problem(vec![block_from_task_ids(1, &[1, 2, 3])]);
 
     let mut possible_periods: TaskPeriodMap = HashMap::new();
     for id in 1..=3 {
         possible_periods.insert(TaskId(id), full_window(&h));
     }
 
-    let mut block = SchedulingBlock::new(SchedulingBlockId(1));
-    for id in 1..=3 {
-        block.add_task(TaskId(id));
-    }
-    let mut blocks = HashMap::new();
-    blocks.insert(SchedulingBlockId(1), block);
-
     let scheduler = HapScheduler::default();
-    let result = scheduler.run(&tasks, &possible_periods, &h, &blocks);
+    let result = scheduler.run(&problem, &possible_periods, &h);
     assert!(result.is_ok(), "HAP must not error on a feasible problem");
 
     let schedule = result.unwrap();
@@ -76,31 +80,25 @@ fn hap_schedules_independent_tasks() {
 #[test]
 fn hap_respects_dependency_ordering() {
     let h = horizon();
-
     let ids = [TaskId(10), TaskId(20), TaskId(30)];
-    let mut tasks = HashMap::new();
-    for &id in &ids {
-        tasks.insert(id, make_task(id.0, 600.0));
-    }
 
     let mut possible_periods: TaskPeriodMap = HashMap::new();
     for &id in &ids {
         possible_periods.insert(id, full_window(&h));
     }
 
-    let mut block = SchedulingBlock::new(SchedulingBlockId(1));
+    let mut block = block_from_task_ids(1, &[10, 20, 30]);
     block
         .add_dependency(TaskId(10), TaskId(20), Dependency::DependsOn)
         .unwrap();
     block
         .add_dependency(TaskId(20), TaskId(30), Dependency::DependsOn)
         .unwrap();
-    let mut blocks = HashMap::new();
-    blocks.insert(SchedulingBlockId(1), block);
+    let problem = make_problem(vec![block]);
 
     let scheduler = HapScheduler::default();
     let schedule = scheduler
-        .run(&tasks, &possible_periods, &h, &blocks)
+        .run(&problem, &possible_periods, &h)
         .expect("HAP must not error");
 
     assert_eq!(schedule.len(), 3, "all 3 tasks must be placed");
@@ -120,34 +118,23 @@ fn hap_respects_dependency_ordering() {
 #[test]
 fn hap_is_deterministic_with_fixed_seed() {
     let h = horizon();
-
-    let mut tasks = HashMap::new();
-    for id in 1..=5 {
-        tasks.insert(TaskId(id), make_task(id, 600.0));
-    }
+    let problem = make_problem(vec![block_from_task_ids(1, &[1, 2, 3, 4, 5])]);
 
     let mut possible_periods: TaskPeriodMap = HashMap::new();
     for id in 1..=5 {
         possible_periods.insert(TaskId(id), full_window(&h));
     }
 
-    let mut block = SchedulingBlock::new(SchedulingBlockId(1));
-    for id in 1..=5 {
-        block.add_task(TaskId(id));
-    }
-    let mut blocks = HashMap::new();
-    blocks.insert(SchedulingBlockId(1), block);
-
     let config = Configuration::default(); // random_seed = 0
 
-    let run = |blocks: &HashMap<SchedulingBlockId, SchedulingBlock>| -> Schedule {
+    let run = |problem: &SchedulingProblem| -> Schedule {
         HapScheduler::new(config)
-            .run(&tasks, &possible_periods, &h, blocks)
+            .run(problem, &possible_periods, &h)
             .expect("HAP must not error")
     };
 
-    let schedule_a = run(&blocks);
-    let schedule_b = run(&blocks);
+    let schedule_a = run(&problem);
+    let schedule_b = run(&problem);
 
     // Same set of placed task IDs
     let placed_a: std::collections::HashSet<TaskId> =
@@ -171,22 +158,14 @@ fn hap_is_deterministic_with_fixed_seed() {
 #[test]
 fn hap_terminates_on_infeasible_problem() {
     let h = horizon();
-
-    let task = make_task(1, 600.0);
-    let mut tasks = HashMap::new();
-    tasks.insert(TaskId(1), task);
+    let problem = make_problem(vec![block_from_task_ids(1, &[1])]);
 
     // Empty PeriodSet → no feasible windows
     let mut possible_periods: TaskPeriodMap = HashMap::new();
     possible_periods.insert(TaskId(1), PeriodSet::new());
 
-    let mut block = SchedulingBlock::new(SchedulingBlockId(1));
-    block.add_task(TaskId(1));
-    let mut blocks = HashMap::new();
-    blocks.insert(SchedulingBlockId(1), block);
-
     let scheduler = HapScheduler::default();
-    let result = scheduler.run(&tasks, &possible_periods, &h, &blocks);
+    let result = scheduler.run(&problem, &possible_periods, &h);
 
     assert!(
         result.is_ok(),
@@ -200,7 +179,7 @@ fn hap_terminates_on_infeasible_problem() {
 
 /// With two blocks that share an overlapping window HAP must place at least one task.
 #[test]
-fn hap_completes_proposal_with_conflicts() {
+fn hap_completes_block_with_conflicts() {
     let h = horizon();
 
     // Both tasks want the first quarter of the horizon; they cannot both fit
@@ -210,28 +189,17 @@ fn hap_completes_proposal_with_conflicts() {
         Time::<MJD>::new(60000.25),
     )]);
 
-    let task_a = make_task(1, 600.0);
-    let task_b = make_task(2, 600.0);
-    let mut tasks = HashMap::new();
-    tasks.insert(TaskId(1), task_a);
-    tasks.insert(TaskId(2), task_b);
+    let problem = make_problem(vec![
+        block_from_task_ids(1, &[1]),
+        block_from_task_ids(2, &[2]),
+    ]);
 
     let mut possible_periods: TaskPeriodMap = HashMap::new();
     possible_periods.insert(TaskId(1), overlap_window.clone());
     possible_periods.insert(TaskId(2), overlap_window);
 
-    let mut block_a = SchedulingBlock::new(SchedulingBlockId(1));
-    block_a.add_task(TaskId(1));
-
-    let mut block_b = SchedulingBlock::new(SchedulingBlockId(2));
-    block_b.add_task(TaskId(2));
-
-    let mut blocks = HashMap::new();
-    blocks.insert(SchedulingBlockId(1), block_a);
-    blocks.insert(SchedulingBlockId(2), block_b);
-
     let scheduler = HapScheduler::default();
-    let result = scheduler.run(&tasks, &possible_periods, &h, &blocks);
+    let result = scheduler.run(&problem, &possible_periods, &h);
     assert!(result.is_ok(), "HAP must not error");
 
     let schedule = result.unwrap();

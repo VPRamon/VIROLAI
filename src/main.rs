@@ -50,25 +50,18 @@ fn run() -> Result<(), String> {
     let problem: SchedulingProblem = serde_json::from_str(&text)
         .map_err(|e| format!("failed to parse {}: {e}", input_path.display()))?;
 
-    if problem.tasks.is_empty() {
+    if problem.task_count() == 0 {
         return Err("input JSON contains no tasks".to_string());
     }
 
-    let SchedulingProblem {
-        tasks,
-        blocks,
-        detected_horizon,
-        telescope,
-    } = problem;
-
-    let horizon = build_horizon(detected_horizon, horizon_override)?;
-    let telescope = telescope.ok_or_else(|| {
+    let horizon = build_horizon(problem.detected_horizon, horizon_override)?;
+    let telescope = problem.telescope.as_ref().ok_or_else(|| {
         "missing observing site in input; expected resources[0] or legacy location".to_string()
     })?;
-    let total_tasks = tasks.len();
+    let total_tasks = problem.task_count();
 
     let preschedule_start = Instant::now();
-    let possible_periods = preschedule(&blocks, &tasks, &horizon, &telescope)
+    let possible_periods = preschedule(&problem, &horizon, telescope)
         .map_err(|e| format!("prescheduling failed: {e}"))?;
     let preschedule_elapsed = preschedule_start.elapsed();
 
@@ -76,13 +69,11 @@ fn run() -> Result<(), String> {
 
     let (schedule, algo_elapsed) = match cli.algorithm {
         Algorithm::Est => {
-            let mut tasks_vec: Vec<_> = tasks.into_values().collect();
-            tasks_vec.sort_by_key(|task| task.id.0);
             let start = Instant::now();
             let scheduler = est::EstScheduler::with_fom(cli.est_config, cli.est_fom.into_fom())
                 .map_err(|e| format!("invalid EST configuration: {e}"))?;
             let schedule = scheduler
-                .run_with_problem(&tasks_vec, &possible_periods, &horizon, &blocks)
+                .run(&problem, &possible_periods, &horizon)
                 .map_err(|e| format!("EST run failed: {e}"))?;
             (schedule, start.elapsed())
         }
@@ -90,7 +81,7 @@ fn run() -> Result<(), String> {
             let start = Instant::now();
             let scheduler = hap::HapScheduler::new(cli.hap_config);
             let schedule = scheduler
-                .run(&tasks, &possible_periods, &horizon, &blocks)
+                .run(&problem, &possible_periods, &horizon)
                 .map_err(|e| format!("HAP run failed: {e}"))?;
             (schedule, start.elapsed())
         }
@@ -98,11 +89,11 @@ fn run() -> Result<(), String> {
 
     println!(
         "Loaded {} blocks and {} tasks from {}",
-        blocks.len(),
+        problem.block_count(),
         total_tasks,
         input_path.display()
     );
-    print_telescope(&telescope);
+    print_telescope(telescope);
     println!(
         "Horizon (MJD): [{:.5}, {:.5})",
         horizon.start.value(),

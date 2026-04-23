@@ -1,9 +1,9 @@
 //! CRU (Conflict Resolution Unit) engine for the HAP scheduler.
 //!
 //! Each CRU starts from a survivor schedule and attempts to place all tasks of
-//! one proposal (SchedulingBlock) by evicting conflicting non-protected
-//! tasks when necessary. The best intermediate state is tracked and returned
-//! when the iteration budget is exhausted or all protected tasks are placed.
+//! one scheduling block by evicting conflicting non-protected tasks when
+//! necessary. The best intermediate state is tracked and returned when the
+//! iteration budget is exhausted or all protected tasks are placed.
 
 mod conflict;
 mod rng;
@@ -18,42 +18,37 @@ mod tests;
 use self::conflict::{
     compute_conflict_cost, compute_conflict_group, compute_min_positive_priority,
 };
-use self::rng::Xorshift64;
+use self::rng::CruRng;
 use self::selection::{choose_candidate, select_best_candidate};
 use self::snapshot::{count_protected_placed, count_unplaced_displaced, is_better_snapshot};
 use self::task_graph::{predecessor_end_lower_bound, predecessors_placed};
 use self::windows::{generate_candidate_starts, would_evict_protected};
 use super::configuration::Configuration;
-use super::proposal::Proposal;
 use crate::prescheduler::TaskPeriodMap;
-use crate::schedule::{Schedule, TaskPlacement};
+use crate::schedule::{Schedule, SchedulingProblem, TaskPlacement};
 use crate::scheduling_block::SchedulingBlock;
-use crate::task::Task;
-use crate::time::{MJD, Period, SchedulingBlockId, TaskId, Time};
+use crate::time::{MJD, Period, TaskId, Time};
 use qtty::Day;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 /// Run one CRU repair pass starting from `base_schedule`.
 ///
-/// Attempts to place all tasks in `proposal` (the *protected set*).
+/// Attempts to place all tasks in `current_block` (the *protected set*).
 /// Non-protected conflicting tasks may be evicted and re-queued in the
 /// internal displaced lobby. Returns the best intermediate schedule
 /// observed during the run.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn run_cru(
     base_schedule: Schedule,
-    proposal: &Proposal,
-    tasks: &HashMap<TaskId, Task>,
+    current_block: &SchedulingBlock,
+    problem: &SchedulingProblem,
     possible_periods: &TaskPeriodMap,
     horizon: &Period<MJD>,
-    blocks: &HashMap<SchedulingBlockId, SchedulingBlock>,
-    task_to_block: &HashMap<TaskId, SchedulingBlockId>,
-    all_proposals: &[Proposal],
     config: &Configuration,
     seed: u64,
 ) -> Schedule {
-    let mut rng = Xorshift64::new(seed);
-    let protected_ids: HashSet<TaskId> = proposal.task_ids.iter().copied().collect();
+    let mut rng = CruRng::new(seed);
+    let protected_ids: HashSet<TaskId> = current_block.iter().collect();
     let mut displaced: HashSet<TaskId> = HashSet::new();
     let mut schedule = base_schedule;
 
@@ -61,7 +56,7 @@ pub(super) fn run_cru(
     let mut best_unplaced_displaced = 0usize;
     let mut best_snapshot = schedule.clone();
 
-    let min_positive_priority = compute_min_positive_priority(all_proposals);
+    let min_positive_priority = compute_min_positive_priority(problem, horizon.start);
 
     for iteration in 0..config.cru_max_iterations {
         // Build lobby: unplaced protected tasks ∪ unplaced displaced tasks
@@ -80,7 +75,7 @@ pub(super) fn run_cru(
         let ready: Vec<TaskId> = lobby
             .iter()
             .copied()
-            .filter(|&tid| predecessors_placed(tid, &schedule, blocks, task_to_block))
+            .filter(|&tid| predecessors_placed(tid, &schedule, problem))
             .collect();
 
         if ready.is_empty() {
@@ -107,16 +102,14 @@ pub(super) fn run_cru(
 
         let next_task_id = select_best_candidate(
             &candidate_group,
-            tasks,
+            problem,
             possible_periods,
             &schedule,
-            blocks,
-            task_to_block,
             horizon,
         );
 
-        let Some(task) = tasks.get(&next_task_id) else {
-            log::warn!("hap cru: task {} not found in task map", next_task_id.0);
+        let Some(task) = problem.task(next_task_id) else {
+            log::warn!("hap cru: task {} not found in problem", next_task_id.0);
             break;
         };
         let Some(windows) = possible_periods.get(&next_task_id) else {
@@ -125,8 +118,7 @@ pub(super) fn run_cru(
         };
 
         // Predecessor lower bound on start time
-        let pred_end =
-            predecessor_end_lower_bound(next_task_id, &schedule, blocks, task_to_block, horizon);
+        let pred_end = predecessor_end_lower_bound(next_task_id, &schedule, problem, horizon);
 
         // Generate and filter candidate starts
         let candidate_starts = generate_candidate_starts(task, windows, &schedule, pred_end);
@@ -151,10 +143,10 @@ pub(super) fn run_cru(
                     s,
                     task,
                     &schedule,
-                    task_to_block,
-                    blocks,
-                    all_proposals,
-                    proposal,
+                    problem,
+                    current_block,
+                    possible_periods,
+                    horizon.start,
                     min_positive_priority,
                     config,
                 )
@@ -166,8 +158,7 @@ pub(super) fn run_cru(
         let chosen_start = candidate_starts[chosen_idx];
 
         // Compute conflict group for the chosen window and evict non-protected
-        let conflict_group =
-            compute_conflict_group(chosen_start, task, &schedule, task_to_block, blocks);
+        let conflict_group = compute_conflict_group(chosen_start, task, &schedule, problem);
         for &evicted_id in &conflict_group {
             if !protected_ids.contains(&evicted_id) {
                 let _ = schedule.unplace_task(evicted_id);
@@ -177,12 +168,10 @@ pub(super) fn run_cru(
 
         // Place the task
         let end = Time::<MJD>::new(chosen_start.value() + task.duration.to::<Day>().value());
-        let block_id = task_to_block.get(&next_task_id).copied();
         schedule.insert_placement(TaskPlacement {
             task_id: next_task_id,
             start: chosen_start,
             end,
-            block_id,
         });
         displaced.remove(&next_task_id);
 
@@ -204,7 +193,8 @@ pub(super) fn run_cru(
             best_protected_placed,
             best_unplaced_displaced,
             &best_snapshot,
-            all_proposals,
+            problem,
+            horizon.start,
         ) {
             best_snapshot = schedule.clone();
             best_protected_placed = new_protected_placed;

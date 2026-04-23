@@ -1,25 +1,27 @@
 //! Deterministic RNG used by CRU stochastic tie-breakers.
 
-pub(super) struct Xorshift64(u64);
+use rand::rngs::StdRng;
+use rand::{Rng, SeedableRng};
 
-impl Xorshift64 {
+#[cfg(test)]
+use rand::RngCore;
+
+pub(super) struct CruRng(StdRng);
+
+impl CruRng {
     pub(super) fn new(seed: u64) -> Self {
-        Self(if seed == 0 { 1 } else { seed })
+        Self(StdRng::seed_from_u64(seed))
     }
 
-    pub(super) fn next(&mut self) -> u64 {
-        let mut x = self.0;
-        x ^= x << 13;
-        x ^= x >> 7;
-        x ^= x << 17;
-        self.0 = x;
-        x
+    #[cfg(test)]
+    pub(super) fn next_u64(&mut self) -> u64 {
+        self.0.next_u64()
     }
 
     pub(super) fn next_usize(&mut self, n: usize) -> usize {
         if n <= 1 {
             return 0;
         }
-        (self.next() % n as u64) as usize
+        self.0.gen_range(0..n)
     }
 }

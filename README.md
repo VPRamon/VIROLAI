@@ -114,7 +114,7 @@ cargo run --bin scheduler -- data/CTA-N/scheduling_problem.json \
   --est-b 3
 ```
 
-#### HAP (Hybrid Asynchronous Proposal)
+#### HAP
 
 Run with the HAP algorithm using default settings:
 
@@ -146,9 +146,9 @@ HAP options:
 
 HAP notes:
 
-- each `SchedulingBlock` is one **proposal**; proposal priority is the sum of its member-task soft-constraint priorities
-- CRU workers repair one proposal at a time: proposal tasks are the insertion target and are never evicted once placed
-- survivors are ranked by completion fitness (fraction of proposals fully placed, weighted by priority), then by total science time, then by deterministic tie-breakers
+- each `SchedulingBlock` is scheduled as one unit; block priority is the sum of its member-task soft-constraint priorities
+- CRU workers repair one scheduling block at a time: that block's tasks are the insertion target and are never evicted once placed
+- survivors are ranked by completion fitness (fraction of scheduling blocks fully placed, weighted by priority), then by total science time, then by deterministic tie-breakers
 - `--hap-seed` guarantees reproducible results across runs with the same input and configuration
 - EST-specific flags (`--est-*`) and HAP-specific flags (`--hap-*`) are mutually exclusive; mixing them is an error
 

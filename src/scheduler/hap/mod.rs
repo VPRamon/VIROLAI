@@ -1,11 +1,11 @@
-//! HAP (Hybrid Asynchronous Proposal) scheduler.
+//! HAP scheduler.
 //!
-//! Each [`crate::scheduling_block::SchedulingBlock`] becomes one proposal.
 //! HAP maintains a pool of `num_crus` survivor schedules and runs parallel
-//! CRU (Constraint Repair Unit) workers to place one proposal's tasks at a
-//! time, merging the best outcomes after each round.  The algorithm terminates
+//! CRU (Constraint Repair Unit) workers to place one scheduling block at a
+//! time, merging the best outcomes after each round. The algorithm terminates
 //! after a full queue rotation produces no improvement.
 
+mod block_eval;
 pub mod configuration;
 mod cru;
 pub mod proposal;

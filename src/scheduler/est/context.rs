@@ -1,8 +1,7 @@
 use crate::error::ScheduleError;
 use crate::schedule::Schedule;
-use crate::scheduling_block::SchedulingBlock;
-use crate::time::{MJD, SchedulingBlockId, TaskId, Time};
-use std::collections::HashMap;
+use crate::schedule::SchedulingProblem;
+use crate::time::{MJD, TaskId, Time};
 
 /// Domain context passed into the beam search when a [`crate::schedule::SchedulingProblem`]
 /// is available. Carrying it here allows the EST inner loop to validate
@@ -13,8 +12,8 @@ use std::collections::HashMap;
 /// pre-scheduler already guarantees that every window in `possible_periods`
 /// is constraint-feasible, and EST only proposes starts within those windows.
 pub(super) struct ProblemCtx<'p> {
-    /// Pre-computed per-block task lists used for dependency checks.
-    pub(super) blocks: &'p HashMap<SchedulingBlockId, SchedulingBlock>,
+    /// The full problem definition used for dependency lookups.
+    pub(super) problem: &'p SchedulingProblem,
 }
 
 /// Check that all predecessor tasks in the same block are already scheduled
@@ -26,18 +25,14 @@ pub(super) fn check_block_dependencies(
     schedule: &Schedule,
     task_id: TaskId,
     candidate_start: Time<MJD>,
-    block_id: Option<SchedulingBlockId>,
-    blocks: &HashMap<SchedulingBlockId, SchedulingBlock>,
+    problem: &SchedulingProblem,
 ) -> Result<(), ScheduleError> {
-    let Some(block_id) = block_id else {
+    let Some(block_id) = problem.task_block_id(task_id) else {
         return Ok(());
     };
-    let Some(block) = blocks.get(&block_id) else {
+    let Some(block) = problem.block(block_id) else {
         return Ok(());
     };
-    if !block.contains_task(task_id) {
-        return Ok(());
-    }
 
     let order = block.topological_order()?;
     let task_pos = order.iter().position(|&t| t == task_id).unwrap_or(0);

@@ -6,10 +6,10 @@
 //! - [`CompositeFom`]: lexicographic combination of two FOMs.
 
 use crate::schedule::Schedule;
+use crate::schedule::SchedulingProblem;
 use crate::task::Task;
 use crate::time::{MJD, TaskId};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::fmt;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -19,22 +19,20 @@ use std::sync::Arc;
 /// Build once per scheduler run to avoid rebuilding the task lookup map on
 /// every call.
 pub struct ScoringContext<'a> {
-    tasks: &'a [Task],
-    task_map: HashMap<TaskId, &'a Task>,
+    problem: &'a SchedulingProblem,
 }
 
 impl<'a> ScoringContext<'a> {
-    pub fn new(tasks: &'a [Task]) -> Self {
-        let task_map = tasks.iter().map(|t| (t.id, t)).collect();
-        Self { tasks, task_map }
+    pub fn new(problem: &'a SchedulingProblem) -> Self {
+        Self { problem }
     }
 
-    pub fn tasks(&self) -> &[Task] {
-        self.tasks
+    pub fn tasks(&self) -> Vec<&Task> {
+        self.problem.iter_tasks().collect()
     }
 
     pub fn task(&self, id: TaskId) -> Option<&Task> {
-        self.task_map.get(&id).copied()
+        self.problem.task(id)
     }
 }
 

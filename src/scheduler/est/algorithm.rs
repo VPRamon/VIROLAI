@@ -6,11 +6,10 @@ use super::queue::CandidateQueue;
 use super::validation;
 use crate::error::ScheduleError;
 use crate::prescheduler::TaskPeriodMap;
-use crate::schedule::Schedule;
+use crate::schedule::{Schedule, SchedulingProblem};
 use crate::scheduling_block::SchedulingBlock;
 use crate::task::Task;
-use crate::time::{MJD, Period, SchedulingBlockId, TaskId};
-use std::collections::HashMap;
+use crate::time::{MJD, Period, SchedulingBlockId};
 use std::sync::Arc;
 
 /// EST scheduler implementation.
@@ -53,21 +52,17 @@ impl EstScheduler {
         Self::from_parts(config, fom)
     }
 
-    /// Run beam-search EST on `tasks` using the provided feasible windows.
-    ///
-    /// Each round every live beam is expanded by placing up to
-    /// `branching_factor` distinct candidates. The resulting child states are
-    /// evaluated with the configured FOM and the top `k_beams` survivors are
-    /// carried into the next round. The best terminal state is returned.
-    pub fn run_scheduler(
+    /// Run beam-search EST on a full scheduling problem.
+    pub fn run(
         &self,
-        tasks: &[Task],
+        problem: &SchedulingProblem,
         possible_periods: &TaskPeriodMap,
         horizon: &Period<MJD>,
     ) -> Result<Schedule, ScheduleError> {
         log::info!(
-            "est: starting scheduler — tasks={}, endangered_threshold={}, k_beams={}, branching_factor={}, horizon=[{:.4}, {:.4}]",
-            tasks.len(),
+            "est: starting scheduler — blocks={}, tasks={}, endangered_threshold={}, k_beams={}, branching_factor={}, horizon=[{:.4}, {:.4}]",
+            problem.block_count(),
+            problem.task_count(),
             self.config.endangered_threshold,
             self.config.k_beams,
             self.config.branching_factor,
@@ -75,8 +70,8 @@ impl EstScheduler {
             horizon.end.value(),
         );
 
-        validation::validate_tasks(tasks)?;
-        let filtered_tasks = validation::filter_tasks(tasks, possible_periods);
+        validation::validate_task_refs(problem.iter_tasks())?;
+        let filtered_tasks = validation::filter_task_refs(problem.iter_tasks(), possible_periods);
 
         log::debug!(
             "est: {} tasks remain after feasibility filter",
@@ -87,7 +82,6 @@ impl EstScheduler {
             &filtered_tasks,
             possible_periods,
             horizon,
-            None,
             self.config.endangered_threshold,
         );
 
@@ -98,84 +92,45 @@ impl EstScheduler {
             score: 0.0,
         };
 
-        let scoring_ctx = ScoringContext::new(tasks);
+        let scoring_ctx = ScoringContext::new(problem);
         Ok(beam::run_search(
             self,
             initial_state,
             horizon,
             &scoring_ctx,
-            None,
+            Some(&ProblemCtx { problem }),
         ))
     }
 
-    /// Run beam-search EST through the domain model.
-    ///
-    /// Behaves like [`Self::run_scheduler`] but routes every placement through
-    /// dependency-aware domain checks before it is committed.
-    pub fn run_with_problem(
+    /// Convenience entry point that wraps flat tasks into singleton blocks.
+    pub fn run_scheduler<I>(
         &self,
-        tasks: &[Task],
+        tasks: I,
         possible_periods: &TaskPeriodMap,
         horizon: &Period<MJD>,
-        blocks: &HashMap<SchedulingBlockId, SchedulingBlock>,
-    ) -> Result<Schedule, ScheduleError> {
-        log::info!(
-            "est: starting domain-aware scheduler — tasks={}, endangered_threshold={}, k_beams={}, branching_factor={}, horizon=[{:.4}, {:.4}]",
-            tasks.len(),
-            self.config.endangered_threshold,
-            self.config.k_beams,
-            self.config.branching_factor,
-            horizon.start.value(),
-            horizon.end.value(),
-        );
-
-        validation::validate_tasks(tasks)?;
-        let filtered_tasks = validation::filter_tasks(tasks, possible_periods);
-
-        log::debug!(
-            "est: {} tasks remain after feasibility filter",
-            filtered_tasks.len()
-        );
-
-        // Build task→block map so candidates carry their block affiliation.
-        let task_block_map: HashMap<TaskId, SchedulingBlockId> = blocks
-            .iter()
-            .flat_map(|(&block_id, block)| block.iter().map(move |task_id| (task_id, block_id)))
-            .collect();
-
-        let ctx = ProblemCtx { blocks };
-
-        let initial_candidates = CandidateQueue::build(
-            &filtered_tasks,
-            possible_periods,
-            horizon,
-            Some(&task_block_map),
-            self.config.endangered_threshold,
-        );
-
-        let initial_state = super::ScheduleState {
-            cursor: horizon.start,
-            schedule: Schedule::new(),
-            candidates: initial_candidates,
-            score: 0.0,
-        };
-
-        let scoring_ctx = ScoringContext::new(tasks);
-        Ok(beam::run_search(
-            self,
-            initial_state,
-            horizon,
-            &scoring_ctx,
-            Some(&ctx),
-        ))
+    ) -> Result<Schedule, ScheduleError>
+    where
+        I: IntoIterator<Item = Task>,
+    {
+        let tasks: Vec<Task> = tasks.into_iter().collect();
+        validation::validate_tasks(&tasks)?;
+        let blocks = tasks
+            .into_iter()
+            .map(|task| SchedulingBlock::from_tasks(SchedulingBlockId(task.id.0), vec![task]))
+            .collect::<Result<Vec<_>, _>>()?;
+        let problem = SchedulingProblem::from_blocks(blocks)?;
+        self.run(&problem, possible_periods, horizon)
     }
 }
 
 /// Convenience entry point for the default single-beam, task-count EST run.
-pub fn run_scheduler(
-    tasks: &[Task],
+pub fn run_scheduler<I>(
+    tasks: I,
     possible_periods: &TaskPeriodMap,
     horizon: &Period<MJD>,
-) -> Result<Schedule, ScheduleError> {
+) -> Result<Schedule, ScheduleError>
+where
+    I: IntoIterator<Item = Task>,
+{
     EstScheduler::default().run_scheduler(tasks, possible_periods, horizon)
 }

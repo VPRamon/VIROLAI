@@ -158,13 +158,9 @@ fn build_child_state<'a>(
     match ctx {
         Some(pctx) => {
             // Enforce intra-block dependency ordering.
-            if let Err(err) = check_block_dependencies(
-                &child.schedule,
-                task_id,
-                placement.start,
-                placement.block_id,
-                pctx.blocks,
-            ) {
+            if let Err(err) =
+                check_block_dependencies(&child.schedule, task_id, placement.start, pctx.problem)
+            {
                 log::debug!(
                     "est: round={} branch={} task={} rejected by domain validation: {}",
                     round,

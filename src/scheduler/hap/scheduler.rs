@@ -1,24 +1,23 @@
 //! [`HapScheduler`] — the public entry point for the HAP algorithm.
 
+use super::block_eval::{block_is_complete, block_priority};
 use super::configuration::Configuration;
 use super::cru::run_cru;
-use super::proposal::Proposal;
 use super::ranking::{compare_schedules, select_top_n, survivor_sets_equal};
 use crate::error::ScheduleError;
 use crate::prescheduler::TaskPeriodMap;
-use crate::schedule::Schedule;
-use crate::scheduling_block::SchedulingBlock;
-use crate::task::Task;
-use crate::time::{MJD, Period, SchedulingBlockId, TaskId};
+use crate::schedule::{Schedule, SchedulingProblem};
+use crate::time::{MJD, Period, SchedulingBlockId};
 use rayon::prelude::*;
-use std::collections::HashMap;
+use std::collections::VecDeque;
 
-/// HAP (Hybrid Asynchronous Proposal) scheduler.
+/// HAP scheduler.
 ///
 /// Maintains a pool of `num_crus` survivor schedules and runs parallel CRU
-/// workers to place one proposal's tasks at a time.  After each round the best
+/// workers to place one scheduling block's tasks at a time. After each round the best
 /// `num_crus` schedules are kept as survivors.  The algorithm terminates when
-/// all proposals are complete or a full queue rotation produces no improvement.
+/// all scheduling blocks are complete or a full queue rotation produces no
+/// improvement.
 #[derive(Default)]
 pub struct HapScheduler {
     /// HAP tuning parameters.
@@ -33,42 +32,41 @@ impl HapScheduler {
 
     /// Run the HAP algorithm.
     ///
-    /// `tasks` must include every task referenced by any block in `blocks`.
     /// `possible_periods` must contain a feasibility window set for every task.
     pub fn run(
         &self,
-        tasks: &HashMap<TaskId, Task>,
+        problem: &SchedulingProblem,
         possible_periods: &TaskPeriodMap,
         horizon: &Period<MJD>,
-        blocks: &HashMap<SchedulingBlockId, SchedulingBlock>,
     ) -> Result<Schedule, ScheduleError> {
         // Guard against a degenerate num_crus=0 configuration.
         let num_crus = self.config.num_crus.max(1);
 
         log::info!(
             "hap: starting — blocks={}, tasks={}, num_crus={}, horizon=[{:.4}, {:.4}]",
-            blocks.len(),
-            tasks.len(),
+            problem.block_count(),
+            problem.task_count(),
             num_crus,
             horizon.start.value(),
             horizon.end.value(),
         );
 
-        // Build task → block lookup
-        let task_to_block: HashMap<TaskId, SchedulingBlockId> = blocks
-            .iter()
-            .flat_map(|(&block_id, block)| block.iter().map(move |task_id| (task_id, block_id)))
-            .collect();
+        let mut block_queue: VecDeque<SchedulingBlockId> =
+            problem.blocks().iter().map(|block| block.id).collect();
+        block_queue.make_contiguous().sort_by(|a, b| {
+            let priority_a = problem
+                .block(*a)
+                .map(|block| block_priority(block, problem, horizon.start))
+                .unwrap_or(0.0);
+            let priority_b = problem
+                .block(*b)
+                .map(|block| block_priority(block, problem, horizon.start))
+                .unwrap_or(0.0);
+            priority_b.total_cmp(&priority_a)
+        });
 
-        // Build and sort proposals: highest priority first
-        let mut proposals: Vec<Proposal> = blocks
-            .values()
-            .map(|block| Proposal::from_block(block, tasks, possible_periods, horizon.start))
-            .collect();
-        proposals.sort_by(|a, b| b.priority.total_cmp(&a.priority));
-
-        if proposals.is_empty() {
-            log::info!("hap: no proposals, returning empty schedule");
+        if block_queue.is_empty() {
+            log::info!("hap: no scheduling blocks, returning empty schedule");
             return Ok(Schedule::new());
         }
 
@@ -76,21 +74,27 @@ impl HapScheduler {
         let empty = Schedule::new();
         let mut survivors: Vec<Schedule> = (0..num_crus).map(|_| empty.clone()).collect();
 
-        let mut remaining: std::collections::VecDeque<Proposal> =
-            proposals.iter().cloned().collect();
         let mut stall_counter: usize = 0;
         let mut round_index: u64 = 0;
 
-        while !remaining.is_empty() {
-            let queue_size = remaining.len();
-
-            let proposal = remaining.pop_front().unwrap();
+        while !block_queue.is_empty() {
+            let queue_size = block_queue.len();
+            let current_block_id = block_queue.pop_front().unwrap();
+            let Some(current_block) = problem.block(current_block_id) else {
+                log::warn!(
+                    "hap: round={} block={} not found, skipping",
+                    round_index,
+                    current_block_id.0
+                );
+                continue;
+            };
+            let current_priority = block_priority(current_block, problem, horizon.start);
 
             log::debug!(
-                "hap: round={} proposal={} priority={:.4} queue={}",
+                "hap: round={} block={} priority={:.4} queue={}",
                 round_index,
-                proposal.id.0,
-                proposal.priority,
+                current_block_id.0,
+                current_priority,
                 queue_size,
             );
 
@@ -102,7 +106,6 @@ impl HapScheduler {
                 .collect();
 
             let config = self.config;
-            let proposals_ref = proposals.as_slice();
 
             // Run CRUs in parallel
             let cru_results: Vec<Schedule> = cru_bases
@@ -115,13 +118,10 @@ impl HapScheduler {
                         .wrapping_add(cru_idx as u64 * 0x6C62272E);
                     run_cru(
                         base,
-                        &proposal,
-                        tasks,
+                        current_block,
+                        problem,
                         possible_periods,
                         horizon,
-                        blocks,
-                        &task_to_block,
-                        proposals_ref,
                         &config,
                         seed,
                     )
@@ -131,20 +131,22 @@ impl HapScheduler {
             // Merge survivors + CRU outputs; keep best num_crus
             let mut all_candidates = survivors.clone();
             all_candidates.extend(cru_results);
-            survivors = select_top_n(all_candidates, num_crus, &proposals);
+            survivors = select_top_n(all_candidates, num_crus, problem, horizon.start);
 
-            let proposal_complete = survivors.iter().any(|s| proposal.is_complete(s));
+            let block_complete = survivors
+                .iter()
+                .any(|schedule| block_is_complete(current_block, schedule));
 
-            if proposal_complete {
+            if block_complete {
                 log::debug!(
-                    "hap: round={} proposal={} complete",
+                    "hap: round={} block={} complete",
                     round_index,
-                    proposal.id.0
+                    current_block_id.0
                 );
                 stall_counter = 0;
             } else {
                 // Re-queue at back for another attempt
-                remaining.push_back(proposal);
+                block_queue.push_back(current_block_id);
 
                 if survivor_sets_equal(&survivors, &prev_survivors) {
                     stall_counter += 1;
@@ -166,7 +168,7 @@ impl HapScheduler {
         // Return the best survivor
         let best = survivors
             .into_iter()
-            .max_by(|a, b| compare_schedules(b, a, &proposals)) // max = smallest in compare_schedules order
+            .max_by(|a, b| compare_schedules(b, a, problem, horizon.start))
             .unwrap_or_default();
 
         log::info!(
@@ -182,6 +184,7 @@ impl HapScheduler {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
 
     #[test]
     fn default_scheduler_has_expected_config() {
@@ -208,15 +211,14 @@ mod tests {
     #[test]
     fn run_empty_blocks_returns_empty_schedule() {
         let scheduler = HapScheduler::default();
-        let tasks: HashMap<TaskId, Task> = HashMap::new();
         let possible_periods = HashMap::new();
         let horizon = Period::new(
             crate::time::Time::<MJD>::new(60000.0),
             crate::time::Time::<MJD>::new(60001.0),
         );
-        let blocks: HashMap<SchedulingBlockId, SchedulingBlock> = HashMap::new();
+        let problem = SchedulingProblem::new();
 
-        let result = scheduler.run(&tasks, &possible_periods, &horizon, &blocks);
+        let result = scheduler.run(&problem, &possible_periods, &horizon);
         assert!(result.is_ok());
         assert!(result.unwrap().is_empty());
     }
