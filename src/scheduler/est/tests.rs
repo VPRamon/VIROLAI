@@ -738,3 +738,98 @@ fn endangered_threshold_changes_scheduler_choice_when_earlier_task_blocks_later_
         .expect("task 2 should be placed");
     assert!((protected_first.start.to::<MJD>().value() - 0.5).abs() < 1e-9);
 }
+
+#[test]
+fn schedulable_count_cache_correct_after_build() {
+    let tasks = [
+        task_with_priority(1, 1.0, 1.0),
+        task_with_priority(2, 1.0, 1.0),
+        task_with_priority(3, 1.0, 1.0), // impossible — no windows
+    ];
+    let mut possible = TaskPeriodMap::new();
+    possible.insert(TaskId(1), windows(&[(0.0, 2.0)]));
+    possible.insert(TaskId(2), windows(&[(1.0, 3.0)]));
+    possible.insert(TaskId(3), crate::time::PeriodSet::new());
+
+    let horizon = period(0.0, 5.0);
+    let task_refs: Vec<_> = tasks.iter().collect();
+    let queue = CandidateQueue::build(&task_refs, &possible, &horizon, None, 0);
+
+    assert_eq!(queue.count_schedulable(), 2);
+}
+
+#[test]
+fn impossible_candidates_in_suffix_after_sort() {
+    let tasks = [
+        task_with_priority(1, 1.0, 1.0),
+        task_with_priority(2, 1.0, 1.0), // will be impossible
+        task_with_priority(3, 1.0, 1.0),
+    ];
+    let mut possible = TaskPeriodMap::new();
+    possible.insert(TaskId(1), windows(&[(0.0, 2.0)]));
+    possible.insert(TaskId(2), crate::time::PeriodSet::new());
+    possible.insert(TaskId(3), windows(&[(1.0, 3.0)]));
+
+    let horizon = period(0.0, 5.0);
+    let task_refs: Vec<_> = tasks.iter().collect();
+    let mut queue = CandidateQueue::build(&task_refs, &possible, &horizon, None, 0);
+
+    assert_eq!(queue.count_schedulable(), 2);
+
+    // Both pop_at calls must succeed without panic, returning schedulable tasks.
+    let a = queue.pop_at(0);
+    let b = queue.pop_at(0);
+    assert!(!a.is_impossible());
+    assert!(!b.is_impossible());
+    assert_eq!(queue.count_schedulable(), 0);
+}
+
+#[test]
+fn pop_at_direct_prefix_index() {
+    let horizon = period(0.0, 10.0);
+    let empty_windows = crate::time::PeriodSet::new();
+    let task_1 = task_with_priority(1, 1.0, 10.0);
+    let task_2 = task_with_priority(2, 1.0, 5.0);
+
+    let mut first = EstCandidate::new(&task_1, &empty_windows, &horizon);
+    first.est = Some(Time::<MJD>::new(1.0));
+    first.flexibility = 1.5;
+
+    let mut second = EstCandidate::new(&task_2, &empty_windows, &horizon);
+    second.est = Some(Time::<MJD>::new(2.0));
+    second.flexibility = 2.0;
+
+    let mut queue = CandidateQueue::from_candidates_for_test(vec![first, second]);
+
+    // pop_at(0) must return the first schedulable candidate.
+    let popped = queue.pop_at(0);
+    assert_eq!(popped.task_id(), TaskId(1));
+
+    // After removing it, pop_at(0) returns the next one.
+    let popped = queue.pop_at(0);
+    assert_eq!(popped.task_id(), TaskId(2));
+}
+
+#[test]
+fn schedulable_count_decrements_after_pop_at() {
+    let horizon = period(0.0, 10.0);
+    let empty_windows = crate::time::PeriodSet::new();
+    let task_1 = task_with_priority(1, 1.0, 1.0);
+    let task_2 = task_with_priority(2, 1.0, 1.0);
+
+    let mut c1 = EstCandidate::new(&task_1, &empty_windows, &horizon);
+    c1.est = Some(Time::<MJD>::new(1.0));
+    c1.flexibility = 2.0;
+
+    let mut c2 = EstCandidate::new(&task_2, &empty_windows, &horizon);
+    c2.est = Some(Time::<MJD>::new(2.0));
+    c2.flexibility = 2.0;
+
+    let mut queue = CandidateQueue::from_candidates_for_test(vec![c1, c2]);
+
+    assert_eq!(queue.count_schedulable(), 2);
+    queue.pop_at(0);
+    assert_eq!(queue.count_schedulable(), 1);
+    queue.pop_at(0);
+    assert_eq!(queue.count_schedulable(), 0);
+}

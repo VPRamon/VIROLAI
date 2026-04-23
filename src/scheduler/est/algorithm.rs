@@ -1,7 +1,7 @@
 use super::beam;
 use super::configuration::Configuration;
 use super::context::ProblemCtx;
-use super::fom::{ScheduleFom, SoftConstraintFom};
+use super::fom::{ScheduleFom, ScoringContext, SoftConstraintFom};
 use super::queue::CandidateQueue;
 use super::validation;
 use crate::error::ScheduleError;
@@ -95,9 +95,17 @@ impl EstScheduler {
             cursor: horizon.start,
             schedule: Schedule::new(),
             candidates: initial_candidates,
+            score: 0.0,
         };
 
-        Ok(beam::run_search(self, tasks, initial_state, horizon, None))
+        let scoring_ctx = ScoringContext::new(tasks);
+        Ok(beam::run_search(
+            self,
+            initial_state,
+            horizon,
+            &scoring_ctx,
+            None,
+        ))
     }
 
     /// Run beam-search EST through the domain model.
@@ -149,13 +157,15 @@ impl EstScheduler {
             cursor: horizon.start,
             schedule: Schedule::new(),
             candidates: initial_candidates,
+            score: 0.0,
         };
 
+        let scoring_ctx = ScoringContext::new(tasks);
         Ok(beam::run_search(
             self,
-            tasks,
             initial_state,
             horizon,
+            &scoring_ctx,
             Some(&ctx),
         ))
     }

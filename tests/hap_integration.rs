@@ -188,7 +188,10 @@ fn hap_terminates_on_infeasible_problem() {
     let scheduler = HapScheduler::default();
     let result = scheduler.run(&tasks, &possible_periods, &h, &blocks);
 
-    assert!(result.is_ok(), "HAP must return Ok even for infeasible tasks");
+    assert!(
+        result.is_ok(),
+        "HAP must return Ok even for infeasible tasks"
+    );
     assert!(
         !result.unwrap().contains(TaskId(1)),
         "infeasible task must not be placed"

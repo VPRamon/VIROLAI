@@ -2,16 +2,14 @@ use super::ScheduleState;
 use super::algorithm::EstScheduler;
 use super::candidate::IntoTaskPlacement;
 use super::context::{ProblemCtx, check_block_dependencies};
+use super::fom::ScoringContext;
 use crate::schedule::Schedule;
-use crate::task::Task;
 use crate::time::{MJD, Period};
-
-/// Beam state paired with its FOM score for pruning.
-type ScoredState<'a> = (f64, ScheduleState<'a>);
+use std::cmp::Ordering;
 
 enum BeamExpansion<'a> {
     Terminal(ScheduleState<'a>),
-    Children(Vec<ScoredState<'a>>),
+    Children(Vec<ScheduleState<'a>>),
 }
 
 /// Execute the EST beam-search loop starting from an already-built initial state.
@@ -20,9 +18,9 @@ enum BeamExpansion<'a> {
 /// outer algorithm module can focus on validation and initial queue setup.
 pub(super) fn run_search<'a>(
     scheduler: &EstScheduler,
-    tasks: &[Task],
     initial_state: ScheduleState<'a>,
     horizon: &Period<MJD>,
+    scoring_ctx: &ScoringContext<'_>,
     ctx: Option<&ProblemCtx<'_>>,
 ) -> Schedule {
     let mut live_beams: Vec<ScheduleState> = vec![initial_state];
@@ -33,34 +31,30 @@ pub(super) fn run_search<'a>(
     let mut round: u32 = 0;
 
     while !live_beams.is_empty() {
-        // Child beams generated in this round, paired with their FOM score.
+        // Child beams generated in this round.
         // This is globally sorted and truncated so only the top-k states survive.
-        let mut next_scored: Vec<ScoredState<'a>> = Vec::new();
+        let mut next_beams: Vec<ScheduleState<'a>> = Vec::new();
 
         for state in live_beams.drain(..) {
-            match expand_beam(scheduler, tasks, state, horizon, round, b, ctx) {
+            match expand_beam(scheduler, state, horizon, round, b, scoring_ctx, ctx) {
                 BeamExpansion::Terminal(state) => terminal_beams.push(state),
-                BeamExpansion::Children(children) => next_scored.extend(children),
+                BeamExpansion::Children(children) => next_beams.extend(children),
             }
         }
 
         // Prune globally across all child beams produced this round. This is
         // where beam search diverges from the greedy single-path EST.
-        next_scored.sort_by(|(a, _), (b, _)| b.total_cmp(a));
-        next_scored.truncate(k); // Keep only the top-k schedules for the next round.
+        next_beams.sort_by(|a, b| b.score.total_cmp(&a.score));
+        next_beams.truncate(k); // Keep only the top-k schedules for the next round.
 
-        live_beams = next_scored.into_iter().map(|(_, s)| s).collect();
+        live_beams = next_beams;
         round += 1;
     }
 
-    // Return the best schedule among all terminal states.
+    // Return the best schedule among all terminal states using cached scores.
     let best = terminal_beams
         .into_iter()
-        .max_by(|a, b| {
-            let fa = scheduler.fom.evaluate(&a.schedule, tasks);
-            let fb = scheduler.fom.evaluate(&b.schedule, tasks);
-            fa.total_cmp(&fb)
-        })
+        .max_by(|a, b| a.score.partial_cmp(&b.score).unwrap_or(Ordering::Equal))
         .expect("EST invariant violated: no terminal beam state produced");
 
     log::info!(
@@ -78,11 +72,11 @@ pub(super) fn run_search<'a>(
 /// coordinates beam collection and pruning.
 fn expand_beam<'a>(
     scheduler: &EstScheduler,
-    tasks: &[Task],
     mut state: ScheduleState<'a>,
     horizon: &Period<MJD>,
     round: u32,
     branching_factor: usize,
+    scoring_ctx: &ScoringContext<'_>,
     ctx: Option<&ProblemCtx<'_>>,
 ) -> BeamExpansion<'a> {
     // Recompute EST metadata from the beam cursor to the end of the global
@@ -101,10 +95,17 @@ fn expand_beam<'a>(
         return BeamExpansion::Terminal(state);
     }
 
-    let children: Vec<ScoredState<'a>> = (0..branches)
+    let children: Vec<ScheduleState<'a>> = (0..branches)
         .filter_map(|branch_idx| {
             build_child_state(
-                scheduler, tasks, &state, horizon, round, branch_idx, branches, ctx,
+                scheduler,
+                scoring_ctx,
+                &state,
+                horizon,
+                round,
+                branch_idx,
+                branches,
+                ctx,
             )
         })
         .collect();
@@ -127,14 +128,14 @@ fn expand_beam<'a>(
 #[allow(clippy::too_many_arguments)]
 fn build_child_state<'a>(
     scheduler: &EstScheduler,
-    tasks: &[Task],
+    scoring_ctx: &ScoringContext<'_>,
     state: &ScheduleState<'a>,
     horizon: &Period<MJD>,
     round: u32,
     branch_idx: usize,
     branch_count: usize,
     ctx: Option<&ProblemCtx<'_>>,
-) -> Option<ScoredState<'a>> {
+) -> Option<ScheduleState<'a>> {
     let mut child = state.clone();
     // Branch `branch_idx` means "take the branch_idx-th currently schedulable
     // candidate from the EST-ordered queue" and explore the schedule that
@@ -184,6 +185,6 @@ fn build_child_state<'a>(
 
     // FOM scoring is the pruning signal: higher-scoring child beams are more
     // likely to survive into the next round.
-    let score = scheduler.fom.evaluate(&child.schedule, tasks);
-    Some((score, child))
+    child.score = scheduler.fom.evaluate(&child.schedule, scoring_ctx);
+    Some(child)
 }

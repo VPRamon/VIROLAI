@@ -22,6 +22,10 @@ pub struct EstCandidate<'a> {
     pub flexibility: f64,
     /// Block this task belongs to, used for dependency-aware placement.
     pub(super) block_id: Option<SchedulingBlockId>,
+    /// Cached by `CandidateQueue::refresh`; undefined before first refresh.
+    pub(super) effective_est: Option<Time<MJD>>,
+    pub(super) is_endangered_cached: bool,
+    pub(super) priority_at_cursor: f64,
 }
 
 impl<'a> EstCandidate<'a> {
@@ -35,6 +39,9 @@ impl<'a> EstCandidate<'a> {
             deadline: None,
             flexibility: 0.0,
             block_id: None,
+            effective_est: None,
+            is_endangered_cached: false,
+            priority_at_cursor: 0.0,
         };
         candidate.refresh(horizon);
         candidate

@@ -7,12 +7,36 @@
 
 use crate::schedule::Schedule;
 use crate::task::Task;
-use crate::time::MJD;
+use crate::time::{MJD, TaskId};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt;
 use std::str::FromStr;
 use std::sync::Arc;
+
+/// Prepared scoring context for FOM evaluation.
+///
+/// Build once per scheduler run to avoid rebuilding the task lookup map on
+/// every call.
+pub struct ScoringContext<'a> {
+    tasks: &'a [Task],
+    task_map: HashMap<TaskId, &'a Task>,
+}
+
+impl<'a> ScoringContext<'a> {
+    pub fn new(tasks: &'a [Task]) -> Self {
+        let task_map = tasks.iter().map(|t| (t.id, t)).collect();
+        Self { tasks, task_map }
+    }
+
+    pub fn tasks(&self) -> &[Task] {
+        self.tasks
+    }
+
+    pub fn task(&self, id: TaskId) -> Option<&Task> {
+        self.task_map.get(&id).copied()
+    }
+}
 
 /// Scores a schedule state. Higher values indicate better schedules.
 ///
@@ -20,7 +44,7 @@ use std::sync::Arc;
 /// expansion round.
 pub trait ScheduleFom: std::fmt::Debug + Send + Sync {
     /// Return the scalar score used to rank one schedule state against another.
-    fn evaluate(&self, schedule: &Schedule, tasks: &[Task]) -> f64;
+    fn evaluate(&self, schedule: &Schedule, ctx: &ScoringContext) -> f64;
 }
 
 /// User-facing EST figure-of-merit selector.
@@ -75,12 +99,11 @@ pub struct SoftConstraintFom;
 
 impl ScheduleFom for SoftConstraintFom {
     /// Score by summing the soft-constraint score of every placed task.
-    fn evaluate(&self, schedule: &Schedule, tasks: &[Task]) -> f64 {
-        let task_map: HashMap<_, _> = tasks.iter().map(|t| (t.id, t)).collect();
+    fn evaluate(&self, schedule: &Schedule, ctx: &ScoringContext) -> f64 {
         schedule
             .placements()
             .map(|placement| {
-                let Some(task) = task_map.get(&placement.task_id) else {
+                let Some(task) = ctx.task(placement.task_id) else {
                     // Missing task metadata should not panic during ranking; it
                     // simply contributes no additional soft score.
                     return 0.0;
@@ -115,7 +138,7 @@ impl CompositeFom {
 
 impl ScheduleFom for CompositeFom {
     /// Score first by `primary`, then by `secondary` as a tie-breaker.
-    fn evaluate(&self, schedule: &Schedule, tasks: &[Task]) -> f64 {
-        self.primary.evaluate(schedule, tasks) * 1.0e9 + self.secondary.evaluate(schedule, tasks)
+    fn evaluate(&self, schedule: &Schedule, ctx: &ScoringContext) -> f64 {
+        self.primary.evaluate(schedule, ctx) * 1.0e9 + self.secondary.evaluate(schedule, ctx)
     }
 }

@@ -15,4 +15,6 @@ pub struct ScheduleState<'a> {
     pub(super) schedule: Schedule,
     /// Candidate queue refreshed relative to `cursor`.
     pub(super) candidates: CandidateQueue<'a>,
+    /// Cached FOM score for this state.
+    pub(super) score: f64,
 }

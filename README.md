@@ -1,19 +1,64 @@
+<div align="center">
+
 # PhD Scheduler
 
-This repository contains three main runnable pieces:
+Rust tooling for astronomical observation scheduling:
+CTAO dataset adaptation, EST- and HAP-based scheduling, experiment sweeps, and TSI-backed schedule inspection.
 
-- `ctao_adapter`: converts CTA dataset directories into a scheduler-ready `scheduling_problem.json`
-- `scheduler`: runs the Rust scheduler on a `scheduling_problem.json` input
-- `webapp`: starts the adapted TSI web UI for uploading and analyzing schedules
+[Quick Start](#quick-start) | [Components](#components) | [Data Model](#data-model) | [Web App](#web-app) | [QA](#qa)
 
-## Prerequisites
+</div>
 
-- Rust with `cargo`
-- Docker and Docker Compose for the webapp stack
+## Overview
 
-## 1. Run the adapter
+This repository bundles the main pieces used in the current scheduling workflow:
 
-Use the adapter to convert one CTA dataset directory into a single scheduler input file.
+- convert CTAO dataset directories into a scheduler-ready `scheduling_problem.json`
+- compute schedules with the Rust scheduler (EST or HAP engine)
+- run repeatable EST parameter sweeps for experiments
+- inspect problems and generated schedules in an adapted TSI web application
+
+The broader research context is astronomical observation scheduling. A useful reference is [A hybrid multi-start metaheuristic scheduler for astronomical observations](https://doi.org/10.1016/j.engappai.2023.106856). The runnable CLI surface in this repository is currently EST-based, so treat that paper as research background rather than a one-to-one description of the shipped implementation here.
+
+## Components
+
+| Component | Entry point | Purpose |
+| --- | --- | --- |
+| Scheduler library | [`src/lib.rs`](src/lib.rs) | Core scheduling types, prescheduler, EST scheduler, time handling, and constraints |
+| `scheduler` | [`src/main.rs`](src/main.rs) | Reads a scheduling problem, computes feasible windows, runs EST or HAP, and writes an annotated schedule |
+| `ctao_adapter` | [`scripts/ctao_adapter.rs`](scripts/ctao_adapter.rs) | Converts CTAO `*_internalSDC.json` directories into `scheduling_problem.json` |
+| `est_experiment` | [`scripts/est_experiment/main.rs`](scripts/est_experiment/main.rs) | Sweeps EST configurations and writes schedules, a manifest, and a comparison CSV |
+| `phd_tsi_server` | [`webapp/scripts/phd_tsi_server.rs`](webapp/scripts/phd_tsi_server.rs) | Runs the adapted TSI backend locally |
+| Docker web app | [`webapp/setup.sh`](webapp/setup.sh) | Starts the adapted frontend, backend, and PostgreSQL stack |
+
+## Quick Start
+
+### Prerequisites
+
+- Rust toolchain with `cargo`
+- Docker with Compose support for the web application
+- CTAO datasets under `data/CTA-N/` or `data/CTA-S/` if you want to use the adapter shortcuts
+
+### Common Flow
+
+1. Convert a CTAO dataset into `scheduling_problem.json`.
+2. Run the scheduler on that JSON file.
+3. Optionally open the web app to inspect the problem or the produced schedule.
+
+```bash
+cargo run --bin ctao_adapter -- CTA-N
+cargo run --bin scheduler --release -- data/CTA-N/scheduling_problem.json
+./webapp/setup.sh
+```
+
+Once the stack is running:
+
+- frontend: `http://localhost:3000`
+- backend health: `http://localhost:8080/health`
+
+## CLI Workflows
+
+### 1. Convert CTAO Input
 
 ```bash
 cargo run --bin ctao_adapter -- <dataset_dir> [output_json]
@@ -27,17 +72,23 @@ cargo run --bin ctao_adapter -- CTA-S
 cargo run --bin ctao_adapter -- data/CTA-N data/CTA-N/scheduling_problem.json
 ```
 
-Notes:
+What the adapter does:
 
-- `CTA-N` and `CTA-S` are resolved automatically under `data/`
-- if `output_json` is omitted, the adapter writes `<dataset_dir>/scheduling_problem.json`
+- resolves shorthand dataset names `CTA-N` and `CTA-S` under `data/`
+- writes `<dataset_dir>/scheduling_problem.json` when `output_json` is omitted
+- emits the envelope validated by [`schemas/scheduling_problem.schema.json`](schemas/scheduling_problem.schema.json)
+- converts each CTAO scheduling block into one scheduler block containing one task
+- infers the observing site from the dataset and fills telescope-level hard constraints
+- sets `night_time.twilight = "Nautical"` and `moon_altitude = [-90, 0]` on the generated resource
+- uses a default schedule window of `[2028-01-01T00:00:00Z, 2029-01-01T00:00:00Z)` expressed in MJD UTC
 
-## 2. Run the scheduler
-
-Run the scheduler on a `scheduling_problem.json` file:
+### 2. Run the Scheduler
 
 ```bash
-cargo run --bin scheduler -- <input_json> [horizon_start_mjd horizon_end_mjd] [--est-fom <soft_constraint>] [--est-e <u32>] [--est-k <usize>] [--est-b <usize>]
+cargo run --bin scheduler -- <input_json> [horizon_start_mjd horizon_end_mjd] \
+  [--algorithm est|hap] \
+  [EST options] \
+  [HAP options]
 ```
 
 Examples:
@@ -47,49 +98,97 @@ cargo run --bin scheduler --release -- data/CTA-N/scheduling_problem.json
 cargo run --bin scheduler --release -- data/CTA-S/scheduling_problem.json
 ```
 
-Optional horizon override:
+Override the scheduling horizon:
 
 ```bash
 cargo run --bin scheduler -- data/CTA-N/scheduling_problem.json 61710.0 61720.0
 ```
 
-Optional EST configuration override:
+Override EST parameters:
 
 ```bash
-cargo run --bin scheduler -- data/CTA-N/scheduling_problem.json --est-fom soft_constraint --est-e 2 --est-k 5 --est-b 3
+cargo run --bin scheduler -- data/CTA-N/scheduling_problem.json \
+  --est-fom soft_constraint \
+  --est-e 2 \
+  --est-k 5 \
+  --est-b 3
 ```
 
-The scheduler writes a result file next to the input using the pattern:
+#### HAP (Hybrid Asynchronous Proposal)
 
-```text
-<input_stem>_schedule.json
+Run with the HAP algorithm using default settings:
+
+```bash
+cargo run --bin scheduler --release -- data/CTA-N/scheduling_problem.json \
+  --algorithm hap
 ```
 
-For example:
+Run with custom HAP parameters:
+
+```bash
+cargo run --bin scheduler --release -- data/CTA-N/scheduling_problem.json \
+  --algorithm hap \
+  --hap-num-crus 8 \
+  --hap-cru-iterations 256 \
+  --hap-stochastic-range 5 \
+  --hap-seed 42
+```
+
+HAP options:
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `--hap-num-crus` | `4` | Number of parallel CRU workers and survivor schedules kept between rounds |
+| `--hap-cru-iterations` | `128` | Maximum repair iterations per CRU run |
+| `--hap-stochastic-range` | `3` | Number of lowest-cost candidate windows to choose from stochastically |
+| `--hap-seed` | `0` | Master seed for deterministic per-CRU RNG derivation |
+| `--hap-impatience-alpha` | `1.0` | Impatience cost scaling factor |
+
+HAP notes:
+
+- each `SchedulingBlock` is one **proposal**; proposal priority is the sum of its member-task soft-constraint priorities
+- CRU workers repair one proposal at a time: proposal tasks are the insertion target and are never evicted once placed
+- survivors are ranked by completion fitness (fraction of proposals fully placed, weighted by priority), then by total science time, then by deterministic tie-breakers
+- `--hap-seed` guarantees reproducible results across runs with the same input and configuration
+- EST-specific flags (`--est-*`) and HAP-specific flags (`--hap-*`) are mutually exclusive; mixing them is an error
+
+Scheduler notes:
+
+- the preferred input format is the `scheduling_problem.json` envelope with `resources`, optional `schedule_time_window`, and `scheduling_blocks`
+- legacy top-level arrays of scheduling blocks are still accepted
+- if `schedule_time_window` is absent, the scheduler falls back to the union of task `time_window` constraints when available
+- the default algorithm is `--algorithm est` with EST configuration `--est-fom soft_constraint --est-e 1 --est-k 1 --est-b 1`
+- output is written next to the input as `<input_stem>_schedule.json`
+- each task in the output is annotated with:
+  - `scheduled`
+  - `scheduled_start_mjd_utc`
+  - `scheduled_end_mjd_utc`
+
+Example output path:
 
 ```text
 data/CTA-N/scheduling_problem_schedule.json
 ```
 
-## 2b. Run an EST experiment sweep
+### 3. Run an EST Experiment Sweep
 
-Run a whole EST configuration sweep and write one schedule per configuration plus a comparison CSV:
+Run a full EST sweep from a JSON spec:
 
 ```bash
 cargo run --bin est_experiment -- --spec experiments/ctao_n_est.json
 ```
 
-You can also drive the sweep directly from CLI overrides:
+Or drive the sweep from CLI overrides:
 
 ```bash
 cargo run --bin est_experiment -- data/CTA-N/scheduling_problem.json \
-  --output-dir out/ \
+  --output-dir out/ctao_n_est \
   --est-e-values 1,2 \
   --est-k-values 1,4 \
   --est-b-values 1,2
 ```
 
-Generated output layout:
+Generated artifact layout:
 
 ```text
 <output_dir>/
@@ -101,20 +200,18 @@ Generated output layout:
       ...
 ```
 
-  `comparison.csv` is intentionally compact and contains only:
+The comparison CSV contains compact per-run metrics:
 
-  - `run_slug`
-  - `is_baseline`
-  - `scheduled_task_count`
-  - `fitness_priority_sum` (sum of priorities of scheduled tasks)
-  - `scheduled_priority_p25`
-  - `scheduled_priority_p50`
-  - `scheduled_priority_p75`
-  - `scheduled_priority_p90`
+- `run_slug`
+- `is_baseline`
+- `scheduled_task_count`
+- `fitness_priority_sum`
+- `scheduled_priority_p25`
+- `scheduled_priority_p50`
+- `scheduled_priority_p75`
+- `scheduled_priority_p90`
 
-  `run_slug` uses the compact naming stem `e{endangered_threshold}-k{k_beams}-b{branching_factor}`.
-
-Example experiment-spec JSON:
+Minimal experiment spec:
 
 ```json
 {
@@ -128,9 +225,13 @@ Example experiment-spec JSON:
 }
 ```
 
-## 3. Run the webapp
+For the full CLI and sweep details, see [`scripts/README.md`](scripts/README.md).
 
-The simplest way to run the webapp is with Docker from the repository root:
+## Web App
+
+### Docker Stack
+
+The simplest way to run the adapted TSI stack is from the repository root:
 
 ```bash
 ./webapp/setup.sh
@@ -144,37 +245,110 @@ Useful variants:
 ./webapp/teardown.sh --purge-db
 ```
 
-Once started:
+The Docker setup runs:
 
-- frontend: `http://localhost:3000`
-- backend health endpoint: `http://localhost:8080/health`
+- frontend on `http://localhost:3000`
+- adapted backend on `http://localhost:8080`
+- PostgreSQL with a persistent Docker volume
 
-The webapp backend accepts this repository's `scheduling_problem.json` format directly, so you can upload the adapter output in the UI.
+The UI can upload this repository's `scheduling_problem.json` inputs directly, as well as the annotated schedule outputs produced by the `scheduler` binary.
 
-## Local backend only
+### Local Backend Only
 
-If you only want to run the adapted backend without Docker:
+If you only want the adapted backend without Docker:
 
 ```bash
 cargo run --bin phd_tsi_server
 ```
 
-This starts the HTTP server on `http://localhost:8080`.
+By default the server listens on `http://localhost:8080`. The bind address can be adjusted with `HOST` and `PORT`.
 
-## Recommended flow
+For Docker-specific details and troubleshooting, see [`webapp/docker/README.md`](webapp/docker/README.md).
 
-```bash
-cargo run --bin ctao_adapter -- CTA-N
-cargo run --bin scheduler -- data/CTA-N/scheduling_problem.json
-./webapp/setup.sh
+## Data Model
+
+The preferred on-disk format is the top-level envelope described by [`schemas/scheduling_problem.schema.json`](schemas/scheduling_problem.schema.json):
+
+```json
+{
+  "resources": [
+    {
+      "id": 0,
+      "name": "CTA-N",
+      "location": {
+        "longitude_deg": -17.89,
+        "latitude_deg": 28.76,
+        "height_m": 2396.0
+      },
+      "hard_constraints": {
+        "night_time": { "twilight": "Nautical" },
+        "moon_altitude": { "min_deg": -90.0, "max_deg": 0.0 }
+      }
+    }
+  ],
+  "schedule_time_window": {
+    "start_mjd_utc": 61710.0,
+    "end_mjd_utc": 62076.0
+  },
+  "scheduling_blocks": [
+    {
+      "id": 1,
+      "tasks": [
+        {
+          "id": 1,
+          "name": "target-1",
+          "requested_duration_sec": 1200.0,
+          "target": { "ra_deg": 83.8, "dec_deg": 22.0 },
+          "hard_constraints": {},
+          "soft_constraints": { "priority": 5.0 }
+        }
+      ],
+      "dependencies": []
+    }
+  ]
+}
 ```
 
-Then open `http://localhost:3000` and upload the generated `scheduling_problem.json` or scheduler output as needed for inspection.
+Key schema files:
+
+- [`schemas/scheduling_problem.schema.json`](schemas/scheduling_problem.schema.json): top-level envelope
+- [`schemas/scheduling_blocks.schema.json`](schemas/scheduling_blocks.schema.json): block list and intra-block dependencies
+- [`schemas/task.schema.json`](schemas/task.schema.json): task representation
+- [`schemas/hard_constraints.schema.json`](schemas/hard_constraints.schema.json): task and resource hard constraints
+- [`schemas/soft_constraints.schema.json`](schemas/soft_constraints.schema.json): soft-constraint payloads
+
+The scheduler output preserves the original structure and adds scheduling annotations to each task instead of writing a separate result schema.
+
+## Repository Layout
+
+| Path | Contents |
+| --- | --- |
+| [`src/`](src/) | Scheduler library and `scheduler` CLI |
+| [`scripts/`](scripts/) | CLI utilities, including the CTAO adapter, EST sweep runner, and QA pipeline |
+| [`schemas/`](schemas/) | JSON schemas for problems, blocks, tasks, and constraints |
+| [`data/`](data/) | Example datasets and convenience JSON files |
+| [`webapp/`](webapp/) | Adapted TSI integration, Docker stack, and helper scripts |
+| [`webapp/TSI/`](webapp/TSI/) | TSI submodule used by the web app |
+| [`siderust/`](siderust/) | Local astronomy, time, and coordinate utilities crate |
 
 ## QA
 
-From the repository root:
+From the repository root, the required checks are:
+
+```bash
+cargo clippy --all-targets -- -D warnings
+cargo fmt --all -- --check
+cargo test --all-features
+```
+
+Equivalent helper:
 
 ```bash
 ./scripts/qa-pipeline.sh
+```
+
+If formatting fails, run:
+
+```bash
+cargo fmt --all
 ```
