@@ -1,18 +1,23 @@
 //! CRU (Conflict Resolution Unit) for the HAP scheduler.
 //!
-//! The [`run`] function drives the outer Block Scheduling Cycle described in
-//! the CRU algorithm: for every task in a block it initialises a [`Lobby`]
-//! with that task and drains it via [`task_scheduler::schedule_task`] (the
-//! Task Scheduling Cycle inner step) until the lobby is empty or the
-//! iteration budget [`Configuration::max_iter`] is exhausted.
+//! The CRU heuristic has two nested cycles:
 //!
-//! Task dependencies within the block are **not** considered in this
-//! implementation; tasks are processed in their input order.
+//! 1. The **Block Scheduling Cycle** ([`run_branches`]) iterates over every
+//!    valid completion alternative (DNF branch) of the input block. Each
+//!    branch starts from a fresh clone of the input schedule.
+//! 2. The **Task Scheduling Cycle**
+//!    ([`task_scheduler::task_scheduling_cycle`]) drains a lobby of displaced
+//!    tasks for one block task while tracking the lowest-cost intermediate
+//!    schedule (`s_low`) and restoring it on exit.
+//!
+//! [`run_branches`] returns every completed schedule produced by a satisfied
+//! branch (deduplicated by canonical placement fingerprint). The legacy
+//! [`run`] entry point picks the best of those branches and applies it
+//! in place.
 
 pub mod lobby;
 pub mod task_scheduler;
 
-use self::lobby::Lobby;
 use super::configuration::Configuration;
 use crate::prescheduler::TaskPeriodMap;
 use crate::schedule::Schedule;
@@ -21,24 +26,78 @@ use crate::time::TaskId;
 use rand::Rng;
 use std::collections::{HashMap, HashSet};
 
-/// Place all tasks from `block` into `schedule` using the CRU algorithm.
+/// Run CRU over `block` for every valid completion branch, returning all
+/// resulting completed schedules.
 ///
-/// `all_blocks` is the full set of blocks in the problem.  When a displaced
-/// task belongs to a block other than the one currently being added, it is
-/// looked up from `all_blocks` so it can be rescheduled with its own block
-/// as the protected set.
+/// Each returned schedule starts from a fresh clone of `input` (so OR-branch
+/// state never leaks across alternatives) and satisfies the block's
+/// completion expression. When the block has no completion expression, the
+/// implicit "every task scheduled" rule is used.
 ///
-/// For each task in `block` the algorithm:
-/// 1. Seeds the lobby with that task.
-/// 2. Repeatedly pops a task from the lobby and calls
-///    [`task_scheduler::schedule_task`], which may evict non-protected tasks
-///    back into the lobby.
-/// 3. Stops the inner loop when the lobby is empty or `config.max_iter`
-///    iterations have been used.
+/// `all_blocks` resolves displaced tasks back to their owning block so the
+/// inner cycle can keep using the correct protected set.
 ///
-/// Tasks whose `TaskId` cannot be resolved across all blocks (should not
-/// happen in a well-formed problem) are silently dropped.  Task scheduling
-/// errors (no feasibility windows, no valid candidates) are also ignored.
+/// Schedules are deduplicated by canonical placement fingerprint
+/// `(task_id, start, end)` so identical results from different branches are
+/// emitted only once.
+pub fn run_branches(
+    input: &Schedule,
+    block: &SchedulingBlock,
+    all_blocks: &[SchedulingBlock],
+    periods_map: &TaskPeriodMap,
+    config: &Configuration,
+    rng: &mut impl Rng,
+) -> Vec<Schedule> {
+    let task_index: HashMap<TaskId, (&crate::task::Task, &SchedulingBlock)> = all_blocks
+        .iter()
+        .flat_map(|b| b.iter_tasks().map(move |t| (t.id, (t, b))))
+        .collect();
+
+    let branches = match block.completion_branches() {
+        Some(b) => b,
+        None => return Vec::new(),
+    };
+
+    let mut out: Vec<Schedule> = Vec::new();
+    let mut seen: HashSet<Vec<(u64, u64, u64)>> = HashSet::new();
+
+    for branch in branches {
+        let mut working = input.clone();
+
+        for task_id in &branch {
+            task_scheduler::task_scheduling_cycle(
+                *task_id,
+                &mut working,
+                &task_index,
+                periods_map,
+                config,
+                rng,
+            );
+        }
+
+        if !block.is_complete(&working) {
+            continue;
+        }
+
+        let fp = fingerprint(&working);
+        if seen.insert(fp) {
+            out.push(working);
+        }
+    }
+
+    out
+}
+
+/// Backward-compatible entry point: place tasks from `block` into `schedule`
+/// in place, picking the best schedule produced by [`run_branches`].
+///
+/// "Best" = most placements; ties broken lexicographically on the
+/// canonical placement fingerprint to keep results deterministic for the
+/// [`Selector::Deterministic`](super::configuration::Selector::Deterministic)
+/// selector.
+///
+/// When no branch produces a completed schedule, `schedule` is left
+/// untouched.
 pub fn run(
     schedule: &mut Schedule,
     block: &SchedulingBlock,
@@ -47,42 +106,261 @@ pub fn run(
     config: &Configuration,
     rng: &mut impl Rng,
 ) {
-    // Build a flat TaskId -> (&Task, &SchedulingBlock) index once per call.
-    let task_index: HashMap<TaskId, (&crate::task::Task, &SchedulingBlock)> = all_blocks
-        .iter()
-        .flat_map(|b| b.iter_tasks().map(move |t| (t.id, (t, b))))
-        .collect();
+    let candidates = run_branches(schedule, block, all_blocks, periods_map, config, rng);
+    if let Some(best) = pick_best(candidates) {
+        *schedule = best;
+    }
+}
 
-    for task in block.iter_tasks() {
-        let mut lobby = Lobby::new();
-        lobby.push(task.id);
-
-        let mut run_protected: HashSet<TaskId> = HashSet::new();
-        let mut iter = 0usize;
-        while let Some(task_id) = lobby.pop() {
-            if iter >= config.max_iter {
-                break;
-            }
-            iter += 1;
-
-            let (t, owner_block) = task_index
-                .get(&task_id)
-                .expect("task_id not found in any block — problem is not well-formed");
-
-            if task_scheduler::schedule_task(
-                t,
-                owner_block,
-                schedule,
-                periods_map,
-                &mut lobby,
-                &run_protected,
-                config,
-                rng,
+fn fingerprint(schedule: &Schedule) -> Vec<(u64, u64, u64)> {
+    let mut v: Vec<(u64, u64, u64)> = schedule
+        .placements()
+        .map(|p| {
+            (
+                p.task_id.0,
+                p.start.value().to_bits(),
+                p.end.value().to_bits(),
             )
-            .is_ok()
-            {
-                run_protected.insert(task_id);
-            }
+        })
+        .collect();
+    v.sort();
+    v
+}
+
+fn pick_best(mut candidates: Vec<Schedule>) -> Option<Schedule> {
+    if candidates.is_empty() {
+        return None;
+    }
+    let best_idx = candidates
+        .iter()
+        .enumerate()
+        .max_by(|(_, a), (_, b)| {
+            a.len()
+                .cmp(&b.len())
+                .then_with(|| fingerprint(b).cmp(&fingerprint(a)))
+        })
+        .map(|(i, _)| i)
+        .unwrap_or(0);
+    Some(candidates.swap_remove(best_idx))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::constraints::ConstraintBlocks;
+    use crate::scheduling_block::CompletionExpr;
+    use crate::task::Task;
+    use crate::time::{MJD, Period, PeriodSet, SchedulingBlockId, Time};
+    use qtty::Seconds;
+    use rand::SeedableRng;
+    use rand::rngs::StdRng;
+    use siderust::coordinates::frames::ICRS;
+    use siderust::coordinates::spherical::Direction;
+
+    fn task(id: u64, duration_days: f64) -> Task {
+        Task::new(
+            TaskId(id),
+            format!("t{id}"),
+            Direction::<ICRS>::new_raw(0.0.into(), 0.0.into()),
+            Seconds::new(duration_days * 86400.0),
+            ConstraintBlocks::default(),
+            None,
+        )
+        .unwrap()
+    }
+
+    fn period(s: f64, e: f64) -> Period<MJD> {
+        Period::new(Time::<MJD>::new(s), Time::<MJD>::new(e))
+    }
+
+    fn windows(s: f64, e: f64) -> PeriodSet<MJD> {
+        PeriodSet::from_periods(vec![period(s, e)])
+    }
+
+    fn rng() -> StdRng {
+        StdRng::seed_from_u64(0)
+    }
+
+    fn cfg() -> Configuration {
+        Configuration::default()
+    }
+
+    /// `(t1 ∧ t2) ∨ t3` should produce two distinct completed schedules.
+    #[test]
+    fn or_branch_enumeration_returns_two_schedules() {
+        let mut block = SchedulingBlock::from_tasks(
+            SchedulingBlockId(1),
+            vec![task(1, 1.0), task(2, 1.0), task(3, 1.0)],
+        )
+        .unwrap();
+        block
+            .set_completion(CompletionExpr::Or(vec![
+                CompletionExpr::all_of([TaskId(1), TaskId(2)]),
+                CompletionExpr::Leaf(TaskId(3)),
+            ]))
+            .unwrap();
+
+        let mut periods_map = TaskPeriodMap::new();
+        periods_map.insert(TaskId(1), windows(0.0, 5.0));
+        periods_map.insert(TaskId(2), windows(0.0, 5.0));
+        periods_map.insert(TaskId(3), windows(0.0, 5.0));
+
+        let input = Schedule::new();
+        let mut r = rng();
+        let results = run_branches(
+            &input,
+            &block,
+            &[block_clone(&block)],
+            &periods_map,
+            &cfg(),
+            &mut r,
+        );
+
+        assert_eq!(results.len(), 2);
+        // Branch 1: t1 + t2 placed; Branch 2: only t3 placed.
+        let lens: Vec<usize> = results.iter().map(|s| s.len()).collect();
+        assert!(lens.contains(&2));
+        assert!(lens.contains(&1));
+
+        let only_t3 = results.iter().find(|s| s.len() == 1).unwrap();
+        assert!(only_t3.contains(TaskId(3)));
+        assert!(!only_t3.contains(TaskId(1)));
+        assert!(!only_t3.contains(TaskId(2)));
+    }
+
+    /// Branch isolation: the `t3` branch must NOT carry placements of
+    /// `t1` / `t2` from the other branch.
+    #[test]
+    fn branches_do_not_leak_state() {
+        let mut block = SchedulingBlock::from_tasks(
+            SchedulingBlockId(1),
+            vec![task(1, 1.0), task(2, 1.0), task(3, 1.0)],
+        )
+        .unwrap();
+        block
+            .set_completion(CompletionExpr::Or(vec![
+                CompletionExpr::all_of([TaskId(1), TaskId(2)]),
+                CompletionExpr::Leaf(TaskId(3)),
+            ]))
+            .unwrap();
+
+        let mut periods_map = TaskPeriodMap::new();
+        periods_map.insert(TaskId(1), windows(0.0, 5.0));
+        periods_map.insert(TaskId(2), windows(0.0, 5.0));
+        periods_map.insert(TaskId(3), windows(0.0, 5.0));
+
+        let input = Schedule::new();
+        let mut r = rng();
+        let results = run_branches(
+            &input,
+            &block,
+            &[block_clone(&block)],
+            &periods_map,
+            &cfg(),
+            &mut r,
+        );
+
+        for s in &results {
+            let has_t1_or_t2 = s.contains(TaskId(1)) || s.contains(TaskId(2));
+            let has_t3 = s.contains(TaskId(3));
+            assert!(!(has_t1_or_t2 && has_t3), "branch leaked state");
         }
+    }
+
+    /// Identical schedules from two branches should collapse to one.
+    #[test]
+    fn dedupes_equivalent_schedules() {
+        let mut block =
+            SchedulingBlock::from_tasks(SchedulingBlockId(1), vec![task(1, 1.0)]).unwrap();
+        block
+            .set_completion(CompletionExpr::Or(vec![
+                CompletionExpr::Leaf(TaskId(1)),
+                CompletionExpr::Leaf(TaskId(1)),
+            ]))
+            .unwrap();
+
+        let mut periods_map = TaskPeriodMap::new();
+        periods_map.insert(TaskId(1), windows(0.0, 5.0));
+
+        let input = Schedule::new();
+        let mut r = rng();
+        let results = run_branches(
+            &input,
+            &block,
+            &[block_clone(&block)],
+            &periods_map,
+            &cfg(),
+            &mut r,
+        );
+        assert_eq!(results.len(), 1);
+    }
+
+    /// When no branch can be completed, the result set is empty.
+    #[test]
+    fn returns_empty_when_no_branch_completes() {
+        let mut block =
+            SchedulingBlock::from_tasks(SchedulingBlockId(1), vec![task(1, 1.0)]).unwrap();
+        block
+            .set_completion(CompletionExpr::Leaf(TaskId(1)))
+            .unwrap();
+
+        // No periods -> task can't be scheduled -> branch incomplete.
+        let periods_map = TaskPeriodMap::new();
+
+        let input = Schedule::new();
+        let mut r = rng();
+        let results = run_branches(
+            &input,
+            &block,
+            &[block_clone(&block)],
+            &periods_map,
+            &cfg(),
+            &mut r,
+        );
+        assert!(results.is_empty());
+    }
+
+    /// Two runs with the deterministic selector and identical inputs must
+    /// produce identical placement fingerprints.
+    #[test]
+    fn deterministic_run_branches_is_reproducible() {
+        let mut block =
+            SchedulingBlock::from_tasks(SchedulingBlockId(1), vec![task(1, 1.0), task(2, 1.0)])
+                .unwrap();
+        block
+            .set_completion(CompletionExpr::all_of([TaskId(1), TaskId(2)]))
+            .unwrap();
+
+        let mut periods_map = TaskPeriodMap::new();
+        periods_map.insert(TaskId(1), windows(0.0, 5.0));
+        periods_map.insert(TaskId(2), windows(0.0, 5.0));
+
+        let go = || {
+            let mut r = rng();
+            run_branches(
+                &Schedule::new(),
+                &block,
+                &[block_clone(&block)],
+                &periods_map,
+                &cfg(),
+                &mut r,
+            )
+            .into_iter()
+            .map(|s| fingerprint(&s))
+            .collect::<Vec<_>>()
+        };
+        assert_eq!(go(), go());
+    }
+
+    /// Test helper: rebuild a block by re-creating its tasks with the same IDs.
+    /// Real code never needs to clone blocks, but tests pass `&[SchedulingBlock]`
+    /// and we want the same block in `all_blocks` as the one we're running.
+    fn block_clone(b: &SchedulingBlock) -> SchedulingBlock {
+        let tasks: Vec<Task> = b.iter_tasks().map(|t| task(t.id.0, 1.0)).collect();
+        let mut nb = SchedulingBlock::from_tasks(b.id, tasks).unwrap();
+        if let Some(expr) = b.completion() {
+            nb.set_completion(expr.clone()).unwrap();
+        }
+        nb
     }
 }

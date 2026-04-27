@@ -1,12 +1,17 @@
 //! Task Scheduling Cycle inner step for HAP/CRU.
 //!
-//! [`schedule_task`] places one task from the lobby into the schedule.
-//! It computes all valid [`Candidate`] placements for the task given the
-//! current schedule state, sorts them by insertion cost, selects one
-//! stochastically from the cheapest tier, evicts displaced tasks to the
+//! [`schedule_task`] places one task from the lobby into the schedule. It
+//! computes all valid [`Candidate`] placements for the task given the current
+//! schedule state, sorts them by insertion cost, runs the configured
+//! [`Selector`] over the cheapest tier, evicts displaced tasks to the
 //! [`Lobby`], and inserts the placement.
+//!
+//! [`task_scheduling_cycle`] drains a seeded [`Lobby`] (one initial task plus
+//! any tasks evicted during the run) and tracks the lowest-`lobby_cost`
+//! schedule seen — corresponding to `s_low`/`cost_min` in the CRU pseudo-code
+//! — so the caller can roll back to it on exit.
 
-use super::super::configuration::Configuration;
+use super::super::configuration::{Configuration, Selector};
 use super::lobby::Lobby;
 use crate::prescheduler::TaskPeriodMap;
 use crate::schedule::{Schedule, TaskPlacement};
@@ -15,7 +20,7 @@ use crate::task::Task;
 use crate::time::{MJD, Period, PeriodSet, TaskId};
 use qtty::Day;
 use rand::Rng;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 /// Errors that can occur during a single task-scheduling step.
 #[derive(Debug)]
@@ -51,6 +56,10 @@ struct Candidate {
     /// Non-protected tasks displaced by this placement.
     conflicts: Vec<TaskId>,
     /// Insertion cost: number of tasks that would be displaced.
+    ///
+    /// Local conflict cost is intentionally simple: the count of evicted
+    /// units. Callers wanting a richer cost (e.g. priority-weighted) can
+    /// adjust this single computation site.
     cost: usize,
 }
 
@@ -63,13 +72,9 @@ struct Candidate {
 ///    window, if the task still fits before the window closes.
 ///
 /// Candidates that would displace a protected (block) task are excluded.
-/// The returned list is sorted by `cost` ascending.
-///
-/// # Note on block dependencies
-///
-/// Inter-task ordering constraints within a [`SchedulingBlock`] are **not**
-/// applied here. A future iteration will filter or shift candidates according
-/// to predecessor end times; this is the designated extension point.
+/// The returned list is sorted by `(cost, period.start, conflict count)`
+/// ascending so every selector sees the same canonical ordering and the
+/// deterministic selector can rely on lexicographic tie-break.
 fn build_candidates(
     task: &Task,
     windows: &PeriodSet<MJD>,
@@ -80,7 +85,6 @@ fn build_candidates(
     let mut candidates: Vec<Candidate> = Vec::new();
 
     for window in windows.iter() {
-        // Skip windows too short to fit the task.
         if window.duration() < duration {
             continue;
         }
@@ -88,8 +92,6 @@ fn build_candidates(
         let ws = window.start;
         let we = window.end;
 
-        // Candidate start times: window start, plus immediately after each
-        // placed task that overlaps this window.
         let mut starts = vec![ws];
         let window_interval = Period::new(ws, we);
         for overlapping_id in schedule.overlapping(&window_interval) {
@@ -101,7 +103,6 @@ fn build_candidates(
             }
         }
 
-        // Evaluate each start time and build a Candidate if it fits and is valid.
         for start in starts {
             let end = start + duration;
             if end > we {
@@ -110,12 +111,10 @@ fn build_candidates(
             let period = Period::new(start, end);
             let overlapping = schedule.overlapping(&period);
 
-            // Discard candidates that would evict a protected task.
             if overlapping.iter().any(|id| protected_ids.contains(id)) {
                 continue;
             }
 
-            // All remaining overlapping tasks are non-protected conflicts.
             let cost = overlapping.len();
             candidates.push(Candidate {
                 period,
@@ -125,47 +124,69 @@ fn build_candidates(
         }
     }
 
-    // Sort by cost ascending so the stochastic picker works on a prefix.
-    candidates.sort_by_key(|c| c.cost);
+    candidates.sort_by(|a, b| {
+        a.cost
+            .cmp(&b.cost)
+            .then_with(|| a.period.start.value().total_cmp(&b.period.start.value()))
+            .then_with(|| a.conflicts.len().cmp(&b.conflicts.len()))
+    });
     candidates
 }
 
-/// Choose a candidate index from a cost-sorted slice stochastically.
+/// Pick a candidate index from a cost-sorted slice using `selector`.
 ///
-/// - If zero-cost candidates exist, pick uniformly among them.
-/// - Otherwise, pick uniformly from the `stochastic_range` cheapest.
+/// Zero-cost candidates always win, regardless of the selector — this
+/// implements the spec's "prefer zero-conflict insertion" requirement.
 fn choose_candidate_idx(
     candidates: &[Candidate],
-    stochastic_range: usize,
+    selector: Selector,
+    fallback_range: usize,
     rng: &mut impl Rng,
 ) -> usize {
     debug_assert!(!candidates.is_empty());
-    // `partition_point` returns the number of elements where cost == 0.
+
     let zero_count = candidates.partition_point(|c| c.cost == 0);
-    let range = if zero_count > 0 {
-        zero_count
-    } else {
-        stochastic_range.min(candidates.len())
-    };
-    rng.gen_range(0..range)
+    if zero_count > 0 {
+        return 0;
+    }
+
+    match selector {
+        Selector::Deterministic => 0,
+        Selector::Stochastic { rho } => {
+            let span = if rho == 0 { fallback_range } else { rho };
+            let range = span.max(1).min(candidates.len());
+            rng.gen_range(0..range)
+        }
+        Selector::Random => weighted_random_pick(candidates, rng),
+    }
+}
+
+/// Weight ∝ 1 / (1 + cost). Lower cost ⇒ higher probability.
+fn weighted_random_pick(candidates: &[Candidate], rng: &mut impl Rng) -> usize {
+    let weights: Vec<f64> = candidates
+        .iter()
+        .map(|c| 1.0 / (1.0 + c.cost as f64))
+        .collect();
+    let total: f64 = weights.iter().sum();
+    if total <= 0.0 {
+        return 0;
+    }
+    let mut r = rng.gen_range(0.0..total);
+    for (i, w) in weights.iter().enumerate() {
+        if r < *w {
+            return i;
+        }
+        r -= w;
+    }
+    candidates.len() - 1
 }
 
 /// Place `task` into `schedule`, evicting non-protected conflicts to `lobby`.
 ///
-/// # Steps
-///
-/// 1. **Assert membership** – verifies that `task` belongs to `block`.
-/// 2. **Build candidates** – evaluates all valid start times, computing the
-///    displaced task set and cost for each.
-/// 3. **Stochastic selection** – picks from the cheapest cost tier.
-/// 4. **Evict conflicts** – unplaces all non-protected tasks that overlap the
-///    chosen interval and enqueues them in `lobby`.
-/// 5. **Insert placement** – records the task in `schedule`.
-///
 /// # Errors
 ///
-/// Returns a [`TaskSchedulerError`] if the task has no feasibility windows or
-/// if all candidate periods conflict with a protected task.
+/// Returns a [`TaskSchedulerError`] if the task has no feasibility windows
+/// or if all candidate periods conflict with a protected task.
 #[allow(clippy::too_many_arguments)]
 pub fn schedule_task(
     task: &Task,
@@ -189,7 +210,6 @@ pub fn schedule_task(
         .filter(|w| !w.is_empty())
         .ok_or(TaskSchedulerError::NoFeasibilityWindows)?;
 
-    // Protected set: block tasks + tasks already placed in this inner run.
     let mut protected_ids: HashSet<TaskId> = block.iter().collect();
     protected_ids.extend(run_protected.iter().copied());
 
@@ -198,16 +218,15 @@ pub fn schedule_task(
         return Err(TaskSchedulerError::NoValidCandidates);
     }
 
-    let chosen_idx = choose_candidate_idx(&candidates, config.stochastic_range, rng);
+    let chosen_idx =
+        choose_candidate_idx(&candidates, config.selector, config.stochastic_range, rng);
     let chosen = &candidates[chosen_idx];
 
-    // Evict displaced tasks and send them to the lobby.
     for &conflict_id in &chosen.conflicts {
         let _ = schedule.unplace_task(conflict_id);
         lobby.push(conflict_id);
     }
 
-    // Place the task.
     schedule.insert_placement(TaskPlacement {
         task_id: task.id,
         start: chosen.period.start,
@@ -215,6 +234,114 @@ pub fn schedule_task(
     });
 
     Ok(())
+}
+
+/// Cheapest insertion cost for `task` against the current `schedule`.
+fn min_window_cost(
+    task: &Task,
+    windows: &PeriodSet<MJD>,
+    schedule: &Schedule,
+    protected_ids: &HashSet<TaskId>,
+) -> Option<usize> {
+    let candidates = build_candidates(task, windows, schedule, protected_ids);
+    candidates.first().map(|c| c.cost)
+}
+
+/// Sum of cheapest insertion costs across the lobby.
+///
+/// This is the CRU `cost_lobby` — a local, monotone proxy for "how much
+/// repair is still pending". A task with no valid window contributes
+/// `usize::MAX` (saturating) so its presence cannot lower the metric.
+fn lobby_cost(
+    lobby: &Lobby,
+    schedule: &Schedule,
+    task_index: &HashMap<TaskId, &Task>,
+    periods_map: &TaskPeriodMap,
+    protected_ids: &HashSet<TaskId>,
+) -> usize {
+    let mut total: usize = 0;
+    for id in lobby.iter() {
+        let cost = match (task_index.get(id), periods_map.get(id)) {
+            (Some(task), Some(windows)) if !windows.is_empty() => {
+                min_window_cost(task, windows, schedule, protected_ids).unwrap_or(usize::MAX)
+            }
+            _ => usize::MAX,
+        };
+        total = total.saturating_add(cost);
+    }
+    total
+}
+
+/// Run the inner Task Scheduling Cycle for one block task.
+///
+/// Drains `lobby` until it is empty or `config.max_iter` iterations have
+/// been used. Tasks evicted by [`schedule_task`] re-enter the lobby and are
+/// re-attempted in subsequent iterations. While the cycle runs, the
+/// schedule with the lowest observed `lobby_cost` is snapshotted and
+/// restored on exit (the CRU `s_low`/`cost_min` recovery rule).
+///
+/// `task_index` resolves any [`TaskId`] in the lobby (or evicted from the
+/// schedule) back to its owning [`Task`] / [`SchedulingBlock`] pair so the
+/// inner cycle can keep using each task's own block as its protected set.
+pub fn task_scheduling_cycle(
+    initial_task_id: TaskId,
+    schedule: &mut Schedule,
+    task_index: &HashMap<TaskId, (&Task, &SchedulingBlock)>,
+    periods_map: &TaskPeriodMap,
+    config: &Configuration,
+    rng: &mut impl Rng,
+) {
+    let mut lobby = Lobby::new();
+    lobby.push(initial_task_id);
+
+    let mut run_protected: HashSet<TaskId> = HashSet::new();
+    let mut min_cost: usize = usize::MAX;
+    let mut best_schedule: Schedule = schedule.clone();
+
+    let task_only_index: HashMap<TaskId, &Task> =
+        task_index.iter().map(|(k, (t, _))| (*k, *t)).collect();
+
+    let mut iter = 0usize;
+    while let Some(task_id) = lobby.pop() {
+        if iter >= config.max_iter {
+            break;
+        }
+        iter += 1;
+
+        let Some((task, owner_block)) = task_index.get(&task_id).copied() else {
+            continue;
+        };
+
+        let attempt = schedule_task(
+            task,
+            owner_block,
+            schedule,
+            periods_map,
+            &mut lobby,
+            &run_protected,
+            config,
+            rng,
+        );
+
+        if attempt.is_ok() {
+            run_protected.insert(task_id);
+        }
+
+        let current_cost = lobby_cost(
+            &lobby,
+            schedule,
+            &task_only_index,
+            periods_map,
+            &run_protected,
+        );
+
+        if current_cost < min_cost {
+            min_cost = current_cost;
+            best_schedule = schedule.clone();
+        }
+    }
+
+    *schedule = best_schedule;
 }
 
 #[cfg(test)]
@@ -241,7 +368,6 @@ mod tests {
         Period::new(mjd(s), mjd(e))
     }
 
-    /// Build a minimal `Task` with the given id and duration (in days).
     fn make_task(id: u64, duration_days: f64) -> crate::task::Task {
         use crate::constraints::ConstraintBlocks;
         use qtty::Seconds;
@@ -262,8 +388,6 @@ mod tests {
     fn seeded_rng() -> StdRng {
         StdRng::seed_from_u64(42)
     }
-
-    // ── helper: build a minimal SchedulingBlock containing `task` ────────────
 
     #[test]
     #[cfg(debug_assertions)]
@@ -295,7 +419,7 @@ mod tests {
         let mut block = SchedulingBlock::new(make_block_id(1));
         block.push_task(make_task(1, 1.0)).unwrap();
         let mut schedule = Schedule::new();
-        let periods_map = TaskPeriodMap::new(); // empty
+        let periods_map = TaskPeriodMap::new();
         let mut lobby = Lobby::new();
         let mut rng = seeded_rng();
 
@@ -317,13 +441,12 @@ mod tests {
 
     #[test]
     fn places_task_in_empty_schedule() {
-        let task = make_task(1, 1.0); // 1-day task
+        let task = make_task(1, 1.0);
         let mut block = SchedulingBlock::new(make_block_id(1));
         block.push_task(make_task(1, 1.0)).unwrap();
 
         let mut schedule = Schedule::new();
         let mut periods_map = TaskPeriodMap::new();
-        // Window [0, 5) — task fits at start
         periods_map.insert(task.id, PeriodSet::from_periods(vec![period(0.0, 5.0)]));
 
         let mut lobby = Lobby::new();
@@ -346,12 +469,7 @@ mod tests {
     }
 
     /// Window [0, 2.5), squatter at [1, 2), duration = 2.0 days.
-    ///
-    /// Candidate starts:
-    ///   - ws = 0.0  →  end = 2.0 ≤ 2.5  →  overlaps squatter  →  cost = 1
-    ///   - after squatter: start = 2.0  →  end = 4.0 > 2.5  →  doesn't fit
-    ///
-    /// The only valid candidate has cost = 1, so the squatter must be evicted.
+    /// Only valid candidate has cost 1, so the squatter is evicted.
     #[test]
     fn evicts_non_protected_conflict_to_lobby() {
         let task = make_task(1, 2.0);
@@ -386,21 +504,12 @@ mod tests {
         .unwrap();
 
         assert!(schedule.contains(task.id));
-        assert!(
-            !schedule.contains(squatter.id),
-            "squatter must have been evicted"
-        );
-        assert_eq!(lobby.len(), 1, "squatter must be in the lobby");
+        assert!(!schedule.contains(squatter.id));
+        assert_eq!(lobby.len(), 1);
     }
 
     /// Window [0, 5), squatter at [0, 1), duration = 2.0 days.
-    ///
-    /// Candidates:
-    ///   - start = 0.0  →  end = 2.0  →  overlaps squatter  →  cost = 1
-    ///   - start = 1.0  →  end = 3.0  →  no overlap         →  cost = 0  ← preferred
-    ///
-    /// Zero-cost candidates always win, so task is placed at [1, 3) and
-    /// the squatter is left untouched.
+    /// Zero-cost candidate wins; squatter survives.
     #[test]
     fn prefers_zero_cost_slot_over_eviction() {
         let task = make_task(1, 2.0);
@@ -435,14 +544,44 @@ mod tests {
         .unwrap();
 
         assert!(schedule.contains(task.id));
-        assert!(
-            schedule.contains(squatter.id),
-            "squatter must not be evicted"
-        );
-        assert!(lobby.is_empty(), "lobby must remain empty");
-        // Task must have been placed at [1.0, 3.0) — the only zero-cost slot.
+        assert!(schedule.contains(squatter.id));
+        assert!(lobby.is_empty());
         let placement = schedule.get(task.id).unwrap();
         assert_eq!(placement.start, mjd(1.0));
         assert_eq!(placement.end, mjd(3.0));
+    }
+
+    /// Two runs with the same inputs and seed must produce the same placement
+    /// under the deterministic selector (which never consults the RNG).
+    #[test]
+    fn deterministic_selector_is_reproducible() {
+        fn run_once() -> Period<MJD> {
+            let task = make_task(1, 2.0);
+            let mut block = SchedulingBlock::new(make_block_id(1));
+            block.push_task(make_task(1, 2.0)).unwrap();
+            let mut schedule = Schedule::new();
+            let mut periods_map = TaskPeriodMap::new();
+            periods_map.insert(task.id, PeriodSet::from_periods(vec![period(0.0, 5.0)]));
+            let mut lobby = Lobby::new();
+            let mut rng = StdRng::seed_from_u64(0);
+            let cfg = Configuration {
+                selector: Selector::Deterministic,
+                ..Configuration::default()
+            };
+            schedule_task(
+                &task,
+                &block,
+                &mut schedule,
+                &periods_map,
+                &mut lobby,
+                &HashSet::new(),
+                &cfg,
+                &mut rng,
+            )
+            .unwrap();
+            let p = schedule.get(task.id).unwrap();
+            Period::new(p.start, p.end)
+        }
+        assert_eq!(run_once(), run_once());
     }
 }

@@ -5,10 +5,14 @@
 //! edges carry [`Dependency`] labels that express ordering as predecessor ->
 //! successor.
 
+pub mod completion;
 pub mod serde;
 pub mod task;
 
+pub use completion::CompletionExpr;
+
 use crate::error::ScheduleError;
+use crate::schedule::Schedule;
 use crate::task::Task;
 use crate::time::{SchedulingBlockId, TaskId};
 use petgraph::algo::toposort;
@@ -32,6 +36,10 @@ pub struct SchedulingBlock {
     graph: StableDiGraph<TaskId, Dependency>,
     /// Fast `TaskId` -> graph node index lookup.
     node_map: HashMap<TaskId, NodeIndex>,
+    /// Optional CRU completion expression. When `None`, the block is
+    /// considered complete iff every task is scheduled (an implicit AND of
+    /// all leaves).
+    completion: Option<CompletionExpr>,
 }
 
 impl SchedulingBlock {
@@ -43,6 +51,7 @@ impl SchedulingBlock {
             task_index: HashMap::new(),
             graph: StableDiGraph::new(),
             node_map: HashMap::new(),
+            completion: None,
         }
     }
 
@@ -178,6 +187,59 @@ impl SchedulingBlock {
         toposort(&self.graph, None)
             .map(|indices| indices.into_iter().map(|idx| self.graph[idx]).collect())
             .map_err(|_| ScheduleError::DependencyCycle)
+    }
+
+    /// Borrow the optional completion expression.
+    pub fn completion(&self) -> Option<&CompletionExpr> {
+        self.completion.as_ref()
+    }
+
+    /// Replace the completion expression. Every leaf must reference a task
+    /// already in the block.
+    pub fn set_completion(&mut self, expr: CompletionExpr) -> Result<(), ScheduleError> {
+        for id in expr.referenced_tasks() {
+            if !self.contains_task(id) {
+                return Err(ScheduleError::InvalidTask(format!(
+                    "completion expression references unknown task {} in block {}",
+                    id.0, self.id.0
+                )));
+            }
+        }
+        self.completion = Some(expr);
+        Ok(())
+    }
+
+    /// Clear the completion expression (block reverts to implicit
+    /// AND-of-all-tasks semantics).
+    pub fn clear_completion(&mut self) {
+        self.completion = None;
+    }
+
+    /// Enumerate the disjoint completion alternatives for the outer CRU
+    /// Block Scheduling Cycle.
+    ///
+    /// Each returned inner `Vec` is a flat AND-branch (sorted, deduplicated)
+    /// describing one way the block can be completed. When no completion
+    /// expression is set, returns a single branch containing every task in
+    /// input order.
+    ///
+    /// Returns `None` when the expression is too large to expand
+    /// (see [`completion::MAX_DNF_BRANCHES`]).
+    pub fn completion_branches(&self) -> Option<Vec<Vec<TaskId>>> {
+        match &self.completion {
+            Some(expr) => expr.dnf_branches(),
+            None => Some(vec![self.iter().collect()]),
+        }
+    }
+
+    /// Returns `true` when `schedule` satisfies the block's completion
+    /// expression. With no expression set, returns `true` iff every task is
+    /// scheduled.
+    pub fn is_complete(&self, schedule: &Schedule) -> bool {
+        match &self.completion {
+            Some(expr) => expr.is_satisfied_by(schedule),
+            None => self.iter().all(|id| schedule.contains(id)),
+        }
     }
 }
 

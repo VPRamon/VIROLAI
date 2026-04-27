@@ -1,6 +1,6 @@
 //! Serde support for [`SchedulingBlock`](super::SchedulingBlock).
 
-use super::{Dependency, SchedulingBlock};
+use super::{CompletionExpr, Dependency, SchedulingBlock};
 use crate::constraints::{
     AltitudeConstraint, AzimuthConstraint, ConstraintExpr, MoonAltitudeConstraint, NightConstraint,
     PrioritySoftConstraint, SoftConstraintExpr, TimeConstraint,
@@ -22,6 +22,50 @@ struct SchedulingBlockRepr {
     id: u64,
     tasks: Vec<TaskObjectRepr>,
     dependencies: Vec<DependencyEdgeRepr>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    completion: Option<CompletionExprRepr>,
+}
+
+/// Serde representation of a [`CompletionExpr`].
+///
+/// JSON shapes (mutually exclusive):
+/// - `{"task": <id>}`
+/// - `{"all_of": [..]}`  (AND)
+/// - `{"any_of": [..]}`  (OR)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "snake_case")]
+enum CompletionExprRepr {
+    Task(u64),
+    AllOf(Vec<CompletionExprRepr>),
+    AnyOf(Vec<CompletionExprRepr>),
+}
+
+impl From<&CompletionExpr> for CompletionExprRepr {
+    fn from(expr: &CompletionExpr) -> Self {
+        match expr {
+            CompletionExpr::Leaf(id) => CompletionExprRepr::Task(id.0),
+            CompletionExpr::And(children) => {
+                CompletionExprRepr::AllOf(children.iter().map(Into::into).collect())
+            }
+            CompletionExpr::Or(children) => {
+                CompletionExprRepr::AnyOf(children.iter().map(Into::into).collect())
+            }
+        }
+    }
+}
+
+impl From<CompletionExprRepr> for CompletionExpr {
+    fn from(repr: CompletionExprRepr) -> Self {
+        match repr {
+            CompletionExprRepr::Task(id) => CompletionExpr::Leaf(TaskId(id)),
+            CompletionExprRepr::AllOf(children) => {
+                CompletionExpr::And(children.into_iter().map(Into::into).collect())
+            }
+            CompletionExprRepr::AnyOf(children) => {
+                CompletionExpr::Or(children.into_iter().map(Into::into).collect())
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -224,6 +268,7 @@ fn to_repr(block: &SchedulingBlock) -> Result<SchedulingBlockRepr, String> {
         id: block.id.0,
         tasks,
         dependencies,
+        completion: block.completion().map(CompletionExprRepr::from),
     })
 }
 
@@ -259,6 +304,13 @@ fn from_repr(repr: SchedulingBlockRepr) -> Result<SchedulingBlock, String> {
                     dep.from, dep.to, err
                 )
             })?;
+    }
+
+    if let Some(completion_repr) = repr.completion {
+        let expr: CompletionExpr = completion_repr.into();
+        block
+            .set_completion(expr)
+            .map_err(|err| format!("invalid completion expression: {err}"))?;
     }
 
     Ok(block)
