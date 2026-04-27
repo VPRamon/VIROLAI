@@ -1,5 +1,4 @@
-use scheduler::scheduler::est;
-use scheduler::scheduler::hap;
+use scheduler::scheduler::{SchedulingAlgorithm, est, hap};
 use scheduler::telescope::Telescope;
 use scheduler::time::{MJD, Period, Time};
 use scheduler::{
@@ -16,6 +15,15 @@ enum Algorithm {
     Hap,
 }
 
+impl Algorithm {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Est => "EST",
+            Self::Hap => "HAP",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 struct CliArgs {
     input_path: PathBuf,
@@ -23,7 +31,40 @@ struct CliArgs {
     algorithm: Algorithm,
     est_config: est::Configuration,
     est_fom: est::EstFomKind,
-    hap_config: hap::Configuration,
+    hap_config: HapCliConfig,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct HapCliConfig {
+    num_crus: usize,
+    cru_max_iterations: usize,
+    stochastic_range: usize,
+    random_seed: u64,
+}
+
+impl Default for HapCliConfig {
+    fn default() -> Self {
+        let config = hap::default_planner_config();
+        Self {
+            num_crus: config.population_size,
+            cru_max_iterations: config.cru.max_iter,
+            stochastic_range: config.cru.stochastic_range,
+            random_seed: config.seed,
+        }
+    }
+}
+
+impl HapCliConfig {
+    fn planner_config(self) -> hap::PlannerConfig {
+        let num_crus = self.num_crus.max(1);
+        hap::PlannerConfig::hap(
+            self.cru_max_iterations,
+            self.stochastic_range,
+            num_crus,
+            hap::SurvivorSelector::ElitistTopK { k: num_crus },
+            self.random_seed,
+        )
+    }
 }
 
 fn main() {
@@ -70,25 +111,12 @@ fn run() -> Result<(), String> {
 
     let feasible_tasks = possible_periods.values().filter(|p| !p.is_empty()).count();
 
-    let (schedule, algo_elapsed) = match cli.algorithm {
-        Algorithm::Est => {
-            let start = Instant::now();
-            let scheduler = est::EstScheduler::with_fom(cli.est_config, cli.est_fom.into_fom())
-                .map_err(|e| format!("invalid EST configuration: {e}"))?;
-            let schedule = scheduler
-                .run(&problem, &possible_periods, &horizon)
-                .map_err(|e| format!("EST run failed: {e}"))?;
-            (schedule, start.elapsed())
-        }
-        Algorithm::Hap => {
-            let start = Instant::now();
-            let scheduler = hap::HapScheduler::new(cli.hap_config);
-            let schedule = scheduler
-                .run(&problem, &possible_periods, &horizon)
-                .map_err(|e| format!("HAP run failed: {e}"))?;
-            (schedule, start.elapsed())
-        }
-    };
+    let scheduler = build_scheduler(&cli)?;
+    let algo_start = Instant::now();
+    let schedule = scheduler
+        .run(&problem, &possible_periods, &horizon)
+        .map_err(|e| format!("{} run failed: {e}", cli.algorithm.label()))?;
+    let algo_elapsed = algo_start.elapsed();
 
     println!(
         "Loaded {} blocks and {} tasks from {}",
@@ -119,12 +147,11 @@ fn run() -> Result<(), String> {
         }
         Algorithm::Hap => {
             println!(
-                "HAP config: num_crus={}, cru_iterations={}, stochastic_range={}, seed={}, impatience_alpha={}",
+                "HAP config: num_crus={}, cru_iterations={}, stochastic_range={}, seed={}",
                 cli.hap_config.num_crus,
                 cli.hap_config.cru_max_iterations,
                 cli.hap_config.stochastic_range,
                 cli.hap_config.random_seed,
-                cli.hap_config.impatience_alpha,
             );
             println!("HAP elapsed: {:.3}s", algo_elapsed.as_secs_f64());
         }
@@ -157,7 +184,7 @@ fn parse_cli_args(program: &str, args: &[String]) -> Result<CliArgs, String> {
     let mut algorithm = Algorithm::Est;
     let mut est_config = est::Configuration::default();
     let mut est_fom = est::EstFomKind::default();
-    let mut hap_config = hap::Configuration::default();
+    let mut hap_config = HapCliConfig::default();
 
     // Track which algorithm-specific flags were explicitly set
     let mut est_flags_set: Vec<&str> = Vec::new();
@@ -297,18 +324,10 @@ fn parse_cli_args(program: &str, args: &[String]) -> Result<CliArgs, String> {
                 i += 2;
             }
             "--hap-impatience-alpha" => {
-                let flag = args[i].as_str();
-                let Some(value) = args.get(i + 1) else {
-                    print_usage(program);
-                    return Err(format!(
-                        "missing value for {flag} (expected a floating-point number)"
-                    ));
-                };
-                hap_config.impatience_alpha = value
-                    .parse::<f64>()
-                    .map_err(|e| format!("invalid {flag} value '{value}': {e}"))?;
-                hap_flags_set.push("--hap-impatience-alpha");
-                i += 2;
+                print_usage(program);
+                return Err(
+                    "--hap-impatience-alpha is not supported by the active HAP planner".to_string(),
+                );
             }
             "-h" | "--help" => {
                 print_usage(program);
@@ -367,7 +386,7 @@ fn print_usage(program: &str) {
     eprintln!(
         "Usage: {program} <input_json> [horizon_start_mjd horizon_end_mjd] [--algorithm est|hap] [EST options] [HAP options]\n\
          EST options: [--est-fom <soft_constraint>] [--est-e <u32>] [--est-k <usize>] [--est-b <usize>]\n\
-         HAP options: [--hap-num-crus <usize>] [--hap-cru-iterations <usize>] [--hap-stochastic-range <usize>] [--hap-seed <u64>] [--hap-impatience-alpha <f64>]\n\
+         HAP options: [--hap-num-crus <usize>] [--hap-cru-iterations <usize>] [--hap-stochastic-range <usize>] [--hap-seed <u64>]\n\
          Aliases: --est-endangered-threshold <u32> for --est-e, --est-schedule-states <usize> for --est-k, --est-branching-factor <usize> for --est-b\n\
          Example: {program} data/ctao_n.json --algorithm est --est-fom soft_constraint --est-e 2 --est-k 5 --est-b 3\n\
          Example: {program} data/ctao_n.json --algorithm hap --hap-num-crus 8 --hap-seed 42"
@@ -386,11 +405,7 @@ fn print_telescope(telescope: &Telescope) {
 }
 
 fn print_schedule(schedule: &Schedule, algorithm: Algorithm) {
-    let label = match algorithm {
-        Algorithm::Est => "EST",
-        Algorithm::Hap => "HAP",
-    };
-    println!("{label} placed {} tasks", schedule.len());
+    println!("{} placed {} tasks", algorithm.label(), schedule.len());
 
     let mut placements: Vec<_> = schedule.placements().collect();
     placements.sort_by(|a, b| {
@@ -496,7 +511,6 @@ fn build_schedule_metadata(
                 "cru_max_iterations": cli.hap_config.cru_max_iterations,
                 "stochastic_range": cli.hap_config.stochastic_range,
                 "random_seed": cli.hap_config.random_seed,
-                "impatience_alpha": cli.hap_config.impatience_alpha,
             });
             ("hap".to_string(), config)
         }
@@ -507,6 +521,19 @@ fn build_schedule_metadata(
         algorithm_config,
         location: Some(location),
         period: Some(period),
+    }
+}
+
+fn build_scheduler(cli: &CliArgs) -> Result<Box<dyn SchedulingAlgorithm>, String> {
+    match cli.algorithm {
+        Algorithm::Est => {
+            let scheduler = est::EstScheduler::with_fom(cli.est_config, cli.est_fom.into_fom())
+                .map_err(|e| format!("invalid EST configuration: {e}"))?;
+            Ok(Box::new(scheduler))
+        }
+        Algorithm::Hap => Ok(Box::new(hap::HapScheduler::new(
+            cli.hap_config.planner_config(),
+        ))),
     }
 }
 

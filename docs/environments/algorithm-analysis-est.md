@@ -15,6 +15,11 @@ as `*.est_trace.jsonl`.
 
 > For experiment generation and trace import workflow, see
 > [`../est-intelligence-guide.md`](../est-intelligence-guide.md).
+>
+> For an interpretation of the `out/run-20260427T143841-253798026Z/`
+> sweep where larger branching factors reduced scheduling rate and priority
+> capture, see
+> [`est-sweep-results-interpretation.md`](est-sweep-results-interpretation.md).
 
 ## How to think about this page
 

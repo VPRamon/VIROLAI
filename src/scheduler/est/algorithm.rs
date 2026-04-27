@@ -8,6 +8,7 @@ use super::validation;
 use crate::error::ScheduleError;
 use crate::prescheduler::TaskPeriodMap;
 use crate::schedule::{Schedule, SchedulingProblem};
+use crate::scheduler::SchedulingAlgorithm;
 use crate::scheduling_block::SchedulingBlock;
 use crate::task::Task;
 use crate::time::{MJD, Period, SchedulingBlockId};
@@ -163,4 +164,15 @@ where
     I: IntoIterator<Item = Task>,
 {
     EstScheduler::default().run_scheduler(tasks, possible_periods, horizon)
+}
+
+impl SchedulingAlgorithm for EstScheduler {
+    fn run(
+        &self,
+        problem: &SchedulingProblem,
+        possible_periods: &TaskPeriodMap,
+        horizon: &Period<MJD>,
+    ) -> Result<Schedule, ScheduleError> {
+        EstScheduler::run(self, problem, possible_periods, horizon)
+    }
 }

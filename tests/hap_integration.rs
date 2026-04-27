@@ -7,7 +7,7 @@ use scheduler::{
     Period, PeriodSet, TaskPeriodMap,
     constraints::ConstraintExpr,
     schedule::{Schedule, SchedulingProblem},
-    scheduler::hap::{Configuration, HapScheduler},
+    scheduler::hap::{HapScheduler, Selector, SurvivorSelector, default_planner_config},
     scheduling_block::{Dependency, SchedulingBlock},
     task::Task,
     time::{MJD, SchedulingBlockId, TaskId, Time},
@@ -125,7 +125,7 @@ fn hap_is_deterministic_with_fixed_seed() {
         possible_periods.insert(TaskId(id), full_window(&h));
     }
 
-    let config = Configuration::default(); // random_seed = 0
+    let config = default_planner_config(); // seed = 0
 
     let run = |problem: &SchedulingProblem| -> Schedule {
         HapScheduler::new(config)
@@ -209,13 +209,18 @@ fn hap_completes_block_with_conflicts() {
     );
 }
 
-/// `Configuration::default()` must carry the documented default values.
+/// `default_planner_config()` must carry the documented HAP defaults.
 #[test]
 fn hap_default_config() {
-    let cfg = Configuration::default();
-    assert_eq!(cfg.num_crus, 4);
-    assert_eq!(cfg.cru_max_iterations, 128);
-    assert_eq!(cfg.stochastic_range, 3);
-    assert_eq!(cfg.random_seed, 0);
-    assert!((cfg.impatience_alpha - 1.0).abs() < f64::EPSILON);
+    let cfg = default_planner_config();
+    assert_eq!(cfg.population_size, 4);
+    assert_eq!(cfg.cru.max_iter, 128);
+    assert_eq!(cfg.cru.stochastic_range, 3);
+    assert_eq!(cfg.seed, 0);
+    assert!(matches!(cfg.cru.selector, Selector::Stochastic { rho: 3 }));
+    assert!(matches!(
+        cfg.survivor,
+        SurvivorSelector::ElitistTopK { k: 4 }
+    ));
+    assert!(cfg.include_rejection_candidate);
 }

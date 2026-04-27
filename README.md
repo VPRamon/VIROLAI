@@ -18,7 +18,7 @@ This repository bundles the main pieces used in the current scheduling workflow:
 - run repeatable EST parameter sweeps for experiments
 - inspect problems and generated schedules in an adapted TSI web application
 
-The broader research context is astronomical observation scheduling. A useful reference is [A hybrid multi-start metaheuristic scheduler for astronomical observations](https://doi.org/10.1016/j.engappai.2023.106856). The runnable CLI surface in this repository is currently EST-based, so treat that paper as research background rather than a one-to-one description of the shipped implementation here.
+The broader research context is astronomical observation scheduling. A useful reference is [A hybrid multi-start metaheuristic scheduler for astronomical observations](https://doi.org/10.1016/j.engappai.2023.106856). The runnable CLI can execute either the EST scheduler or the HAP planner; treat the paper as research background rather than a one-to-one description of every shipped implementation detail.
 
 ## Components
 
@@ -91,7 +91,9 @@ cargo run --bin scheduler -- <input_json> [horizon_start_mjd horizon_end_mjd] \
   [HAP options]
 ```
 
-Examples:
+#### EST
+
+Run with the default EST algorithm and default EST settings:
 
 ```bash
 cargo run --bin scheduler --release -- data/CTA-N/scheduling_problem.json
@@ -138,16 +140,15 @@ HAP options:
 
 | Flag | Default | Description |
 | --- | --- | --- |
-| `--hap-num-crus` | `4` | Number of parallel CRU workers and survivor schedules kept between rounds |
+| `--hap-num-crus` | `4` | Number of CRU attempts per block and survivor schedules kept between rounds |
 | `--hap-cru-iterations` | `128` | Maximum repair iterations per CRU run |
 | `--hap-stochastic-range` | `3` | Number of lowest-cost candidate windows to choose from stochastically |
 | `--hap-seed` | `0` | Master seed for deterministic per-CRU RNG derivation |
-| `--hap-impatience-alpha` | `1.0` | Impatience cost scaling factor |
 
 HAP notes:
 
 - each `SchedulingBlock` is scheduled as one unit; block priority is the sum of its member-task soft-constraint priorities
-- CRU workers repair one scheduling block at a time: that block's tasks are the insertion target and are never evicted once placed
+- HAP uses stochastic CRU-S attempts over the active survivor set; `--hap-num-crus` controls both the number of attempts and the survivor cap
 - survivors are ranked by completion fitness (fraction of scheduling blocks fully placed, weighted by priority), then by total science time, then by deterministic tie-breakers
 - `--hap-seed` guarantees reproducible results across runs with the same input and configuration
 - EST-specific flags (`--est-*`) and HAP-specific flags (`--hap-*`) are mutually exclusive; mixing them is an error
