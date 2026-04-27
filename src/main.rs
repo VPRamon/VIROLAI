@@ -2,7 +2,10 @@ use scheduler::scheduler::est;
 use scheduler::scheduler::hap;
 use scheduler::telescope::Telescope;
 use scheduler::time::{MJD, Period, Time};
-use scheduler::{Schedule, ScheduleOutput, SchedulingProblem, preschedule};
+use scheduler::{
+    LocationMeta, PeriodMeta, Schedule, ScheduleMetadata, ScheduleOutput, SchedulingProblem,
+    preschedule,
+};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -40,7 +43,7 @@ fn run() -> Result<(), String> {
         Err(error) => return Err(error),
     };
 
-    let input_path = cli.input_path;
+    let input_path = cli.input_path.clone();
     let horizon_override = cli.horizon_override;
 
     let text = fs::read_to_string(&input_path)
@@ -133,7 +136,8 @@ fn run() -> Result<(), String> {
     print_schedule(&schedule, cli.algorithm);
 
     let output_path = derive_output_path(&input_path);
-    let output = ScheduleOutput::new(raw_json, &schedule);
+    let metadata = build_schedule_metadata(telescope, &horizon, &cli);
+    let output = ScheduleOutput::new(raw_json, &schedule, Some(metadata));
     let output_text = serde_json::to_string_pretty(&output)
         .map_err(|e| format!("failed to serialize schedule output: {e}"))?;
     fs::write(&output_path, &output_text)
@@ -457,6 +461,53 @@ fn build_horizon(
     detected.ok_or_else(|| {
         "missing schedule_time_window in input and no horizon override was provided".to_string()
     })
+}
+
+fn build_schedule_metadata(
+    telescope: &Telescope,
+    horizon: &Period<MJD>,
+    cli: &CliArgs,
+) -> ScheduleMetadata {
+    let location = LocationMeta {
+        name: telescope.name.clone(),
+        longitude_deg: telescope.location.lon.value(),
+        latitude_deg: telescope.location.lat.value(),
+        height_m: telescope.location.height.value(),
+    };
+
+    let period = PeriodMeta {
+        start_mjd_utc: horizon.start.value(),
+        end_mjd_utc: horizon.end.value(),
+    };
+
+    let (algorithm, algorithm_config) = match cli.algorithm {
+        Algorithm::Est => {
+            let config = serde_json::json!({
+                "k_beams": cli.est_config.k_beams,
+                "branching_factor": cli.est_config.branching_factor,
+                "endangered_threshold": cli.est_config.endangered_threshold,
+                "fom": cli.est_fom.to_string(),
+            });
+            ("est".to_string(), config)
+        }
+        Algorithm::Hap => {
+            let config = serde_json::json!({
+                "num_crus": cli.hap_config.num_crus,
+                "cru_max_iterations": cli.hap_config.cru_max_iterations,
+                "stochastic_range": cli.hap_config.stochastic_range,
+                "random_seed": cli.hap_config.random_seed,
+                "impatience_alpha": cli.hap_config.impatience_alpha,
+            });
+            ("hap".to_string(), config)
+        }
+    };
+
+    ScheduleMetadata {
+        algorithm,
+        algorithm_config,
+        location: Some(location),
+        period: Some(period),
+    }
 }
 
 fn period_from_mjd(start_mjd: f64, end_mjd: f64) -> Result<Period<MJD>, String> {

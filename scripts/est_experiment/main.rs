@@ -53,12 +53,21 @@ fn run() -> Result<(), String> {
         .map_err(|e| format!("failed to create schedules directory: {e}"))?;
 
     let baseline_slug = runs[0].slug();
+    let trace_enabled = cli
+        .trace_enabled
+        .or_else(|| spec.as_ref().map(|s| s.emit_trace))
+        .unwrap_or(true);
 
     let outcomes: Vec<_> = runs
         .par_iter()
         .map(|run| {
             let schedule_path = schedules_dir.join(format!("{}.json", run.schedule_file_stem()));
-            run::execute_run(run, &prepared, &schedule_path)
+            let trace_path = if trace_enabled {
+                Some(schedules_dir.join(format!("{}.est_trace.jsonl", run.schedule_file_stem())))
+            } else {
+                None
+            };
+            run::execute_run(run, &prepared, &schedule_path, trace_path.as_deref())
         })
         .collect::<Result<Vec<_>, _>>()?;
 
@@ -227,12 +236,16 @@ struct CliArgs {
     output_dir: Option<PathBuf>,
     horizon_override: Option<HorizonOverride>,
     cli_axes: SweepAxes,
+    /// `Some(true)` to force traces, `Some(false)` for `--no-trace`,
+    /// `None` to defer to the spec or the default.
+    trace_enabled: Option<bool>,
 }
 
 fn parse_cli(program: &str, args: &[String]) -> Result<CliArgs, String> {
     let mut spec_path: Option<PathBuf> = None;
     let mut output_dir: Option<PathBuf> = None;
     let mut cli_axes = SweepAxes::default();
+    let mut trace_enabled: Option<bool> = None;
     let mut positionals: Vec<&str> = Vec::new();
 
     let mut i = 0usize;
@@ -253,6 +266,14 @@ fn parse_cli(program: &str, args: &[String]) -> Result<CliArgs, String> {
             "--est-b-values" => {
                 cli_axes.branching_factors =
                     parse_range_list(flag_arg(args, &mut i, "--est-b-values")?, "--est-b-values")?;
+            }
+            "--no-trace" => {
+                trace_enabled = Some(false);
+                i += 1;
+            }
+            "--trace" => {
+                trace_enabled = Some(true);
+                i += 1;
             }
             "-h" | "--help" => {
                 print_usage(program);
@@ -294,6 +315,7 @@ fn parse_cli(program: &str, args: &[String]) -> Result<CliArgs, String> {
         output_dir,
         horizon_override,
         cli_axes,
+        trace_enabled,
     })
 }
 
@@ -368,6 +390,7 @@ fn print_usage(program: &str) {
         "Usage: {program} [--spec <spec.json>] [<input_json> [horizon_start_mjd horizon_end_mjd]]\n\
          \x20  [--output-dir <dir>]\n\
          \x20  [--est-e-values <ranges>] [--est-k-values <ranges>] [--est-b-values <ranges>]\n\
+         \x20  [--trace | --no-trace]   (default: traces enabled, written next to schedule JSON)\n\
          \n\
          Ranges: comma-separated values or inclusive integer ranges, e.g. 1-5 or 1,3-5,8\n\
          \n\

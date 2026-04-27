@@ -2,8 +2,22 @@
 
 # Quality Assurance Pipeline
 # Runs clippy, format check, and tests
+#
+# Pass `--with-webapp` to also run the webapp/TSI QA pipeline
+# (`webapp/qa-pipeline.sh`).
 
 set -e
+
+WITH_WEBAPP=0
+for arg in "$@"; do
+    case "${arg}" in
+        --with-webapp) WITH_WEBAPP=1 ;;
+        *)
+            echo "Unknown argument: ${arg}" >&2
+            exit 2
+            ;;
+    esac
+done
 
 echo "================================"
 echo "Quality Assurance Pipeline"
@@ -43,3 +57,11 @@ echo ""
 echo "================================"
 echo "All checks passed! ✓"
 echo "================================"
+
+if [[ "${WITH_WEBAPP}" == "1" ]]; then
+    echo ""
+    echo "================================"
+    echo "Webapp QA Pipeline"
+    echo "================================"
+    "$(dirname "$0")/../webapp/qa-pipeline.sh"
+fi

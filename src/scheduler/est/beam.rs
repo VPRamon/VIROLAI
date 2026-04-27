@@ -3,9 +3,11 @@ use super::algorithm::EstScheduler;
 use super::candidate::IntoTaskPlacement;
 use super::context::{ProblemCtx, check_block_dependencies};
 use super::fom::ScoringContext;
+use super::trace::EstTraceEvent;
 use crate::schedule::Schedule;
 use crate::time::{MJD, Period};
 use std::cmp::Ordering;
+use std::time::Instant;
 
 enum BeamExpansion<'a> {
     Terminal(ScheduleState<'a>),
@@ -23,6 +25,24 @@ pub(super) fn run_search<'a>(
     scoring_ctx: &ScoringContext<'_>,
     ctx: Option<&ProblemCtx<'_>>,
 ) -> Schedule {
+    let run_start = Instant::now();
+
+    if let Some(sink) = scheduler.trace_sink.as_ref() {
+        let task_count = ctx.map(|c| c.problem.task_count()).unwrap_or(0);
+        let block_count = ctx.map(|c| c.problem.block_count()).unwrap_or(0);
+        sink.record(&EstTraceEvent::Started {
+            algorithm: "est",
+            k_beams: scheduler.config.k_beams,
+            branching_factor: scheduler.config.branching_factor,
+            endangered_threshold: scheduler.config.endangered_threshold,
+            fom: scheduler.fom_label.clone(),
+            task_count,
+            block_count,
+            horizon_start_mjd: horizon.start.value(),
+            horizon_end_mjd: horizon.end.value(),
+        });
+    }
+
     let mut live_beams: Vec<ScheduleState> = vec![initial_state];
     let mut terminal_beams: Vec<ScheduleState> = Vec::new();
 
@@ -31,6 +51,10 @@ pub(super) fn run_search<'a>(
     let mut round: u32 = 0;
 
     while !live_beams.is_empty() {
+        let round_start = Instant::now();
+        let live_beams_in = live_beams.len();
+        let terminal_before = terminal_beams.len();
+
         // Child beams generated in this round.
         // This is globally sorted and truncated so only the top-k states survive.
         let mut next_beams: Vec<ScheduleState<'a>> = Vec::new();
@@ -42,28 +66,68 @@ pub(super) fn run_search<'a>(
             }
         }
 
+        let children_generated = next_beams.len();
+
         // Prune globally across all child beams produced this round. This is
         // where beam search diverges from the greedy single-path EST.
         next_beams.sort_by(|a, b| b.score.total_cmp(&a.score));
         next_beams.truncate(k); // Keep only the top-k schedules for the next round.
+
+        if let Some(sink) = scheduler.trace_sink.as_ref() {
+            let beam_scores: Vec<f64> = next_beams.iter().map(|s| s.score).collect();
+            let best_score = beam_scores.first().copied();
+            let worst_score = beam_scores.last().copied();
+            let median_score = if beam_scores.is_empty() {
+                None
+            } else {
+                Some(beam_scores[beam_scores.len() / 2])
+            };
+            let scheduled_in_best = next_beams.first().map(|s| s.scheduled_len());
+            sink.record(&EstTraceEvent::IterationCompleted {
+                round,
+                live_beams_in,
+                children_generated,
+                terminal_added: terminal_beams.len() - terminal_before,
+                kept: next_beams.len(),
+                beam_scores,
+                best_score,
+                median_score,
+                worst_score,
+                scheduled_in_best,
+                wall_ms: round_start.elapsed().as_millis(),
+            });
+        }
 
         live_beams = next_beams;
         round += 1;
     }
 
     // Return the best schedule among all terminal states using cached scores.
-    let best = terminal_beams
-        .into_iter()
-        .max_by(|a, b| a.score.partial_cmp(&b.score).unwrap_or(Ordering::Equal))
-        .expect("EST invariant violated: no terminal beam state produced");
+    let (best_score, best_scheduled_count, best_schedule) = {
+        let best = terminal_beams
+            .into_iter()
+            .max_by(|a, b| a.score.partial_cmp(&b.score).unwrap_or(Ordering::Equal))
+            .expect("EST invariant violated: no terminal beam state produced");
+        (best.score, best.scheduled_len(), best.schedule)
+    };
 
     log::info!(
         "est: done — scheduled {} task(s) in {} round(s)",
-        best.schedule.len(),
+        best_schedule.len(),
         round,
     );
 
-    best.schedule
+    if let Some(sink) = scheduler.trace_sink.as_ref() {
+        sink.record(&EstTraceEvent::Summary {
+            total_rounds: round,
+            terminal_count: 0, // already drained; round count is the structural metric
+            best_score,
+            best_scheduled_count,
+            wall_ms_total: run_start.elapsed().as_millis(),
+        });
+    }
+
+    best_schedule
 }
 
 /// Expand one live beam into either terminal output or scored child beams.

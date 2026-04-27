@@ -23,6 +23,7 @@
 //!   block; dependencies are satisfied before export by the scheduler.
 //! - Unscheduled tasks: tasks without `scheduled_start/end_mjd_utc` are silently
 //!   skipped (they carry no placement information).
+//! - Top-level `schedule_metadata`: not represented in the TSI import model.
 //!
 //! ## Multi-resource rejection
 //! TSI is a single-site analysis tool.  If the payload contains more than one
@@ -38,7 +39,7 @@ use tsi_rust::api::{self, Schedule};
 use tsi_rust::models::ModifiedJulianDate;
 use tsi_rust::qtty;
 use tsi_rust::services::ScheduleImportAdapter;
-use tsi_rust::services::visibility_service::{VisibilityInput, compute_block_visibility};
+use tsi_rust::services::visibility::{VisibilityInput, compute_block_visibility};
 use tsi_rust::siderust::bodies::Sun;
 use tsi_rust::siderust::bodies::solar_system::Moon;
 use tsi_rust::siderust::calculus::solar::Twilight;
@@ -81,50 +82,102 @@ impl ScheduleImportAdapter for PhdScheduleImportAdapter {
     fn parse_schedule(&self, raw_payload: &str) -> anyhow::Result<Schedule> {
         let input: PhdSchedulingProblemRepr = serde_json::from_str(raw_payload)
             .context("Failed to parse PhD scheduling_problem payload")?;
-
-        validate_problem_shape(&input)?;
-
-        let (geographic_location, schedule_name, resource_constraints) =
-            resolve_location_and_name(&input)?;
-        let mut blocks = map_blocks(&input.scheduling_blocks)?;
-        let schedule_period =
-            resolve_schedule_period(input.schedule_time_window.as_ref(), &blocks)?;
-
-        let astronomical_nights =
-            tsi_rust::services::astronomical_night::compute_astronomical_nights(
-                &geographic_location,
-                &schedule_period,
-            );
-
-        let dark_periods = compute_dark_periods(
-            &geographic_location,
-            &schedule_period,
-            &resource_constraints,
-        )?;
-
-        blocks.par_iter_mut().for_each(|block| {
-            block.visibility_periods = compute_block_visibility(&VisibilityInput {
-                location: &geographic_location,
-                schedule_period: &schedule_period,
-                target_ra: block.target_ra,
-                target_dec: block.target_dec,
-                constraints: &block.constraints,
-                min_duration: block.min_observation,
-                astronomical_nights: Some(&dark_periods),
-            });
-        });
-
-        Ok(Schedule {
-            id: None,
-            name: schedule_name,
-            checksum: tsi_rust::models::schedule::compute_schedule_checksum(raw_payload),
-            schedule_period,
-            dark_periods,
-            geographic_location,
-            astronomical_nights,
-            blocks,
-        })
+        let checksum = tsi_rust::models::schedule::compute_schedule_checksum(raw_payload);
+        build_schedule_from_input(input, checksum)
     }
+
+    fn parse_schedule_value(&self, value: &serde_json::Value) -> anyhow::Result<Schedule> {
+        let input: PhdSchedulingProblemRepr = serde_json::from_value(value.clone())
+            .context("Failed to parse PhD scheduling_problem payload")?;
+        // Cheap placeholder checksum: bulk callers overwrite it from the
+        // canonical payload; single-schedule callers go through
+        // `parse_schedule` which hashes the original bytes.
+        let checksum = String::new();
+        build_schedule_from_input(input, checksum)
+    }
+
+    fn parse_schedule_value_structural(
+        &self,
+        value: &serde_json::Value,
+    ) -> anyhow::Result<Schedule> {
+        // Bulk-import fast path: skip the per-item Sun/Moon sweeps and the
+        // per-block visibility computation entirely. The handler immediately
+        // overwrites `dark_periods`, `astronomical_nights`, and every
+        // `block.visibility_periods` from the cached env preschedule
+        // (`apply_to_schedule`), so doing the work here is pure waste.
+        let input: PhdSchedulingProblemRepr = serde_json::from_value(value.clone())
+            .context("Failed to parse PhD scheduling_problem payload")?;
+        build_schedule_structural(input, String::new())
+    }
+}
+
+fn build_schedule_structural(
+    input: PhdSchedulingProblemRepr,
+    checksum: String,
+) -> anyhow::Result<Schedule> {
+    validate_problem_shape(&input)?;
+
+    let (geographic_location, schedule_name, _resource_constraints) =
+        resolve_location_and_name(&input)?;
+    let blocks = map_blocks(&input.scheduling_blocks)?;
+    let schedule_period = resolve_schedule_period(input.schedule_time_window.as_ref(), &blocks)?;
+
+    Ok(Schedule {
+        id: None,
+        name: schedule_name,
+        checksum,
+        schedule_period,
+        dark_periods: Vec::new(),
+        geographic_location,
+        astronomical_nights: Vec::new(),
+        blocks,
+    })
+}
+
+fn build_schedule_from_input(
+    input: PhdSchedulingProblemRepr,
+    checksum: String,
+) -> anyhow::Result<Schedule> {
+    validate_problem_shape(&input)?;
+
+    let (geographic_location, schedule_name, resource_constraints) =
+        resolve_location_and_name(&input)?;
+    let mut blocks = map_blocks(&input.scheduling_blocks)?;
+    let schedule_period = resolve_schedule_period(input.schedule_time_window.as_ref(), &blocks)?;
+
+    let astronomical_nights = tsi_rust::services::astronomical_night::compute_astronomical_nights(
+        &geographic_location,
+        &schedule_period,
+    );
+
+    let dark_periods = compute_dark_periods(
+        &geographic_location,
+        &schedule_period,
+        &resource_constraints,
+    )?;
+
+    blocks.par_iter_mut().for_each(|block| {
+        block.visibility_periods = compute_block_visibility(&VisibilityInput {
+            location: &geographic_location,
+            schedule_period: &schedule_period,
+            target_ra: block.target_ra,
+            target_dec: block.target_dec,
+            constraints: &block.constraints,
+            min_duration: block.min_observation,
+            astronomical_nights: Some(&dark_periods),
+        });
+    });
+
+    Ok(Schedule {
+        id: None,
+        name: schedule_name,
+        checksum,
+        schedule_period,
+        dark_periods,
+        geographic_location,
+        astronomical_nights,
+        blocks,
+    })
 }
 
 fn compute_dark_periods(

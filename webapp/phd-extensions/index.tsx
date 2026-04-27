@@ -1,45 +1,63 @@
 /**
  * PhD-specific TSI extensions.
  *
- * Add routes and navigation items here to inject them into the TSI app shell
- * without modifying TSI core source files.
+ * - routes:     React-Router RouteObject[] placed under the Layout route
+ *               (reserved for future PhD-specific routes if needed).
+ * - navItems:   appear in the top navigation bar.
+ * - algorithms: per-algorithm dashboard tabs surfaced under
+ *               `/algorithm/{algoId}/{tabId}` by the TSI core
+ *               `AlgorithmAnalysisPage`.
  *
- * - routes:   React-Router RouteObject[]  placed under the Layout route
- * - navItems: appear in the top navigation bar
+ * Tabs are loaded with `React.lazy` so the heavy EST-specific panels
+ * (Plotly charts, sweep matrix, etc.) are code-split out of the main
+ * TSI bundle. The TSI shell wraps every tab in a `<Suspense>` boundary.
  *
  * The @ext alias in vite.config.ts points to this directory.
  */
-import { lazy, Suspense } from 'react';
-import type { TsiExtensions } from '@/extensions';
+import { lazy } from 'react';
+import { EXTENSION_CONTRACT_VERSION, type TsiExtensions } from '@/extensions';
 
-const EstSweep = lazy(() => import('./pages/EstSweep'));
+if (EXTENSION_CONTRACT_VERSION !== 1) {
+  // Bumping the contract is a breaking change — fail loudly so the
+  // integrator notices at startup rather than at runtime.
+  throw new Error(
+    `phd-extensions targets contract v1 but TSI exposes v${EXTENSION_CONTRACT_VERSION}`,
+  );
+}
+
+const OverviewTab = lazy(() =>
+  import('./pages/algorithms/est/tabs').then((m) => ({ default: m.OverviewTab })),
+);
+const SensitivityTab = lazy(() =>
+  import('./pages/algorithms/est/tabs').then((m) => ({ default: m.SensitivityTab })),
+);
+const ParetoTab = lazy(() =>
+  import('./pages/algorithms/est/tabs').then((m) => ({ default: m.ParetoTab })),
+);
+const InternalsTab = lazy(() =>
+  import('./pages/algorithms/est/tabs').then((m) => ({ default: m.InternalsTab })),
+);
+const StatisticsTab = lazy(() =>
+  import('./pages/algorithms/est/tabs').then((m) => ({ default: m.StatisticsTab })),
+);
+const SweepPanel = lazy(() => import('./pages/algorithms/est/panels/SweepPanel'));
 
 export const extensions: TsiExtensions = {
-  routes: [
+  routes: [],
+  navItems: [],
+  algorithms: [
     {
-      path: 'est-sweep',
-      element: (
-        <Suspense fallback={null}>
-          <EstSweep />
-        </Suspense>
-      ),
-    },
-  ],
-  navItems: [
-    {
-      path: '/est-sweep',
-      label: 'EST Sweep',
-      scope: 'global',
-      icon: (
-        <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            strokeWidth={2}
-            d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"
-          />
-        </svg>
-      ),
+      id: 'est',
+      label: 'EST',
+      tabs: [
+        { id: 'overview', label: 'Overview', component: OverviewTab },
+        { id: 'sensitivity', label: 'Sensitivity', component: SensitivityTab },
+        { id: 'pareto', label: 'Pareto', component: ParetoTab },
+        { id: 'internals', label: 'Internals', component: InternalsTab },
+        { id: 'statistics', label: 'Statistics', component: StatisticsTab },
+        { id: 'sweep', label: 'Sweep', component: SweepPanel },
+      ],
     },
   ],
 };
+

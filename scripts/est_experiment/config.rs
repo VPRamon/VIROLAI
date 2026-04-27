@@ -34,6 +34,14 @@ pub struct ExperimentSpec {
     /// Parameter axes to sweep; defaults to the EST defaults when omitted.
     #[serde(default)]
     pub sweep: SweepAxes,
+    /// When true (default), each run also writes
+    /// `<schedule_stem>.est_trace.jsonl` next to the schedule JSON.
+    #[serde(default = "default_emit_trace")]
+    pub emit_trace: bool,
+}
+
+fn default_emit_trace() -> bool {
+    true
 }
 
 /// Fully resolved, immutable configuration for a single EST scheduler run.

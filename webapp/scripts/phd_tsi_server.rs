@@ -1,16 +1,40 @@
 use std::env;
 use std::net::SocketAddr;
-use std::sync::Arc;
 
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
-use tsi_rust::db;
-use tsi_rust::http::{AppState, create_router};
+use tsi_rust::db::RepositoryFactory;
+use tsi_rust::http::{
+    AlgorithmTraceValidator, AppState, BackendExtensions, EXTENSION_CONTRACT_VERSION,
+    create_router_with_extensions,
+};
 
 mod phd_tsi_adapter;
 
 use phd_tsi_adapter::phd_schedule_import_adapter;
+
+/// Validator for EST algorithm traces.
+///
+/// Lives in the PhD integrator (not in TSI) so the core remains
+/// algorithm-agnostic. Rejects trace summaries that do not declare the
+/// EST-specific knobs the analytics UI relies on.
+struct EstTraceValidator;
+
+impl AlgorithmTraceValidator for EstTraceValidator {
+    fn algorithm(&self) -> &'static str {
+        "est"
+    }
+
+    fn validate_summary(&self, summary: &serde_json::Value) -> Result<(), String> {
+        for required in ["k_beams", "branching_factor"] {
+            if summary.get(required).is_none() {
+                return Err(format!("missing required EST summary field `{required}`"));
+            }
+        }
+        Ok(())
+    }
+}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -22,19 +46,27 @@ async fn main() -> anyhow::Result<()> {
         .with_thread_ids(true)
         .init();
 
-    info!("Starting PhD-TSI server");
+    info!(
+        "Starting PhD-TSI server (extension contract v{})",
+        EXTENSION_CONTRACT_VERSION
+    );
 
-    db::init_repository_async()
+    tsi_rust::configure_rayon_thread_pool();
+
+    let repository = RepositoryFactory::from_env()
         .await
-        .map_err(|e| anyhow::anyhow!(e))?;
-    let repository = Arc::clone(db::get_repository()?);
+        .map_err(|e| anyhow::anyhow!(e.to_string()))?;
     info!("Repository initialized successfully");
 
     let import_adapter = phd_schedule_import_adapter();
     info!("Using import adapter: {}", import_adapter.name());
     let state = AppState::with_import_adapter(repository, import_adapter);
 
-    let app = create_router(state);
+    let extensions = BackendExtensions::builder()
+        .with_trace_validator(EstTraceValidator)
+        .build();
+
+    let app = create_router_with_extensions(state, extensions);
 
     let host = env::var("HOST").unwrap_or_else(|_| "0.0.0.0".to_string());
     let port: u16 = env::var("PORT")

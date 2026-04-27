@@ -30,6 +30,10 @@ pub struct ManifestRunEntry {
     pub branching_factor: usize,
     /// Path to the schedule JSON, relative to the output directory.
     pub schedule_json: String,
+    /// Path to the EST trace JSONL, relative to the output directory.
+    /// Absent when traces were disabled for this run.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub est_trace_jsonl: Option<String>,
 }
 
 /// A compact row for the comparison CSV.
@@ -68,6 +72,10 @@ pub fn build_manifest(
                 k_beams: o.config.k_beams,
                 branching_factor: o.config.branching_factor,
                 schedule_json: relative_to_output(output_dir, &o.schedule_path),
+                est_trace_jsonl: o
+                    .trace_path
+                    .as_ref()
+                    .map(|p| relative_to_output(output_dir, p)),
             })
             .collect(),
     }

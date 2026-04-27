@@ -9,7 +9,7 @@ mod problem;
 mod serde;
 mod task_placement;
 
-pub use output::ScheduleOutput;
+pub use output::{LocationMeta, PeriodMeta, ScheduleMetadata, ScheduleOutput};
 pub use problem::SchedulingProblem;
 pub use task_placement::TaskPlacement;
 

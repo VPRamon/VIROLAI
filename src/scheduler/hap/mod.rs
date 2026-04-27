@@ -1,16 +1,8 @@
-//! HAP scheduler.
+//! HAP (Heuristic Adaptive Placement) scheduler.
 //!
-//! HAP maintains a pool of `num_crus` survivor schedules and runs parallel
-//! CRU (Constraint Repair Unit) workers to place one scheduling block at a
-//! time, merging the best outcomes after each round. The algorithm terminates
-//! after a full queue rotation produces no improvement.
+//! This module is currently under construction and not exposed in the public API.
+//! See [`cru`] for the Conflict Resolution Unit and its inner
+//! [`cru::task_scheduler`] step.
 
-mod block_eval;
 pub mod configuration;
-mod cru;
-pub mod proposal;
-pub mod ranking;
-pub mod scheduler;
-
-pub use configuration::Configuration;
-pub use scheduler::HapScheduler;
+pub mod cru;

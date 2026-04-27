@@ -1,8 +1,10 @@
-use scheduler::schedule::{Schedule, ScheduleOutput};
+use scheduler::schedule::{LocationMeta, PeriodMeta, Schedule, ScheduleMetadata, ScheduleOutput};
+use scheduler::scheduler::est::JsonlTraceSink;
 use scheduler::time::TaskId;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use super::config::RunConfig;
 use super::problem::PreparedProblem;
@@ -11,6 +13,7 @@ use super::problem::PreparedProblem;
 pub struct RunOutcome {
     pub config: RunConfig,
     pub schedule_path: PathBuf,
+    pub trace_path: Option<PathBuf>,
     pub metrics: RunMetrics,
 }
 
@@ -25,12 +28,27 @@ pub struct RunMetrics {
 }
 
 /// Runs the scheduler, writes the schedule JSON to `schedule_path`, and computes metrics.
+///
+/// When `trace_path` is `Some`, the EST scheduler is instrumented with a
+/// [`JsonlTraceSink`] writing one JSON event per line to that file.
 pub fn execute_run(
     run: &RunConfig,
     prepared: &PreparedProblem,
     schedule_path: &Path,
+    trace_path: Option<&Path>,
 ) -> Result<RunOutcome, String> {
-    let scheduler = run.build_scheduler()?;
+    let mut scheduler = run.build_scheduler()?;
+    scheduler = scheduler.with_fom_label(run.fom.to_string());
+
+    let trace_path_owned = if let Some(path) = trace_path {
+        let sink = JsonlTraceSink::create(path)
+            .map_err(|e| format!("failed to open est trace file {}: {e}", path.display()))?;
+        scheduler = scheduler.with_trace_sink(Arc::new(sink));
+        Some(path.to_path_buf())
+    } else {
+        None
+    };
+
     let schedule = scheduler
         .run(
             &prepared.problem,
@@ -39,7 +57,8 @@ pub fn execute_run(
         )
         .map_err(|e| format!("EST run {} failed: {e}", run.slug()))?;
 
-    let output = ScheduleOutput::new(prepared.raw_json.clone(), &schedule);
+    let metadata = build_schedule_metadata(run, prepared);
+    let output = ScheduleOutput::new(prepared.raw_json.clone(), &schedule, Some(metadata));
     let output_text = serde_json::to_string_pretty(&output)
         .map_err(|e| format!("failed to serialize schedule output {}: {e}", run.slug()))?;
     fs::write(schedule_path, output_text).map_err(|e| {
@@ -54,8 +73,41 @@ pub fn execute_run(
     Ok(RunOutcome {
         config: *run,
         schedule_path: schedule_path.to_path_buf(),
+        trace_path: trace_path_owned,
         metrics,
     })
+}
+
+fn build_schedule_metadata(run: &RunConfig, prepared: &PreparedProblem) -> ScheduleMetadata {
+    let location = prepared
+        .problem
+        .telescope
+        .as_ref()
+        .map(|telescope| LocationMeta {
+            name: telescope.name.clone(),
+            longitude_deg: telescope.location.lon.value(),
+            latitude_deg: telescope.location.lat.value(),
+            height_m: telescope.location.height.value(),
+        });
+
+    let period = Some(PeriodMeta {
+        start_mjd_utc: prepared.horizon.start.value(),
+        end_mjd_utc: prepared.horizon.end.value(),
+    });
+
+    let algorithm_config = serde_json::json!({
+        "k_beams": run.k_beams,
+        "branching_factor": run.branching_factor,
+        "endangered_threshold": run.endangered_threshold,
+        "fom": run.fom.to_string(),
+    });
+
+    ScheduleMetadata {
+        algorithm: "est".to_string(),
+        algorithm_config,
+        location,
+        period,
+    }
 }
 
 pub fn compute_run_metrics(

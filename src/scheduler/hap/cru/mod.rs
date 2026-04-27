@@ -1,215 +1,88 @@
-//! CRU (Conflict Resolution Unit) engine for the HAP scheduler.
+//! CRU (Conflict Resolution Unit) for the HAP scheduler.
 //!
-//! Each CRU starts from a survivor schedule and attempts to place all tasks of
-//! one scheduling block by evicting conflicting non-protected tasks when
-//! necessary. The best intermediate state is tracked and returned when the
-//! iteration budget is exhausted or all protected tasks are placed.
+//! The [`run`] function drives the outer Block Scheduling Cycle described in
+//! the CRU algorithm: for every task in a block it initialises a [`Lobby`]
+//! with that task and drains it via [`task_scheduler::schedule_task`] (the
+//! Task Scheduling Cycle inner step) until the lobby is empty or the
+//! iteration budget [`Configuration::max_iter`] is exhausted.
+//!
+//! Task dependencies within the block are **not** considered in this
+//! implementation; tasks are processed in their input order.
 
-mod conflict;
-mod rng;
-mod selection;
-mod snapshot;
-mod task_graph;
-mod windows;
+pub mod lobby;
+pub mod task_scheduler;
 
-#[cfg(test)]
-mod tests;
-
-use self::conflict::{
-    compute_conflict_cost, compute_conflict_group, compute_min_positive_priority,
-};
-use self::rng::CruRng;
-use self::selection::{choose_candidate, select_best_candidate};
-use self::snapshot::{count_protected_placed, count_unplaced_displaced, is_better_snapshot};
-use self::task_graph::{predecessor_end_lower_bound, predecessors_placed};
-use self::windows::{generate_candidate_starts, would_evict_protected};
+use self::lobby::Lobby;
 use super::configuration::Configuration;
 use crate::prescheduler::TaskPeriodMap;
-use crate::schedule::{Schedule, SchedulingProblem, TaskPlacement};
+use crate::schedule::Schedule;
 use crate::scheduling_block::SchedulingBlock;
-use crate::time::{MJD, Period, TaskId, Time};
-use qtty::Day;
-use std::collections::HashSet;
+use crate::time::TaskId;
+use rand::Rng;
+use std::collections::{HashMap, HashSet};
 
-/// Run one CRU repair pass starting from `base_schedule`.
+/// Place all tasks from `block` into `schedule` using the CRU algorithm.
 ///
-/// Attempts to place all tasks in `current_block` (the *protected set*).
-/// Non-protected conflicting tasks may be evicted and re-queued in the
-/// internal displaced lobby. Returns the best intermediate schedule
-/// observed during the run.
-#[allow(clippy::too_many_arguments)]
-pub(super) fn run_cru(
-    base_schedule: Schedule,
-    current_block: &SchedulingBlock,
-    problem: &SchedulingProblem,
-    possible_periods: &TaskPeriodMap,
-    horizon: &Period<MJD>,
+/// `all_blocks` is the full set of blocks in the problem.  When a displaced
+/// task belongs to a block other than the one currently being added, it is
+/// looked up from `all_blocks` so it can be rescheduled with its own block
+/// as the protected set.
+///
+/// For each task in `block` the algorithm:
+/// 1. Seeds the lobby with that task.
+/// 2. Repeatedly pops a task from the lobby and calls
+///    [`task_scheduler::schedule_task`], which may evict non-protected tasks
+///    back into the lobby.
+/// 3. Stops the inner loop when the lobby is empty or `config.max_iter`
+///    iterations have been used.
+///
+/// Tasks whose `TaskId` cannot be resolved across all blocks (should not
+/// happen in a well-formed problem) are silently dropped.  Task scheduling
+/// errors (no feasibility windows, no valid candidates) are also ignored.
+pub fn run(
+    schedule: &mut Schedule,
+    block: &SchedulingBlock,
+    all_blocks: &[SchedulingBlock],
+    periods_map: &TaskPeriodMap,
     config: &Configuration,
-    seed: u64,
-) -> Schedule {
-    let mut rng = CruRng::new(seed);
-    let protected_ids: HashSet<TaskId> = current_block.iter().collect();
-    let mut displaced: HashSet<TaskId> = HashSet::new();
-    let mut schedule = base_schedule;
+    rng: &mut impl Rng,
+) {
+    // Build a flat TaskId -> (&Task, &SchedulingBlock) index once per call.
+    let task_index: HashMap<TaskId, (&crate::task::Task, &SchedulingBlock)> = all_blocks
+        .iter()
+        .flat_map(|b| b.iter_tasks().map(move |t| (t.id, (t, b))))
+        .collect();
 
-    let mut best_protected_placed = count_protected_placed(&schedule, &protected_ids);
-    let mut best_unplaced_displaced = 0usize;
-    let mut best_snapshot = schedule.clone();
+    for task in block.iter_tasks() {
+        let mut lobby = Lobby::new();
+        lobby.push(task.id);
 
-    let min_positive_priority = compute_min_positive_priority(problem, horizon.start);
+        let mut run_protected: HashSet<TaskId> = HashSet::new();
+        let mut iter = 0usize;
+        while let Some(task_id) = lobby.pop() {
+            if iter >= config.max_iter {
+                break;
+            }
+            iter += 1;
 
-    for iteration in 0..config.cru_max_iterations {
-        // Build lobby: unplaced protected tasks ∪ unplaced displaced tasks
-        let lobby: HashSet<TaskId> = protected_ids
-            .iter()
-            .filter(|id| !schedule.contains(**id))
-            .chain(displaced.iter().filter(|id| !schedule.contains(**id)))
-            .copied()
-            .collect();
+            let (t, owner_block) = task_index
+                .get(&task_id)
+                .expect("task_id not found in any block — problem is not well-formed");
 
-        if lobby.is_empty() {
-            break;
-        }
-
-        // Find ready tasks: all predecessors in their block are placed
-        let ready: Vec<TaskId> = lobby
-            .iter()
-            .copied()
-            .filter(|&tid| predecessors_placed(tid, &schedule, problem))
-            .collect();
-
-        if ready.is_empty() {
-            break;
-        }
-
-        // Prefer protected tasks; fall back to displaced when none are ready
-        let ready_protected: Vec<TaskId> = ready
-            .iter()
-            .copied()
-            .filter(|id| protected_ids.contains(id))
-            .collect();
-        let ready_displaced: Vec<TaskId> = ready
-            .iter()
-            .copied()
-            .filter(|id| !protected_ids.contains(id))
-            .collect();
-
-        let candidate_group = if !ready_protected.is_empty() {
-            ready_protected
-        } else {
-            ready_displaced
-        };
-
-        let next_task_id = select_best_candidate(
-            &candidate_group,
-            problem,
-            possible_periods,
-            &schedule,
-            horizon,
-        );
-
-        let Some(task) = problem.task(next_task_id) else {
-            log::warn!("hap cru: task {} not found in problem", next_task_id.0);
-            break;
-        };
-        let Some(windows) = possible_periods.get(&next_task_id) else {
-            log::debug!("hap cru: task {} has no feasible windows", next_task_id.0);
-            break;
-        };
-
-        // Predecessor lower bound on start time
-        let pred_end = predecessor_end_lower_bound(next_task_id, &schedule, problem, horizon);
-
-        // Generate and filter candidate starts
-        let candidate_starts = generate_candidate_starts(task, windows, &schedule, pred_end);
-        let candidate_starts: Vec<Time<MJD>> = candidate_starts
-            .into_iter()
-            .filter(|&s| !would_evict_protected(s, task, &schedule, &protected_ids))
-            .collect();
-
-        if candidate_starts.is_empty() {
-            log::debug!(
-                "hap cru: no valid windows for task {} after protected filter",
-                next_task_id.0
-            );
-            break;
-        }
-
-        // Compute conflict cost for every candidate start
-        let costs: Vec<f64> = candidate_starts
-            .iter()
-            .map(|&s| {
-                compute_conflict_cost(
-                    s,
-                    task,
-                    &schedule,
-                    problem,
-                    current_block,
-                    possible_periods,
-                    horizon.start,
-                    min_positive_priority,
-                    config,
-                )
-            })
-            .collect();
-
-        // Choose the candidate window
-        let chosen_idx = choose_candidate(&costs, config.stochastic_range, &mut rng);
-        let chosen_start = candidate_starts[chosen_idx];
-
-        // Compute conflict group for the chosen window and evict non-protected
-        let conflict_group = compute_conflict_group(chosen_start, task, &schedule, problem);
-        for &evicted_id in &conflict_group {
-            if !protected_ids.contains(&evicted_id) {
-                let _ = schedule.unplace_task(evicted_id);
-                displaced.insert(evicted_id);
+            if task_scheduler::schedule_task(
+                t,
+                owner_block,
+                schedule,
+                periods_map,
+                &mut lobby,
+                &run_protected,
+                config,
+                rng,
+            )
+            .is_ok()
+            {
+                run_protected.insert(task_id);
             }
         }
-
-        // Place the task
-        let end = Time::<MJD>::new(chosen_start.value() + task.duration.to::<Day>().value());
-        schedule.insert_placement(TaskPlacement {
-            task_id: next_task_id,
-            start: chosen_start,
-            end,
-        });
-        displaced.remove(&next_task_id);
-
-        log::trace!(
-            "hap cru: iter={} placed task={} at [{:.4}, {:.4}]",
-            iteration,
-            next_task_id.0,
-            chosen_start.value(),
-            end.value(),
-        );
-
-        // Update best snapshot
-        let new_protected_placed = count_protected_placed(&schedule, &protected_ids);
-        let new_unplaced_displaced = count_unplaced_displaced(&schedule, &displaced);
-        if is_better_snapshot(
-            new_protected_placed,
-            new_unplaced_displaced,
-            &schedule,
-            best_protected_placed,
-            best_unplaced_displaced,
-            &best_snapshot,
-            problem,
-            horizon.start,
-        ) {
-            best_snapshot = schedule.clone();
-            best_protected_placed = new_protected_placed;
-            best_unplaced_displaced = new_unplaced_displaced;
-        }
-
-        // Early exit when all protected tasks are placed
-        if new_protected_placed == protected_ids.len() {
-            log::debug!(
-                "hap cru: all {} protected task(s) placed, returning early",
-                protected_ids.len()
-            );
-            return schedule;
-        }
     }
-
-    best_snapshot
 }

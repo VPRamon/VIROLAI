@@ -15,6 +15,13 @@ services:
       - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    # PG backends are ~10MB each; with PG_POOL_MAX=8 plus the postgres
+    # daemon overhead, 2g headroom keeps the container comfortably below
+    # OOM during concurrent bulk-import INSERTs (each schedule expands to
+    # 2647 block rows in a single transaction).
+    mem_limit: 2g
+    mem_reservation: 256m
+    cpus: 1.5
     healthcheck:
       test:
         [
@@ -39,8 +46,26 @@ services:
       RUST_LOG: ${RUST_LOG:-info}
       REPOSITORY_TYPE: postgres
       DATABASE_URL: postgres://${POSTGRES_USER:-tsi}:${POSTGRES_PASSWORD:-tsi}@postgres:5432/${POSTGRES_DB:-tsi}
+      # Conservative defaults — see PostgresConfig docs.
+      PG_POOL_MAX: ${PG_POOL_MAX:-8}
+      PG_POOL_MIN: ${PG_POOL_MIN:-1}
+      # Each in-flight item holds the parsed JSON Value (~10MB), the parsed
+      # Schedule struct, and visibility-period clones from the preschedule.
+      # The frontend already runs 3 chunks in parallel by default, so a
+      # per-request concurrency of 1 keeps the simultaneous in-flight items
+      # bounded at ~3 instead of ~6, which is enough to saturate the DB
+      # without doubling the memory footprint.
+      BULK_IMPORT_CONCURRENCY: ${BULK_IMPORT_CONCURRENCY:-1}
     ports:
       - "${BACKEND_PORT:-8080}:8080"
+    # Bulk-import scratch memory is dominated by the parsed schedule_json
+    # Values (≈5–8× larger than the on-disk JSON) plus per-block visibility
+    # period clones. With multi-chunk uploads the working set easily peaks
+    # past 2 GB, so we provision generous headroom to avoid OOM-kills
+    # (exit code 137) that abort an entire upload batch.
+    mem_limit: 4g
+    mem_reservation: 512m
+    cpus: 2
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
       interval: 10s
@@ -57,6 +82,11 @@ services:
         condition: service_healthy
     ports:
       - "${FRONTEND_PORT:-3000}:80"
+    # nginx serving static assets is light; cap protects against
+    # runaway memory in case of misconfigured workers.
+    mem_limit: 512m
+    mem_reservation: 64m
+    cpus: 0.5
 
 volumes:
   postgres_data:

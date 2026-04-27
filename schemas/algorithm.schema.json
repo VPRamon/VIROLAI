@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema",
+  "$id": "algorithm.schema.json",
+  "title": "AlgorithmConfig",
+  "description": "Algorithm type and per-algorithm configuration used for a scheduling run.",
+  "type": "object",
+  "required": ["algorithm", "algorithm_config"],
+  "oneOf": [
+    {
+      "properties": {
+        "algorithm": { "const": "est" },
+        "algorithm_config": { "$ref": "#/$defs/EstConfig" }
+      },
+      "required": ["algorithm", "algorithm_config"]
+    },
+    {
+      "properties": {
+        "algorithm": { "const": "hap" },
+        "algorithm_config": { "$ref": "#/$defs/HapConfig" }
+      },
+      "required": ["algorithm", "algorithm_config"]
+    }
+  ],
+  "$defs": {
+    "EstConfig": {
+      "type": "object",
+      "description": "Configuration parameters for the Earliest-Start-Time beam-search scheduler.",
+      "required": ["k_beams", "branching_factor", "endangered_threshold"],
+      "additionalProperties": false,
+      "properties": {
+        "k_beams": {
+          "description": "Number of schedule states (beams) kept alive after each expansion round. k=1 gives classic greedy EST.",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100
+        },
+        "branching_factor": {
+          "description": "Number of distinct candidates tried per beam per round. b=1 disables branching.",
+          "type": "integer",
+          "minimum": 1
+        },
+        "endangered_threshold": {
+          "description": "Tasks with flexibility below this value are promoted ahead of others. 0 disables the protection.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "fom": {
+          "description": "Figure-of-merit function used to score and rank candidate placements.",
+          "type": "string"
+        }
+      }
+    },
+    "HapConfig": {
+      "type": "object",
+      "description": "Configuration parameters for the Hybrid Adaptive metaheuristic scheduler.",
+      "required": ["num_crus", "cru_max_iterations", "stochastic_range", "random_seed", "impatience_alpha"],
+      "additionalProperties": false,
+      "properties": {
+        "num_crus": {
+          "description": "Number of parallel Constructive Repair Units (CRUs) and survivor schedules.",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 64
+        },
+        "cru_max_iterations": {
+          "description": "Maximum repair iterations per CRU run.",
+          "type": "integer",
+          "minimum": 1
+        },
+        "stochastic_range": {
+          "description": "Window selection stochasticity: pick uniformly from the best N windows.",
+          "type": "integer",
+          "minimum": 1
+        },
+        "random_seed": {
+          "description": "Master seed used for per-CRU RNG derivation.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "impatience_alpha": {
+          "description": "Impatience scaling factor (denominator) controlling how quickly tasks become urgent.",
+          "type": "number"
+        }
+      }
+    }
+  }
+}

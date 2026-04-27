@@ -1,44 +1,66 @@
 # PhD-TSI backend Dockerfile
 # Builds the custom backend binary that adapts PhD scheduling_problem payloads to TSI.
+#
+# Uses cargo-chef + BuildKit cache mounts to keep cold rebuilds fast and
+# avoid rebuilding the dependency graph when only application sources
+# change. Requires DOCKER_BUILDKIT=1 (default in modern Docker).
+# syntax=docker/dockerfile:1.6
 
-# Stage 1: build
-FROM rust:latest AS builder
-
+# ---------- Stage 1: chef base ----------
+FROM rust:1-slim-bookworm AS chef
 WORKDIR /app
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libpq-dev pkg-config build-essential \
+    && rm -rf /var/lib/apt/lists/* \
+    && cargo install --locked cargo-chef
 
-RUN apt-get update && apt-get install -y \
-    libpq-dev \
-    pkg-config \
-    && rm -rf /var/lib/apt/lists/*
-
-# Copy TSI backend dependency crate
+# ---------- Stage 2: planner ----------
+FROM chef AS planner
 COPY webapp/TSI/backend/Cargo.toml webapp/TSI/backend/Cargo.lock* webapp/TSI/backend/
 COPY webapp/TSI/backend/src webapp/TSI/backend/src
-
-# Copy local siderust dependency used by this repository crate
 COPY siderust /app/siderust
-
-# Copy PhD crate
 COPY Cargo.toml Cargo.lock* /app/
 COPY src /app/src
 COPY webapp/scripts /app/webapp/scripts
 COPY schemas /app/schemas
+RUN cargo chef prepare --recipe-path recipe.json
 
-# Build custom backend binary
-RUN cargo build --release --bin phd_tsi_server
+# ---------- Stage 3: builder ----------
+FROM chef AS builder
+# cargo-chef cook must locate all local path dependencies to validate manifests.
+# Both siderust and tsi_rust are local path deps, so copy their full source
+# trees before cooking. Registry crates are pre-built by cook; app-only sources
+# (webapp/scripts, schemas) come after to preserve layer caching.
+COPY Cargo.toml Cargo.lock* /app/
+COPY siderust /app/siderust
+COPY webapp/TSI/backend/Cargo.toml webapp/TSI/backend/Cargo.lock* webapp/TSI/backend/
+COPY webapp/TSI/backend/src webapp/TSI/backend/src
+COPY --from=planner /app/recipe.json recipe.json
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/app/target \
+    cargo chef cook --release --recipe-path recipe.json --bin phd_tsi_server
 
-# Stage 2: runtime
-FROM debian:bookworm-slim
+COPY src /app/src
+COPY webapp/scripts /app/webapp/scripts
+COPY schemas /app/schemas
+
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/app/target \
+    cargo build --release --bin phd_tsi_server \
+    && cp target/release/phd_tsi_server /usr/local/bin/phd_tsi_server
+
+# ---------- Stage 4: runtime ----------
+FROM debian:bookworm-slim AS runtime
 
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y \
-    ca-certificates \
-    curl \
-    libpq5 \
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+        libpq5 \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder /app/target/release/phd_tsi_server /usr/local/bin/phd_tsi_server
+COPY --from=builder /usr/local/bin/phd_tsi_server /usr/local/bin/phd_tsi_server
 
 RUN useradd -r -s /bin/false phd
 USER phd

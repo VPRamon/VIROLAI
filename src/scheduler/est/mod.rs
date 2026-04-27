@@ -21,6 +21,7 @@ pub mod fom;
 mod ordering;
 mod queue;
 mod schedule_state;
+pub mod trace;
 mod validation;
 
 pub use algorithm::{EstScheduler, run_scheduler};
@@ -29,6 +30,7 @@ pub use configuration::{Configuration, MAX_K_BEAMS};
 pub use fom::{CompositeFom, EstFomKind, ScheduleFom, ScoringContext, SoftConstraintFom};
 pub use ordering::{compare_candidates, sort_candidates};
 pub use schedule_state::ScheduleState;
+pub use trace::{EstTraceEvent, EstTraceSink, JsonlTraceSink, NoopTraceSink};
 
 #[cfg(test)]
 mod tests;
