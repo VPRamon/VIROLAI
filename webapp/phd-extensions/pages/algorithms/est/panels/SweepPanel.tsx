@@ -8,18 +8,21 @@
  * field when available; for legacy schedules without metadata the schedule
  * name is parsed as a fallback (`e{e}_k{k}_b{b}`).
  */
-import { useMemo, useState } from 'react';
+import { useMemo } from 'react';
 import {
   ChartPanel,
   DataTable,
+  EmptyState,
   MetricCard,
   MetricsGrid,
   PlotlyChart,
   RangeFilterGroup,
+  TableSkeleton,
   ToolbarRow,
 } from '@/components';
 import type { TableColumn } from '@/components';
-import { HelpPopover } from '@/components/charts';
+import { DownloadCsvButton, HelpPopover } from '@/components/charts';
+import { stringCodec, useUrlState, type UrlStateCodec } from '../../../../lib/useUrlState';
 import { usePlotlyChartChrome, usePlotlyTheme } from '@/hooks';
 import type { ScheduleInfo } from '@/api/types';
 import {
@@ -32,6 +35,8 @@ import {
 import type { ScheduleAnalysisData } from '@/features/schedules/hooks/useScheduleAnalysisData';
 import { useAlgorithm } from '@/pages/AlgorithmAnalysis';
 import { useRunMatrix, type RunRow } from '../useRunMatrix';
+import { useRunFocus, focusIdsFromSelection } from '../useRunFocus';
+import { FocusBadge } from '../FocusBadge';
 import { useRunRangeFilters } from '../useRunRangeFilters';
 import {
   EST_FILTER_HELP,
@@ -144,8 +149,14 @@ function RadioGroup<T extends string>({
 export default function SweepPanel() {
   const { selectedSchedules } = useAlgorithm();
   const plotlyTheme = usePlotlyTheme();
-  const [axis, setAxis] = useState<Axis>('e');
-  const [metricKey, setMetricKey] = useState<string>(SWEEP_METRICS[0].key);
+  const [axis, setAxis] = useUrlState<Axis>('est_sweep_axis', 'e', {
+    codec: stringCodec as UrlStateCodec<Axis>,
+  });
+  const [metricKey, setMetricKey] = useUrlState<string>(
+    'est_sweep_metric',
+    SWEEP_METRICS[0].key,
+    { codec: stringCodec },
+  );
   const metric = useMemo<MetricSpec>(
     () => SWEEP_METRICS.find((m) => m.key === metricKey) ?? SWEEP_METRICS[0],
     [metricKey],
@@ -153,7 +164,8 @@ export default function SweepPanel() {
 
   const { runs } = useRunMatrix(selectedSchedules);
   const filters = useRunRangeFilters(runs);
-  const filteredRuns = filters.filtered;
+  const focus = useRunFocus();
+  const filteredRuns = useMemo(() => focus.apply(filters.filtered), [focus, filters.filtered]);
 
   const chartRows = useMemo<ChartRow[]>(
     () =>
@@ -212,6 +224,7 @@ export default function SweepPanel() {
         name: label || 'all',
         x: sorted.map((r) => r[axis]),
         y: sorted.map((r) => metric.getValue(r.schedule)),
+        customdata: sorted.map((r) => r.scheduleId),
         connectgaps: false,
       };
     });
@@ -238,6 +251,7 @@ export default function SweepPanel() {
         y: loadedRows.map((r) => r.k),
         z: loadedRows.map((r) => r.b),
         text: loadedRows.map((r) => r.name),
+        customdata: loadedRows.map((r) => r.scheduleId),
         textposition: 'top center' as const,
         textfont: { size: 9 },
         marker: {
@@ -308,6 +322,7 @@ export default function SweepPanel() {
 
   return (
     <div className="space-y-5">
+      <FocusBadge />
       <MetricsGrid columns={3}>
         <MetricCard
           label="Best scheduling rate"
@@ -377,6 +392,8 @@ export default function SweepPanel() {
             layout={lineLayout}
             config={lineChrome.config}
             onInitialized={lineChrome.onInitialized}
+            onSelected={(ev) => focus.setFocused(focusIdsFromSelection(ev))}
+            onDeselect={() => focus.clear()}
             height="340px"
             ariaLabel={`Line chart: ${metric.label} vs ${axis}`}
           />
@@ -385,15 +402,17 @@ export default function SweepPanel() {
 
         <ChartPanel title="3D parameter space" headerActions={scatter3dChrome.headerActions}>
           {loadedRows.length === 0 ? (
-            <div className="flex h-40 items-center justify-center text-sm text-slate-400">
-              Waiting for insights to load…
-            </div>
+            <TableSkeleton rows={5} columns={4} />
           ) : (
             <PlotlyChart
               data={scatter3dTrace}
               layout={scatter3dLayout}
               config={scatter3dChrome.config}
               onInitialized={scatter3dChrome.onInitialized}
+              onClick={(ev) => {
+                const id = ev.points?.[0]?.customdata as unknown;
+                if (typeof id === 'number') focus.toggle(id);
+              }}
               height="520px"
               ariaLabel="3D scatter: e / k / b axes, colour = selected metric"
             />
@@ -405,16 +424,51 @@ export default function SweepPanel() {
       <ChartPanel
         title="Summary"
         headerActions={
-          <HelpPopover content={SWEEP_TABLE_HELP} ariaLabel="Help: sweep summary" />
+          <div className="flex items-center gap-2">
+            <DownloadCsvButton
+              label="Sweep summary"
+              rows={chartRows}
+              columns={[
+                { header: 'Schedule', accessor: (r: ChartRow) => r.name },
+                { header: 'e', accessor: (r: ChartRow) => r.e },
+                { header: 'k', accessor: (r: ChartRow) => r.k },
+                { header: 'b', accessor: (r: ChartRow) => r.b },
+                {
+                  header: 'Rate',
+                  accessor: (r: ChartRow) => METRIC_SCHEDULING_RATE.getValue(r.schedule),
+                },
+                {
+                  header: 'Priority capture',
+                  accessor: (r: ChartRow) => METRIC_PRIORITY_CAPTURE.getValue(r.schedule),
+                },
+                {
+                  header: 'Cumulative priority',
+                  accessor: (r: ChartRow) => METRIC_CUMULATIVE_PRIORITY.getValue(r.schedule),
+                },
+                {
+                  header: 'Mean priority',
+                  accessor: (r: ChartRow) => METRIC_MEAN_PRIORITY.getValue(r.schedule),
+                },
+              ]}
+            />
+            <HelpPopover content={SWEEP_TABLE_HELP} ariaLabel="Help: sweep summary" />
+          </div>
         }
       >
-        <DataTable
-          data={chartRows}
-          columns={resultColumns}
-          keyAccessor={(r) => r.scheduleId}
-          caption="EST sweep results"
-          captionHidden
-        />
+        {chartRows.length === 0 ? (
+          <EmptyState
+            title="No data to display"
+            hint="Adjust the filters or run more EST experiments."
+          />
+        ) : (
+          <DataTable
+            data={chartRows}
+            columns={resultColumns}
+            keyAccessor={(r) => r.scheduleId}
+            caption="EST sweep results"
+            captionHidden
+          />
+        )}
       </ChartPanel>
     </div>
   );

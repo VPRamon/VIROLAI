@@ -6,8 +6,15 @@
  * between the dimension and the metric.
  */
 import { useMemo } from 'react';
-import { ChartPanel, DataTable, RangeFilterGroup, type TableColumn } from '@/components';
-import { HelpPopover } from '@/components/charts';
+import {
+  ChartPanel,
+  DataTable,
+  EmptyState,
+  RangeFilterGroup,
+  TableSkeleton,
+  type TableColumn,
+} from '@/components';
+import { DownloadCsvButton, HelpPopover } from '@/components/charts';
 import {
   METRIC_CUMULATIVE_PRIORITY,
   METRIC_MEAN_PRIORITY,
@@ -20,6 +27,8 @@ import {
 } from '@/features/schedules/analytics';
 import type { ScheduleAnalysisData } from '@/features/schedules/hooks/useScheduleAnalysisData';
 import type { RunRow } from '../useRunMatrix';
+import { useRunFocus } from '../useRunFocus';
+import { FocusBadge } from '../FocusBadge';
 import { useRunRangeFilters } from '../useRunRangeFilters';
 import { EST_FILTER_HELP, STATISTICS_HELP } from '../chartHelp';
 
@@ -92,7 +101,8 @@ function adapt(run: RunRow): ScheduleAnalysisData {
 
 export default function StatisticsPanel({ runs }: { runs: RunRow[] }) {
   const filters = useRunRangeFilters(runs);
-  const filteredRuns = filters.filtered;
+  const focus = useRunFocus();
+  const filteredRuns = useMemo(() => focus.apply(filters.filtered), [focus, filters.filtered]);
   const adapted = useMemo(() => filteredRuns.map(adapt), [filteredRuns]);
   const dims = useMemo(
     () => extractDimensions(adapted.map((s) => s.algorithmConfig)),
@@ -176,6 +186,7 @@ export default function StatisticsPanel({ runs }: { runs: RunRow[] }) {
 
   return (
     <div className="space-y-5">
+      <FocusBadge />
       {(poolSize != null || equivalence.groups.length > 0) && (
         <div className="rounded border border-slate-700 bg-slate-900/40 px-3 py-2 text-xs text-slate-300">
           {poolSize != null && (
@@ -212,16 +223,40 @@ export default function StatisticsPanel({ runs }: { runs: RunRow[] }) {
       <ChartPanel
         title="Statistics report"
         headerActions={
-          <HelpPopover content={STATISTICS_HELP} ariaLabel="Help: statistics report" />
+          <div className="flex items-center gap-2">
+            <DownloadCsvButton
+              label="Statistics"
+              rows={rows}
+              columns={[
+                { header: 'Metric', accessor: (r: Row) => r.metric },
+                { header: 'Mean', accessor: (r: Row) => r.mean },
+                { header: 'Std', accessor: (r: Row) => r.std },
+                { header: 'Min', accessor: (r: Row) => r.min },
+                { header: 'Max', accessor: (r: Row) => r.max },
+                { header: 'Best', accessor: (r: Row) => r.bestRun },
+                { header: 'Correlations', accessor: (r: Row) => r.correlations },
+              ]}
+            />
+            <HelpPopover content={STATISTICS_HELP} ariaLabel="Help: statistics report" />
+          </div>
         }
       >
-        <DataTable
-          data={rows}
-          columns={columns}
-          keyAccessor={(r) => r.metric}
-          caption="Per-metric summary statistics and config correlations"
-          captionHidden
-        />
+        {filteredRuns.length > 0 && filteredRuns.every((r) => !r.insights) ? (
+          <TableSkeleton rows={5} columns={4} />
+        ) : adapted.length === 0 ? (
+          <EmptyState
+            title="No data to display"
+            hint="Adjust the filters or run more EST experiments."
+          />
+        ) : (
+          <DataTable
+            data={rows}
+            columns={columns}
+            keyAccessor={(r) => r.metric}
+            caption="Per-metric summary statistics and config correlations"
+            captionHidden
+          />
+        )}
       </ChartPanel>
     </div>
   );

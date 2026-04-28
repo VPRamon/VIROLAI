@@ -150,29 +150,32 @@ fn expand_beam<'a>(
         scheduler.config.endangered_threshold,
     );
 
-    let schedulable = state.candidates.count_schedulable();
-    let branches = branching_factor.min(schedulable);
+    let schedulable_count = state.candidates.count_schedulable();
 
-    if branches == 0 {
+    if schedulable_count == 0 {
         // This beam cannot place anything else, so it competes only at the
         // final terminal-state selection step.
         return BeamExpansion::Terminal(state);
     }
 
-    let children: Vec<ScheduleState<'a>> = (0..branches)
-        .filter_map(|branch_idx| {
-            build_child_state(
-                scheduler,
-                scoring_ctx,
-                &state,
-                horizon,
-                round,
-                branch_idx,
-                branches,
-                ctx,
-            )
-        })
-        .collect();
+    let mut children = Vec::new();
+    for candidate_idx in 0..schedulable_count {
+        if let Some(child) = build_child_state(
+            scheduler,
+            scoring_ctx,
+            &state,
+            horizon,
+            round,
+            candidate_idx,
+            schedulable_count,
+            ctx,
+        ) {
+            children.push(child);
+            if children.len() == branching_factor {
+                break;
+            }
+        }
+    }
 
     // All branches may be pruned when domain validation rejects them (e.g.
     // every schedulable candidate has an unmet predecessor). In that case the
@@ -196,24 +199,24 @@ fn build_child_state<'a>(
     state: &ScheduleState<'a>,
     horizon: &Period<MJD>,
     round: u32,
-    branch_idx: usize,
-    branch_count: usize,
+    candidate_idx: usize,
+    candidate_count: usize,
     ctx: Option<&ProblemCtx<'_>>,
 ) -> Option<ScheduleState<'a>> {
     let mut child = state.clone();
-    // Branch `branch_idx` means "take the branch_idx-th currently schedulable
+    // Candidate `candidate_idx` means "take the candidate_idx-th currently schedulable
     // candidate from the EST-ordered queue" and explore the schedule that
     // follows from that choice.
-    let candidate = child.candidates.pop_at(branch_idx);
+    let candidate = child.candidates.pop_at(candidate_idx);
 
     let task_id = candidate.task_id();
     let placement = candidate.into_task_placement(horizon.end);
 
     log::debug!(
-        "est: round={} branch={}/{} placed task={} at [{:.4}, {:.4}]",
+        "est: round={} candidate={}/{} placed task={} at [{:.4}, {:.4}]",
         round,
-        branch_idx,
-        branch_count,
+        candidate_idx,
+        candidate_count,
         task_id.0,
         placement.start.value(),
         placement.end.value(),
@@ -226,9 +229,9 @@ fn build_child_state<'a>(
                 check_block_dependencies(&child.schedule, task_id, placement.start, pctx.problem)
             {
                 log::debug!(
-                    "est: round={} branch={} task={} rejected by domain validation: {}",
+                    "est: round={} candidate={} task={} rejected by domain validation: {}",
                     round,
-                    branch_idx,
+                    candidate_idx,
                     task_id.0,
                     err,
                 );

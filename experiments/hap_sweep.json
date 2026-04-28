@@ -1,13 +1,8 @@
 {
   "input_json": "../data/ctao_n.json",
-  "output_dir": "../out/",
-  "emit_trace": true,
+  "output_dir": "../out/hap/",
+  "emit_trace": false,
   "sweep": {
-    "est": {
-      "endangered_thresholds": [1, 2, 4, 8, 16, 32],
-      "k_beams": [1, 2, 4, 8, 16, 32],
-      "branching_factors": [1, 2, 4, 8, 16, 32]
-    },
     "hap": {
       "iota_max_values": [64, 128],
       "rho_values": [2, 3, 4],

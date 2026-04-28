@@ -1,0 +1,12 @@
+{
+  "input_json": "../data/ctao_n.json",
+  "output_dir": "../out/est/",
+  "emit_trace": true,
+  "sweep": {
+    "est": {
+      "endangered_thresholds": [1, 2, 4, 8, 16, 32],
+      "k_beams": [1, 2, 4, 8, 16, 32],
+      "branching_factors": [1, 2, 4, 8, 16, 32]
+    }
+  }
+}

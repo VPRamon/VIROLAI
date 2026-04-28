@@ -6,7 +6,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use super::config::RunConfig;
+use super::config::{HapSurvivorMode, RunConfig};
 use super::problem::PreparedProblem;
 
 /// The result of a single scheduler run.
@@ -37,25 +37,42 @@ pub fn execute_run(
     schedule_path: &Path,
     trace_path: Option<&Path>,
 ) -> Result<RunOutcome, String> {
-    let mut scheduler = run.build_scheduler()?;
-    scheduler = scheduler.with_fom_label(run.fom.to_string());
+    let (schedule, trace_path_owned) = match *run {
+        RunConfig::Est(config) => {
+            let mut scheduler = config.build_scheduler()?;
+            scheduler = scheduler.with_fom_label(config.fom.to_string());
 
-    let trace_path_owned = if let Some(path) = trace_path {
-        let sink = JsonlTraceSink::create(path)
-            .map_err(|e| format!("failed to open est trace file {}: {e}", path.display()))?;
-        scheduler = scheduler.with_trace_sink(Arc::new(sink));
-        Some(path.to_path_buf())
-    } else {
-        None
+            let trace_path_owned = if let Some(path) = trace_path {
+                let sink = JsonlTraceSink::create(path).map_err(|e| {
+                    format!("failed to open est trace file {}: {e}", path.display())
+                })?;
+                scheduler = scheduler.with_trace_sink(Arc::new(sink));
+                Some(path.to_path_buf())
+            } else {
+                None
+            };
+
+            let schedule = scheduler
+                .run(
+                    &prepared.problem,
+                    &prepared.possible_periods,
+                    &prepared.horizon,
+                )
+                .map_err(|e| format!("EST run {} failed: {e}", run.slug()))?;
+            (schedule, trace_path_owned)
+        }
+        RunConfig::Hap(config) => {
+            let scheduler = config.build_scheduler()?;
+            let schedule = scheduler
+                .run(
+                    &prepared.problem,
+                    &prepared.possible_periods,
+                    &prepared.horizon,
+                )
+                .map_err(|e| format!("HAP run {} failed: {e}", run.slug()))?;
+            (schedule, None)
+        }
     };
-
-    let schedule = scheduler
-        .run(
-            &prepared.problem,
-            &prepared.possible_periods,
-            &prepared.horizon,
-        )
-        .map_err(|e| format!("EST run {} failed: {e}", run.slug()))?;
 
     let metadata = build_schedule_metadata(run, prepared);
     let output = ScheduleOutput::new(prepared.raw_json.clone(), &schedule, Some(metadata));
@@ -95,15 +112,37 @@ fn build_schedule_metadata(run: &RunConfig, prepared: &PreparedProblem) -> Sched
         end_mjd_utc: prepared.horizon.end.value(),
     });
 
-    let algorithm_config = serde_json::json!({
-        "k_beams": run.k_beams,
-        "branching_factor": run.branching_factor,
-        "endangered_threshold": run.endangered_threshold,
-        "fom": run.fom.to_string(),
-    });
+    let algorithm_config = match *run {
+        RunConfig::Est(config) => serde_json::json!({
+            "k_beams": config.k_beams,
+            "branching_factor": config.branching_factor,
+            "endangered_threshold": config.endangered_threshold,
+            "fom": config.fom.to_string(),
+        }),
+        RunConfig::Hap(config) => {
+            let survivor = match config.survivor_mode {
+                HapSurvivorMode::GreedyOne => serde_json::json!({
+                    "mode": config.survivor_mode.to_string()
+                }),
+                HapSurvivorMode::ElitistTopK | HapSurvivorMode::ParetoFront => {
+                    serde_json::json!({
+                        "mode": config.survivor_mode.to_string(),
+                        "cap": config.survivor_cap,
+                    })
+                }
+            };
+            serde_json::json!({
+                "iota_max": config.iota_max,
+                "rho": config.rho,
+                "population_size": config.population_size,
+                "survivor": survivor,
+                "seed": config.seed,
+            })
+        }
+    };
 
     ScheduleMetadata {
-        algorithm: "est".to_string(),
+        algorithm: run.algorithm().to_string(),
         algorithm_config,
         location,
         period,

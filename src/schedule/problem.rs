@@ -221,11 +221,10 @@ impl SchedulingProblem {
         };
         let block = self.block(block_id).ok_or(ScheduleError::BlockNotFound)?;
 
-        let order = block.topological_order()?;
-        let task_pos = order.iter().position(|&task| task == task_id).unwrap_or(0);
+        let predecessors = block.all_predecessors(task_id);
 
-        for predecessor_id in order.iter().take(task_pos) {
-            match schedule.placements.get(predecessor_id) {
+        for predecessor_id in predecessors {
+            match schedule.placements.get(&predecessor_id) {
                 None => return Ok(PeriodSet::new()),
                 Some(previous) if previous.end > candidate.start => return Ok(PeriodSet::new()),
                 Some(_) => {}

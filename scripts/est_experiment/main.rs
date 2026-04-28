@@ -3,7 +3,10 @@ mod output;
 mod problem;
 mod run;
 
-use config::{ExperimentSpec, HorizonOverride, RunConfig, SweepAxes};
+use config::{
+    EstRunConfig, EstSweepAxes, ExperimentSpec, ExperimentSweep, HapRunConfig, HapSweepAxes,
+    HorizonOverride, RunConfig,
+};
 use rayon::prelude::*;
 use std::collections::BTreeSet;
 use std::fs;
@@ -36,11 +39,11 @@ fn run() -> Result<(), String> {
         .horizon_override
         .or_else(|| spec.as_ref().and_then(|s| s.horizon_override));
 
-    // Merge axes: CLI > spec > EST defaults
+    // Merge axes: CLI EST flags > spec EST axes > scheduler defaults.
     let axes = merge_axes(cli.cli_axes, spec.as_ref().map(|s| &s.sweep));
     let runs = build_run_list(&axes)?;
 
-    println!("Resolved {} EST runs", runs.len());
+    println!("Resolved {} scheduler runs", runs.len());
     for run in &runs {
         println!("  {}", run.slug());
     }
@@ -62,7 +65,7 @@ fn run() -> Result<(), String> {
         .par_iter()
         .map(|run| {
             let schedule_path = schedules_dir.join(format!("{}.json", run.schedule_file_stem()));
-            let trace_path = if trace_enabled {
+            let trace_path = if trace_enabled && matches!(run, RunConfig::Est(_)) {
                 Some(schedules_dir.join(format!("{}.est_trace.jsonl", run.schedule_file_stem())))
             } else {
                 None
@@ -117,14 +120,45 @@ fn load_spec(path: &Path) -> Result<ExperimentSpec, String> {
 // ── Axis / run-list resolution ────────────────────────────────────────────────
 
 /// Merges CLI axes with spec axes; CLI takes precedence.
-fn merge_axes(cli: SweepAxes, spec: Option<&SweepAxes>) -> SweepAxes {
-    SweepAxes {
+fn merge_axes(cli: EstSweepAxes, spec: Option<&ExperimentSweep>) -> ExperimentSweep {
+    let spec_est = spec.and_then(|s| s.est.as_ref()).or_else(|| {
+        spec.and_then(|s| {
+            if est_axes_configured(&s.legacy_est) {
+                Some(&s.legacy_est)
+            } else {
+                None
+            }
+        })
+    });
+
+    let est = EstSweepAxes {
         endangered_thresholds: pick_axis(
             cli.endangered_thresholds,
-            spec.map(|s| &s.endangered_thresholds),
+            spec_est.map(|s| &s.endangered_thresholds),
         ),
-        k_beams: pick_axis(cli.k_beams, spec.map(|s| &s.k_beams)),
-        branching_factors: pick_axis(cli.branching_factors, spec.map(|s| &s.branching_factors)),
+        k_beams: pick_axis(cli.k_beams, spec_est.map(|s| &s.k_beams)),
+        branching_factors: pick_axis(
+            cli.branching_factors,
+            spec_est.map(|s| &s.branching_factors),
+        ),
+    };
+
+    let hap = spec.and_then(|s| s.hap.clone());
+    let has_est = est_axes_configured(&est)
+        || spec.is_none_or(|s| {
+            s.est.is_none() && s.hap.is_none() && !est_axes_configured(&s.legacy_est)
+        })
+        || spec.is_some_and(|s| s.est.is_some() || est_axes_configured(&s.legacy_est));
+    let explicit_est = spec.is_some_and(|s| s.est.is_some());
+
+    ExperimentSweep {
+        legacy_est: if has_est && !explicit_est {
+            est.clone()
+        } else {
+            EstSweepAxes::default()
+        },
+        est: if explicit_est { Some(est) } else { None },
+        hap,
     }
 }
 
@@ -141,12 +175,40 @@ fn pick_axis<T: Clone>(cli: Vec<T>, spec: Option<&Vec<T>>) -> Vec<T> {
     vec![]
 }
 
-/// Computes the Cartesian product of all axes, filling empty axes with EST defaults.
+fn est_axes_configured(axes: &EstSweepAxes) -> bool {
+    !axes.endangered_thresholds.is_empty()
+        || !axes.k_beams.is_empty()
+        || !axes.branching_factors.is_empty()
+}
+
+/// Computes the Cartesian product of all configured axes, filling empty axes with defaults.
 ///
 /// The resulting list is sorted and deduplicated. Every [`RunConfig`] is validated
 /// by attempting to construct its scheduler before returning.
-fn build_run_list(axes: &SweepAxes) -> Result<Vec<RunConfig>, String> {
-    let def = RunConfig::default();
+fn build_run_list(axes: &ExperimentSweep) -> Result<Vec<RunConfig>, String> {
+    let mut run_set = BTreeSet::new();
+    let include_default_est =
+        axes.est.is_none() && axes.hap.is_none() && !est_axes_configured(&axes.legacy_est);
+    let est_axes = axes.est.as_ref().unwrap_or(&axes.legacy_est);
+    if include_default_est || est_axes_configured(est_axes) || axes.est.is_some() {
+        insert_est_runs(est_axes, &mut run_set);
+    }
+    if let Some(hap_axes) = &axes.hap {
+        insert_hap_runs(hap_axes, &mut run_set);
+    }
+
+    let runs: Vec<_> = run_set.into_iter().collect();
+    if runs.is_empty() {
+        return Err("experiment sweep resolved to zero runs".to_string());
+    }
+    for run in &runs {
+        validate_run(*run)?;
+    }
+    Ok(runs)
+}
+
+fn insert_est_runs(axes: &EstSweepAxes, run_set: &mut BTreeSet<RunConfig>) {
+    let def = EstRunConfig::default();
     let endangered_thresholds = if axes.endangered_thresholds.is_empty() {
         vec![def.endangered_threshold]
     } else {
@@ -163,25 +225,64 @@ fn build_run_list(axes: &SweepAxes) -> Result<Vec<RunConfig>, String> {
         axes.branching_factors.clone()
     };
 
-    let mut run_set = BTreeSet::new();
     for &e in &endangered_thresholds {
         for &k in &k_beams {
             for &b in &branching_factors {
-                run_set.insert(RunConfig {
+                run_set.insert(RunConfig::Est(EstRunConfig {
                     fom: def.fom,
                     endangered_threshold: e,
                     k_beams: k,
                     branching_factor: b,
-                });
+                }));
             }
         }
     }
+}
 
-    let runs: Vec<_> = run_set.into_iter().collect();
-    for run in &runs {
-        run.build_scheduler()?;
+fn insert_hap_runs(axes: &HapSweepAxes, run_set: &mut BTreeSet<RunConfig>) {
+    let def = HapRunConfig::default();
+    let iota_max_values = pick_default(&axes.iota_max_values, def.iota_max);
+    let rho_values = pick_default(&axes.rho_values, def.rho);
+    let population_sizes = pick_default(&axes.population_sizes, def.population_size);
+    let survivor_modes = pick_default(&axes.survivor_modes, def.survivor_mode);
+    let survivor_caps = pick_default(&axes.survivor_caps, def.survivor_cap);
+    let seeds = pick_default(&axes.seeds, def.seed);
+
+    for &iota_max in &iota_max_values {
+        for &rho in &rho_values {
+            for &population_size in &population_sizes {
+                for &survivor_mode in &survivor_modes {
+                    for &survivor_cap in &survivor_caps {
+                        for &seed in &seeds {
+                            run_set.insert(RunConfig::Hap(HapRunConfig {
+                                iota_max,
+                                rho,
+                                population_size,
+                                survivor_mode,
+                                survivor_cap,
+                                seed,
+                            }));
+                        }
+                    }
+                }
+            }
+        }
     }
-    Ok(runs)
+}
+
+fn pick_default<T: Copy>(values: &[T], default: T) -> Vec<T> {
+    if values.is_empty() {
+        vec![default]
+    } else {
+        values.to_vec()
+    }
+}
+
+fn validate_run(run: RunConfig) -> Result<(), String> {
+    match run {
+        RunConfig::Est(config) => config.build_scheduler().map(|_| ()),
+        RunConfig::Hap(config) => config.build_scheduler().map(|_| ()),
+    }
 }
 
 // ── Path resolution ───────────────────────────────────────────────────────────
@@ -235,7 +336,7 @@ struct CliArgs {
     input_path: Option<String>,
     output_dir: Option<PathBuf>,
     horizon_override: Option<HorizonOverride>,
-    cli_axes: SweepAxes,
+    cli_axes: EstSweepAxes,
     /// `Some(true)` to force traces, `Some(false)` for `--no-trace`,
     /// `None` to defer to the spec or the default.
     trace_enabled: Option<bool>,
@@ -244,7 +345,7 @@ struct CliArgs {
 fn parse_cli(program: &str, args: &[String]) -> Result<CliArgs, String> {
     let mut spec_path: Option<PathBuf> = None;
     let mut output_dir: Option<PathBuf> = None;
-    let mut cli_axes = SweepAxes::default();
+    let mut cli_axes = EstSweepAxes::default();
     let mut trace_enabled: Option<bool> = None;
     let mut positionals: Vec<&str> = Vec::new();
 
@@ -390,13 +491,13 @@ fn print_usage(program: &str) {
         "Usage: {program} [--spec <spec.json>] [<input_json> [horizon_start_mjd horizon_end_mjd]]\n\
          \x20  [--output-dir <dir>]\n\
          \x20  [--est-e-values <ranges>] [--est-k-values <ranges>] [--est-b-values <ranges>]\n\
-         \x20  [--trace | --no-trace]   (default: traces enabled, written next to schedule JSON)\n\
+         \x20  [--trace | --no-trace]   (default: EST traces enabled, written next to schedule JSON)\n\
          \n\
          Ranges: comma-separated values or inclusive integer ranges, e.g. 1-5 or 1,3-5,8\n\
          \n\
          Examples:\n\
-         \x20  {program} --spec experiments/est.json\n\
-         \x20  {program} data/ctao_n.json --output-dir out/ --est-e-values 1,2 --est-k-values 1,10 --est-b-values 1-10"
+          \x20  {program} --spec experiments/est_sweep.json\n\
+          \x20  {program} data/ctao_n.json --output-dir out/ --est-e-values 1,2 --est-k-values 1,10 --est-b-values 1-10"
     );
 }
 
@@ -429,64 +530,126 @@ mod tests {
 
     #[test]
     fn build_run_list_uses_defaults_when_axes_empty() {
-        let axes = SweepAxes::default();
+        let axes = ExperimentSweep::default();
         let runs = build_run_list(&axes).unwrap();
         assert_eq!(runs, vec![RunConfig::default()]);
     }
 
     #[test]
     fn build_run_list_computes_cartesian_product() {
-        let axes = SweepAxes {
-            endangered_thresholds: vec![1, 2],
-            k_beams: vec![1, 2],
-            branching_factors: vec![1],
+        let axes = ExperimentSweep {
+            legacy_est: EstSweepAxes {
+                endangered_thresholds: vec![1, 2],
+                k_beams: vec![1, 2],
+                branching_factors: vec![1],
+            },
+            ..ExperimentSweep::default()
         };
         let runs = build_run_list(&axes).unwrap();
         assert_eq!(runs.len(), 4);
-        assert!(runs.iter().any(|r| r.endangered_threshold == 1));
-        assert!(runs.iter().any(|r| r.endangered_threshold == 2));
-        assert!(runs.iter().any(|r| r.k_beams == 1));
-        assert!(runs.iter().any(|r| r.k_beams == 2));
+        assert!(runs.iter().any(|r| matches!(
+            r,
+            RunConfig::Est(config) if config.endangered_threshold == 1
+        )));
+        assert!(runs.iter().any(|r| matches!(
+            r,
+            RunConfig::Est(config) if config.endangered_threshold == 2
+        )));
+        assert!(runs.iter().any(|r| matches!(
+            r,
+            RunConfig::Est(config) if config.k_beams == 1
+        )));
+        assert!(runs.iter().any(|r| matches!(
+            r,
+            RunConfig::Est(config) if config.k_beams == 2
+        )));
     }
 
     #[test]
     fn build_run_list_deduplicates() {
-        let axes = SweepAxes {
-            endangered_thresholds: vec![1, 1],
-            k_beams: vec![1, 1],
-            branching_factors: vec![1],
+        let axes = ExperimentSweep {
+            legacy_est: EstSweepAxes {
+                endangered_thresholds: vec![1, 1],
+                k_beams: vec![1, 1],
+                branching_factors: vec![1],
+            },
+            ..ExperimentSweep::default()
         };
         let runs = build_run_list(&axes).unwrap();
         assert_eq!(runs.len(), 1);
     }
 
     #[test]
+    fn build_run_list_includes_hap_axes() {
+        let axes = ExperimentSweep {
+            est: Some(EstSweepAxes {
+                endangered_thresholds: vec![1],
+                k_beams: vec![1],
+                branching_factors: vec![1],
+            }),
+            hap: Some(HapSweepAxes {
+                iota_max_values: vec![64],
+                rho_values: vec![2],
+                population_sizes: vec![4, 8],
+                ..HapSweepAxes::default()
+            }),
+            ..ExperimentSweep::default()
+        };
+        let runs = build_run_list(&axes).unwrap();
+        assert_eq!(runs.len(), 3);
+        assert_eq!(
+            runs.iter()
+                .filter(|r| matches!(r, RunConfig::Est(_)))
+                .count(),
+            1
+        );
+        assert_eq!(
+            runs.iter()
+                .filter(|r| matches!(r, RunConfig::Hap(_)))
+                .count(),
+            2
+        );
+    }
+
+    #[test]
     fn merge_axes_cli_wins_over_spec() {
-        let cli = SweepAxes {
+        let cli = EstSweepAxes {
             endangered_thresholds: vec![2],
             k_beams: vec![5, 10],
-            ..SweepAxes::default()
+            ..EstSweepAxes::default()
         };
-        let spec = SweepAxes {
-            endangered_thresholds: vec![1],
-            k_beams: vec![1, 2, 3],
-            ..SweepAxes::default()
+        let spec = ExperimentSweep {
+            est: Some(EstSweepAxes {
+                endangered_thresholds: vec![1],
+                k_beams: vec![1, 2, 3],
+                ..EstSweepAxes::default()
+            }),
+            ..ExperimentSweep::default()
         };
         let merged = merge_axes(cli, Some(&spec));
-        assert_eq!(merged.endangered_thresholds, vec![2]);
-        assert_eq!(merged.k_beams, vec![5, 10]);
+        let merged_est = merged
+            .est
+            .expect("explicit EST sweep should remain explicit");
+        assert_eq!(merged_est.endangered_thresholds, vec![2]);
+        assert_eq!(merged_est.k_beams, vec![5, 10]);
     }
 
     #[test]
     fn merge_axes_falls_back_to_spec_when_cli_empty() {
-        let cli = SweepAxes::default();
-        let spec = SweepAxes {
-            endangered_thresholds: vec![1, 2],
-            k_beams: vec![1, 2, 3],
-            ..SweepAxes::default()
+        let cli = EstSweepAxes::default();
+        let spec = ExperimentSweep {
+            est: Some(EstSweepAxes {
+                endangered_thresholds: vec![1, 2],
+                k_beams: vec![1, 2, 3],
+                ..EstSweepAxes::default()
+            }),
+            ..ExperimentSweep::default()
         };
         let merged = merge_axes(cli, Some(&spec));
-        assert_eq!(merged.endangered_thresholds, vec![1, 2]);
-        assert_eq!(merged.k_beams, vec![1, 2, 3]);
+        let merged_est = merged
+            .est
+            .expect("explicit EST sweep should remain explicit");
+        assert_eq!(merged_est.endangered_thresholds, vec![1, 2]);
+        assert_eq!(merged_est.k_beams, vec![1, 2, 3]);
     }
 }

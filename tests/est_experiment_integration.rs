@@ -62,11 +62,15 @@ fn est_experiment_pipeline_writes_expected_artifacts() {
     assert!(comparison_csv_path.exists(), "comparison.csv should exist");
     assert!(schedules_dir.is_dir(), "schedules/ directory should exist");
 
-    let expected_schedule_names =
-        HashSet::from(["e1-k1-b1.json".to_string(), "e2-k1-b1.json".to_string()]);
+    let expected_schedule_names = HashSet::from([
+        "e1-k1-b1.json".to_string(),
+        "e2-k1-b1.json".to_string(),
+        "hap-i8-r2-p2-elitist2-s0.json".to_string(),
+    ]);
     let actual_schedule_names: HashSet<String> = fs::read_dir(&schedules_dir)
         .expect("schedules dir should be readable")
         .filter_map(|e| e.ok())
+        .filter(|e| e.path().extension().and_then(|ext| ext.to_str()) == Some("json"))
         .map(|e| {
             e.file_name()
                 .to_str()
@@ -79,6 +83,13 @@ fn est_experiment_pipeline_writes_expected_artifacts() {
     for name in &expected_schedule_names {
         assert!(schedules_dir.join(name).exists(), "{name} should exist");
     }
+    assert!(schedules_dir.join("e1-k1-b1.est_trace.jsonl").exists());
+    assert!(schedules_dir.join("e2-k1-b1.est_trace.jsonl").exists());
+    assert!(
+        !schedules_dir
+            .join("hap-i8-r2-p2-elitist2-s0.est_trace.jsonl")
+            .exists()
+    );
 
     let manifest: Value = serde_json::from_str(
         &fs::read_to_string(&manifest_path).expect("manifest should be readable"),
@@ -101,7 +112,7 @@ fn est_experiment_pipeline_writes_expected_artifacts() {
         .get("runs")
         .and_then(Value::as_array)
         .expect("manifest should contain runs");
-    assert_eq!(runs.len(), 2);
+    assert_eq!(runs.len(), 3);
 
     let baseline_run_entry = runs
         .iter()
@@ -117,6 +128,24 @@ fn est_experiment_pipeline_writes_expected_artifacts() {
         .and_then(Value::as_str)
         .expect("manifest run should contain schedule_json");
     assert_eq!(baseline_schedule_json, "schedules/e1-k1-b1.json");
+
+    let hap_run_entry = runs
+        .iter()
+        .find(|entry| {
+            entry
+                .get("slug")
+                .and_then(Value::as_str)
+                .is_some_and(|slug| slug == "hap-i8-r2-p2-elitist2-s0")
+        })
+        .expect("manifest should include HAP run entry");
+    assert_eq!(
+        hap_run_entry.get("algorithm").and_then(Value::as_str),
+        Some("hap")
+    );
+    assert_eq!(
+        hap_run_entry.get("survivor_mode").and_then(Value::as_str),
+        Some("elitist_top_k")
+    );
 
     let mut reader = Reader::from_path(&comparison_csv_path).expect("comparison csv should load");
     let headers = reader.headers().expect("csv headers should exist").clone();
@@ -138,7 +167,7 @@ fn est_experiment_pipeline_writes_expected_artifacts() {
         .deserialize()
         .map(|row| row.expect("row should deserialize"))
         .collect();
-    assert_eq!(rows.len(), 2);
+    assert_eq!(rows.len(), 3);
 
     let baseline_row = rows
         .iter()
@@ -198,6 +227,8 @@ fn est_experiment_range_syntax_produces_correct_run_count() {
     let schedules_dir = run_dirs[0].path().join("schedules");
     let schedule_count = fs::read_dir(&schedules_dir)
         .expect("schedules dir should be readable")
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().extension().and_then(|ext| ext.to_str()) == Some("json"))
         .count();
     // e=[1,2,3] × k=[1,5] × b=[1] = 6 runs
     assert_eq!(schedule_count, 6);
@@ -269,10 +300,21 @@ fn write_spec_fixture(base_dir: &Path) -> std::path::PathBuf {
     let spec_json = r#"{
   "input_json": "input.json",
   "output_dir": "results",
+  "emit_trace": true,
   "sweep": {
-    "endangered_thresholds": [1, 2],
-    "k_beams": [1],
-    "branching_factors": [1]
+    "est": {
+      "endangered_thresholds": [1, 2],
+      "k_beams": [1],
+      "branching_factors": [1]
+    },
+    "hap": {
+      "iota_max_values": [8],
+      "rho_values": [2],
+      "population_sizes": [2],
+      "survivor_modes": ["elitist_top_k"],
+      "survivor_caps": [2],
+      "seeds": [0]
+    }
   }
 }"#;
 

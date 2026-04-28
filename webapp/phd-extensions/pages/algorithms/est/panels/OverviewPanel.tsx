@@ -10,12 +10,14 @@ import { useMemo } from 'react';
 import {
   ChartPanel,
   DataTable,
+  EmptyState,
   MetricCard,
   MetricsGrid,
   RangeFilterGroup,
+  TableSkeleton,
   type TableColumn,
 } from '@/components';
-import { HelpPopover } from '@/components/charts';
+import { DownloadCsvButton, HelpPopover } from '@/components/charts';
 import {
   METRIC_CUMULATIVE_PRIORITY,
   METRIC_PRIORITY_CAPTURE,
@@ -24,6 +26,8 @@ import {
 } from '@/features/schedules/analytics';
 import type { ScheduleAnalysisData } from '@/features/schedules/hooks/useScheduleAnalysisData';
 import type { RunRow } from '../useRunMatrix';
+import { useRunFocus } from '../useRunFocus';
+import { FocusBadge } from '../FocusBadge';
 import { useRunRangeFilters } from '../useRunRangeFilters';
 import { EST_FILTER_HELP, OVERVIEW_HELP } from '../chartHelp';
 
@@ -69,7 +73,8 @@ function adapt(run: RunRow): ScheduleAnalysisData {
 
 export default function OverviewPanel({ runs }: { runs: RunRow[] }) {
   const filters = useRunRangeFilters(runs);
-  const filteredRuns = filters.filtered;
+  const focus = useRunFocus();
+  const filteredRuns = useMemo(() => focus.apply(filters.filtered), [focus, filters.filtered]);
 
   const adapted = useMemo(() => filteredRuns.map(adapt), [filteredRuns]);
   const equivalence = useMemo(
@@ -140,6 +145,20 @@ export default function OverviewPanel({ runs }: { runs: RunRow[] }) {
 
   const columns: TableColumn<InventoryRow>[] = useMemo(
     () => [
+      {
+        header: '',
+        accessor: (r) => (
+          <input
+            type="checkbox"
+            checked={focus.isFocused(r.id)}
+            onChange={() => focus.toggle(r.id)}
+            className="rounded border-slate-500 bg-slate-800 text-sky-500"
+            aria-label={`Toggle focus on ${r.name}`}
+          />
+        ),
+        align: 'center',
+        width: 'w-8',
+      },
       { header: 'Schedule', accessor: 'name' },
       { header: 'Algorithm', accessor: 'algorithm', align: 'center' },
       { header: 'Config', accessor: 'configSummary' },
@@ -167,7 +186,7 @@ export default function OverviewPanel({ runs }: { runs: RunRow[] }) {
         align: 'center',
       },
     ],
-    [],
+    [focus],
   );
 
   const collapsedSavings = equivalence.groups.reduce(
@@ -175,8 +194,24 @@ export default function OverviewPanel({ runs }: { runs: RunRow[] }) {
     0,
   );
 
+  const csvColumns = useMemo(
+    () => [
+      { header: 'Schedule', accessor: (r: InventoryRow) => r.name },
+      { header: 'Algorithm', accessor: (r: InventoryRow) => r.algorithm },
+      { header: 'Config', accessor: (r: InventoryRow) => r.configSummary },
+      { header: 'Rate', accessor: (r: InventoryRow) => r.rate },
+      { header: 'Priority capture', accessor: (r: InventoryRow) => r.capture },
+      { header: 'Cumulative priority', accessor: (r: InventoryRow) => r.cumulative },
+      { header: 'Mean priority', accessor: (r: InventoryRow) => r.meanPriority },
+      { header: 'Equivalence', accessor: (r: InventoryRow) => r.equivalence },
+    ],
+    [],
+  );
+
   return (
     <div className="space-y-5">
+      <FocusBadge />
+
       {poolSize != null && (
         <div className="rounded border border-slate-700 bg-slate-900/40 px-3 py-2 text-xs text-slate-300">
           Task pool: <span className="font-semibold text-slate-100">{poolSize.toLocaleString()}</span>
@@ -231,16 +266,32 @@ export default function OverviewPanel({ runs }: { runs: RunRow[] }) {
       <ChartPanel
         title="Run inventory"
         headerActions={
-          <HelpPopover content={OVERVIEW_HELP} ariaLabel="Help: run inventory" />
+          <div className="flex items-center gap-2">
+            <DownloadCsvButton
+              label="Run inventory"
+              rows={inventory}
+              columns={csvColumns}
+            />
+            <HelpPopover content={OVERVIEW_HELP} ariaLabel="Help: run inventory" />
+          </div>
         }
       >
-        <DataTable
-          data={inventory}
-          columns={columns}
-          keyAccessor={(r) => r.id}
-          caption="Selected EST runs"
-          captionHidden
-        />
+        {filteredRuns.length > 0 && filteredRuns.every((r) => !r.insights) ? (
+          <TableSkeleton rows={5} columns={4} />
+        ) : inventory.length === 0 ? (
+          <EmptyState
+            title="No data to display"
+            hint="Adjust the filters or run more EST experiments."
+          />
+        ) : (
+          <DataTable
+            data={inventory}
+            columns={columns}
+            keyAccessor={(r) => r.id}
+            caption="Selected EST runs"
+            captionHidden
+          />
+        )}
       </ChartPanel>
     </div>
   );

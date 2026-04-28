@@ -153,6 +153,23 @@ impl SchedulingBlock {
             .collect()
     }
 
+    /// All transitive predecessor task IDs (BFS over predecessors).
+    pub fn all_predecessors(&self, task_id: TaskId) -> std::collections::HashSet<TaskId> {
+        let mut visited = std::collections::HashSet::new();
+        let mut queue = std::collections::VecDeque::new();
+        for predecessor in self.predecessors(task_id) {
+            queue.push_back(predecessor);
+        }
+        while let Some(current) = queue.pop_front() {
+            if visited.insert(current) {
+                for predecessor in self.predecessors(current) {
+                    queue.push_back(predecessor);
+                }
+            }
+        }
+        visited
+    }
+
     /// Direct successor task IDs of `task_id` (tasks that must be scheduled
     /// after it).
     pub fn successors(&self, task_id: TaskId) -> Vec<TaskId> {
@@ -402,6 +419,19 @@ mod tests {
 
         let desc_30 = block.all_descendants(TaskId(30));
         assert!(desc_30.is_empty());
+    }
+
+    #[test]
+    fn all_predecessors_is_transitive() {
+        let block = chain_block();
+        let preds_30 = block.all_predecessors(TaskId(30));
+        assert_eq!(preds_30, HashSet::from([TaskId(10), TaskId(20)]));
+
+        let preds_20 = block.all_predecessors(TaskId(20));
+        assert_eq!(preds_20, HashSet::from([TaskId(10)]));
+
+        let preds_10 = block.all_predecessors(TaskId(10));
+        assert!(preds_10.is_empty());
     }
 
     #[test]

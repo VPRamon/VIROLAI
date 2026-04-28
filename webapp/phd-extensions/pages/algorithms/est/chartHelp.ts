@@ -11,6 +11,9 @@ export const EST_FILTER_HELP: HelpContent = {
     'Each slider corresponds to a numeric configuration field (e.g. e, k, b).',
     'Runs whose value falls outside the selected range disappear from every panel below.',
     'Sliders auto-hide when a knob has only a single value across the loaded runs.',
+    'Lasso/box-select on a chart (or row checkbox) further narrows the view to a "focus set"; clear it from the badge above the toolbar.',
+    'Selections persist across tabs and reloads via the URL — share the link to share your view.',
+    'Charts can be downloaded as PNG or SVG from the chart header; tables export to CSV via the same header bar.',
   ],
 };
 
@@ -48,20 +51,22 @@ export const SWEEP_TABLE_HELP: HelpContent = {
 export const SENSITIVITY_3D_HELP: HelpContent = {
   title: 'Configuration cube',
   summary:
-    'Maps the first three numeric configuration dimensions to the X/Y/Z axes; colour encodes the chosen metric.',
+    'Maps three numeric configuration dimensions to the X/Y/Z axes; colour encodes the chosen metric.',
   bullets: [
-    'Useful for spotting clusters of high-performing parameter combinations.',
+    'Pick which dimensions land on each axis using the X/Y/Z selectors above.',
+    'Choose a categorical "Facet by" dimension to render one cube per category value.',
+    'Click a marker to toggle it in/out of the focus set (lasso doesn\u2019t work in 3D).',
     'Use the metric radios to switch the colour scale.',
-    'Labels show the schedule name; rotate the cube to escape occlusions.',
   ],
 };
 
 export const SENSITIVITY_2D_HELP: HelpContent = {
   title: '2D scatter',
   summary:
-    'Single-axis view of the metric versus the first numeric configuration dimension.',
+    'Single-axis view of the metric versus the chosen X dimension.',
   bullets: [
     'Quick check of the marginal trend; complements the 3D cube above.',
+    'Lasso or box-select markers to define a focus set shared with every chart and table on this tab.',
     'Hover a marker to read its schedule name and exact metric value.',
   ],
 };
@@ -86,6 +91,8 @@ export const PARETO_HELP: HelpContent = {
     'Green markers form the Pareto front: no other run beats them on every chosen metric, respecting each metric\u2019s direction (max/min).',
     'Grey markers are dominated by at least one green run.',
     'Use "Color by" to colour the front by a configuration knob (e, k, b, \u2026); the trend that lights the front reveals which configuration drives the win.',
+    'Lasso (2D) or click-toggle (3D) sets a focus set that filters the table and equivalent-run views below.',
+    'Toggle "Scalarize" to weigh each active metric and recolour points by Σ wᵢ·norm(metricᵢ); the underlying CSV gains a "scalar" column.',
     'When "Collapse equivalents" is on, runs producing identical scheduled-task sets are folded into one representative annotated with a count badge.',
   ],
 };
@@ -98,6 +105,41 @@ export const INTERNALS_FOM_HELP: HelpContent = {
     'Solid line = best beam; dotted = median; dashed = worst.',
     'Convergence shows up as the three lines collapsing onto each other.',
     'Use the legend to focus on a single run when many overlap.',
+    'See also the Convergence summary, Normalized trajectory, and Diversity charts below for at-a-glance comparisons across runs.',
+    'Selections persist across tabs and reloads via the URL — share the link to share your view.',
+  ],
+};
+
+export const INTERNALS_CONVERGENCE_HELP: HelpContent = {
+  title: 'Convergence summary',
+  summary:
+    'Per-run scalar summary of how quickly the trajectory settled: rounds-to-best, plateau length, and final improvement margin.',
+  bullets: [
+    'Bars/columns are one per traced run; shorter bars indicate faster convergence.',
+    'Pair with the Score trajectory above to confirm whether early convergence was a true optimum or a premature plateau.',
+    'Selections persist across tabs and reloads via the URL — share the link to share your view.',
+  ],
+};
+
+export const INTERNALS_NORMALIZED_HELP: HelpContent = {
+  title: 'Normalized trajectory',
+  summary:
+    'Same per-iteration best score as the Score trajectory, but each run is rescaled to [0, 1] over its own (min, max).',
+  bullets: [
+    'Removes absolute-magnitude differences so curve shape is directly comparable across runs.',
+    'A run that climbs to 1.0 early indicates fast relative convergence; a long flat tail means stagnation.',
+    'Selections persist across tabs and reloads via the URL — share the link to share your view.',
+  ],
+};
+
+export const INTERNALS_DIVERSITY_HELP: HelpContent = {
+  title: 'Diversity',
+  summary:
+    'Per-iteration spread of the beam pool — how different the candidate solutions are from each other within each round.',
+  bullets: [
+    'Higher values mean the search is still exploring; collapsing diversity signals exploitation/convergence.',
+    'A premature drop alongside a flat best-score curve is a classic premature-convergence signature.',
+    'Selections persist across tabs and reloads via the URL — share the link to share your view.',
   ],
 };
 
@@ -138,5 +180,7 @@ export const OVERVIEW_HELP: HelpContent = {
     'The metric cards above summarise the best run for each headline KPI.',
     'Rows show "…" while their insights are still loading.',
     'Use the filter sliders to narrow down which runs are summarised.',
+    'Tick a row\u2019s checkbox to add/remove it from the focus set; the metric cards update accordingly.',
+    'Use "Run inventory" in the panel header to download the visible table as CSV.',
   ],
 };

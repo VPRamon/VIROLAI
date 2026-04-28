@@ -6,6 +6,7 @@ use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
 use super::config::HorizonOverride;
+use super::config::{HapSurvivorMode, RunConfig};
 use super::run::RunOutcome;
 
 /// Top-level manifest written to `manifest.json` in the output directory.
@@ -24,10 +25,27 @@ pub struct ExperimentManifest {
 #[derive(Debug, Clone, Serialize)]
 pub struct ManifestRunEntry {
     pub slug: String,
-    pub fom: scheduler::scheduler::est::EstFomKind,
-    pub endangered_threshold: u32,
-    pub k_beams: usize,
-    pub branching_factor: usize,
+    pub algorithm: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fom: Option<scheduler::scheduler::est::EstFomKind>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub endangered_threshold: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub k_beams: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub branching_factor: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub iota_max: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rho: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub population_size: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub survivor_mode: Option<HapSurvivorMode>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub survivor_cap: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub seed: Option<u64>,
     /// Path to the schedule JSON, relative to the output directory.
     pub schedule_json: String,
     /// Path to the EST trace JSONL, relative to the output directory.
@@ -65,20 +83,50 @@ pub fn build_manifest(
         comparison_csv: relative_to_output(output_dir, comparison_csv_path),
         runs: outcomes
             .iter()
-            .map(|o| ManifestRunEntry {
-                slug: o.config.slug(),
-                fom: o.config.fom,
-                endangered_threshold: o.config.endangered_threshold,
-                k_beams: o.config.k_beams,
-                branching_factor: o.config.branching_factor,
-                schedule_json: relative_to_output(output_dir, &o.schedule_path),
-                est_trace_jsonl: o
-                    .trace_path
-                    .as_ref()
-                    .map(|p| relative_to_output(output_dir, p)),
-            })
+            .map(|o| manifest_entry(output_dir, o))
             .collect(),
     }
+}
+
+fn manifest_entry(output_dir: &Path, outcome: &RunOutcome) -> ManifestRunEntry {
+    let mut entry = ManifestRunEntry {
+        slug: outcome.config.slug(),
+        algorithm: outcome.config.algorithm().to_string(),
+        fom: None,
+        endangered_threshold: None,
+        k_beams: None,
+        branching_factor: None,
+        iota_max: None,
+        rho: None,
+        population_size: None,
+        survivor_mode: None,
+        survivor_cap: None,
+        seed: None,
+        schedule_json: relative_to_output(output_dir, &outcome.schedule_path),
+        est_trace_jsonl: outcome
+            .trace_path
+            .as_ref()
+            .map(|p| relative_to_output(output_dir, p)),
+    };
+
+    match outcome.config {
+        RunConfig::Est(config) => {
+            entry.fom = Some(config.fom);
+            entry.endangered_threshold = Some(config.endangered_threshold);
+            entry.k_beams = Some(config.k_beams);
+            entry.branching_factor = Some(config.branching_factor);
+        }
+        RunConfig::Hap(config) => {
+            entry.iota_max = Some(config.iota_max);
+            entry.rho = Some(config.rho);
+            entry.population_size = Some(config.population_size);
+            entry.survivor_mode = Some(config.survivor_mode);
+            entry.survivor_cap = Some(config.survivor_cap);
+            entry.seed = Some(config.seed);
+        }
+    }
+
+    entry
 }
 
 pub(crate) fn build_comparison_row(baseline_slug: &str, outcome: &RunOutcome) -> ComparisonRow {

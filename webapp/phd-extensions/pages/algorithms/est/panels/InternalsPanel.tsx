@@ -6,17 +6,39 @@
  *   - Best/median/worst FOM per iteration (multi-run overlay).
  *   - Beam fitness ridge (best beam evolution as filled area per run).
  *   - Wall-time per iteration.
+ *   - Convergence summary card (rounds-to-best, final gap, improvement rate).
+ *   - Normalized best-score trajectory (best_so_far / max).
+ *   - Per-round beam-score diversity (std of beam_scores).
  */
 import { useMemo } from 'react';
-import { ChartPanel, PlotlyChart } from '@/components';
+import { ChartPanel, EmptyState, PlotlyChart, TableSkeleton } from '@/components';
 import { usePlotlyChartChrome, usePlotlyTheme } from '@/hooks';
 import type { Data, Layout } from 'plotly.js';
 import type { EstTraceIteration, RunRow } from '../useRunMatrix';
+import { useRunFocus } from '../useRunFocus';
+import { FocusBadge } from '../FocusBadge';
+import { booleanCodec, stringCodec, useUrlState } from '../../../../lib/useUrlState';
 import {
   INTERNALS_FOM_HELP,
   INTERNALS_HEATMAP_HELP,
   INTERNALS_WALL_HELP,
 } from '../chartHelp';
+import {
+  bestSoFar,
+  computeDiversityTrajectory,
+  computeFinalGapToBest,
+  computeImprovementRate,
+  computeRoundsToBest,
+} from './InternalsPanel.helpers';
+
+export {
+  bestSoFar,
+  computeDiversityTrajectory,
+  computeFinalGapToBest,
+  computeImprovementRate,
+  computeNormalizedTrajectory,
+  computeRoundsToBest,
+} from './InternalsPanel.helpers';
 
 const num = (v: unknown): number | null => {
   if (typeof v === 'number' && Number.isFinite(v)) return v;
@@ -48,12 +70,73 @@ function buildSeries(name: string, iters: EstTraceIteration[]): Series {
   return { name, rounds, bestScore, medianScore, worstScore, wallMs };
 }
 
-export default function InternalsPanel({ runs }: { runs: RunRow[] }) {
+type NormMetric = 'best' | 'median' | 'worst';
+const NORM_METRIC_LABELS: Record<NormMetric, string> = {
+  best: 'Best score',
+  median: 'Median score',
+  worst: 'Worst score',
+};
+
+function pickMetric(it: EstTraceIteration, metric: NormMetric): number | null {
+  if (metric === 'best') return num(it.best_score);
+  if (metric === 'median') return num(it.median_score);
+  return num(it.worst_score);
+}
+
+function bestSoFarOf(
+  iters: EstTraceIteration[],
+  metric: NormMetric,
+): Array<{ round: number; value: number }> {
+  if (metric === 'best') return bestSoFar(iters);
+  const out: Array<{ round: number; value: number }> = [];
+  let running = -Infinity;
+  iters.forEach((it, i) => {
+    const v = pickMetric(it, metric);
+    const r = num(it.round) ?? i;
+    if (v !== null && v > running) running = v;
+    if (running !== -Infinity) out.push({ round: r, value: running });
+  });
+  return out;
+}
+
+function fmtNumber(v: number | null, digits = 3): string {
+  if (v === null || !Number.isFinite(v)) return '—';
+  return v.toFixed(digits);
+}
+
+export default function InternalsPanel({
+  runs,
+  loading = false,
+}: {
+  runs: RunRow[];
+  loading?: boolean;
+}) {
   const plotlyTheme = usePlotlyTheme();
+  const focus = useRunFocus();
+  const effectiveRuns = useMemo(() => focus.apply(runs), [focus, runs]);
+
+  const [normMetric, setNormMetric] = useUrlState<string>('est_internals_norm_metric', 'best', {
+    codec: stringCodec,
+  });
+  const [showDiversity, setShowDiversity] = useUrlState<boolean>(
+    'est_internals_show_diversity',
+    true,
+    { codec: booleanCodec },
+  );
+  const safeNormMetric: NormMetric =
+    normMetric === 'median' || normMetric === 'worst' ? normMetric : 'best';
 
   const series = useMemo<Series[]>(
-    () => runs.filter((r) => r.iterations?.length).map((r) => buildSeries(r.schedule.schedule_name, r.iterations!)),
-    [runs],
+    () =>
+      effectiveRuns
+        .filter((r) => r.iterations?.length)
+        .map((r) => buildSeries(r.schedule.schedule_name, r.iterations!)),
+    [effectiveRuns],
+  );
+
+  const tracedRuns = useMemo(
+    () => effectiveRuns.filter((r) => r.iterations && r.iterations.length > 0),
+    [effectiveRuns],
   );
 
   const fomTraces = useMemo<Data[]>(() => {
@@ -129,6 +212,78 @@ export default function InternalsPanel({ runs }: { runs: RunRow[] }) {
     [plotlyTheme],
   );
 
+  const normalizedTraces = useMemo<Data[]>(
+    () =>
+      tracedRuns.map((r, i) => {
+        const pts = bestSoFarOf(r.iterations!, safeNormMetric);
+        const colour = `hsl(${(i * 60) % 360}, 70%, 60%)`;
+        if (pts.length === 0) {
+          return {
+            type: 'scatter',
+            mode: 'lines',
+            name: r.schedule.schedule_name,
+            x: [],
+            y: [],
+            line: { color: colour, width: 2 },
+          } satisfies Data;
+        }
+        const max = pts[pts.length - 1].value;
+        const safe = Number.isFinite(max) && max !== 0 ? max : 1;
+        return {
+          type: 'scatter',
+          mode: 'lines',
+          name: r.schedule.schedule_name,
+          x: pts.map((p) => p.round),
+          y: pts.map((p) => p.value / safe),
+          line: { color: colour, width: 2 },
+        } satisfies Data;
+      }),
+    [tracedRuns, safeNormMetric],
+  );
+
+  const normalizedLayout = useMemo<Partial<Layout>>(
+    () => ({
+      ...plotlyTheme.layout,
+      xaxis: { ...plotlyTheme.layout.xaxis, title: { text: 'Round' } },
+      yaxis: {
+        ...plotlyTheme.layout.yaxis,
+        title: { text: `${NORM_METRIC_LABELS[safeNormMetric]} / max` },
+        range: [0, 1.05],
+      },
+      margin: { l: 60, r: 20, t: 20, b: 50 },
+      legend: { orientation: 'h', y: -0.18 },
+    }),
+    [plotlyTheme, safeNormMetric],
+  );
+
+  const diversityTraces = useMemo<Data[]>(
+    () =>
+      tracedRuns.map((r, i) => {
+        const { rounds, std } = computeDiversityTrajectory(r.iterations!);
+        return {
+          type: 'scatter',
+          mode: 'lines',
+          name: r.schedule.schedule_name,
+          x: rounds,
+          y: std,
+          line: { color: `hsl(${(i * 60) % 360}, 70%, 60%)`, width: 2 },
+          connectgaps: false,
+        } satisfies Data;
+      }),
+    [tracedRuns],
+  );
+
+  const diversityLayout = useMemo<Partial<Layout>>(
+    () => ({
+      ...plotlyTheme.layout,
+      xaxis: { ...plotlyTheme.layout.xaxis, title: { text: 'Round' } },
+      yaxis: { ...plotlyTheme.layout.yaxis, title: { text: 'std(beam_scores)' } },
+      margin: { l: 60, r: 20, t: 20, b: 50 },
+      legend: { orientation: 'h', y: -0.18 },
+    }),
+    [plotlyTheme],
+  );
+
   const fomChrome = usePlotlyChartChrome({
     label: 'Score trajectory',
     help: INTERNALS_FOM_HELP,
@@ -137,21 +292,56 @@ export default function InternalsPanel({ runs }: { runs: RunRow[] }) {
     label: 'Wall time per round',
     help: INTERNALS_WALL_HELP,
   });
+  const normalizedChrome = usePlotlyChartChrome({ label: 'Normalized best-score trajectory' });
+  const diversityChrome = usePlotlyChartChrome({ label: 'Per-round beam diversity' });
+
+  if (loading) {
+    return <TableSkeleton rows={6} columns={4} />;
+  }
 
   if (series.length === 0) {
     return (
-      <div className="rounded-lg border border-dashed border-slate-600 py-16 text-center text-sm text-slate-400">
-        No EST traces available for the selected runs.
-        <div className="mt-2 text-xs">
-          Re-run the experiment with <code className="rounded bg-slate-800 px-1">--trace</code> to
-          enable per-iteration tracing.
-        </div>
-      </div>
+      <EmptyState
+        title="No convergence data"
+        hint="Run an EST experiment to populate iteration traces."
+      />
     );
   }
 
   return (
     <div className="space-y-5">
+      <FocusBadge />
+
+      <ChartPanel title="Convergence summary">
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-xs text-slate-200">
+            <thead className="text-[11px] uppercase tracking-wide text-slate-400">
+              <tr>
+                <th className="px-2 py-1">Run</th>
+                <th className="px-2 py-1">Rounds to best</th>
+                <th className="px-2 py-1">Final gap to best</th>
+                <th className="px-2 py-1">Improvement rate (slope/round)</th>
+              </tr>
+            </thead>
+            <tbody>
+              {tracedRuns.map((r) => {
+                const iters = r.iterations!;
+                return (
+                  <tr key={r.schedule.schedule_id} className="border-t border-slate-800/60">
+                    <td className="px-2 py-1 font-medium text-slate-100">
+                      {r.schedule.schedule_name}
+                    </td>
+                    <td className="px-2 py-1">{fmtNumber(computeRoundsToBest(iters), 0)}</td>
+                    <td className="px-2 py-1">{fmtNumber(computeFinalGapToBest(iters), 4)}</td>
+                    <td className="px-2 py-1">{fmtNumber(computeImprovementRate(iters), 4)}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </ChartPanel>
+
       <ChartPanel
         title="Score trajectory (best / median / worst per round)"
         headerActions={fomChrome.headerActions}
@@ -167,7 +357,69 @@ export default function InternalsPanel({ runs }: { runs: RunRow[] }) {
         {fomChrome.fullscreenOverlay}
       </ChartPanel>
 
-      <BeamHeatmap runs={runs} />
+      <ChartPanel
+        title="Normalized best-score trajectory"
+        headerActions={
+          <div className="flex items-center gap-2 text-xs text-slate-300">
+            <label className="flex items-center gap-1">
+              <span className="text-slate-400">Metric</span>
+              <select
+                value={safeNormMetric}
+                onChange={(e) => setNormMetric(e.target.value)}
+                className="rounded border border-slate-600 bg-slate-800 px-1 py-0.5 text-xs"
+              >
+                <option value="best">Best</option>
+                <option value="median">Median</option>
+                <option value="worst">Worst</option>
+              </select>
+            </label>
+            {normalizedChrome.headerActions}
+          </div>
+        }
+      >
+        <PlotlyChart
+          data={normalizedTraces}
+          layout={normalizedLayout}
+          config={normalizedChrome.config}
+          onInitialized={normalizedChrome.onInitialized}
+          height="320px"
+          ariaLabel="Normalized best-so-far trajectory across rounds"
+        />
+        {normalizedChrome.fullscreenOverlay}
+      </ChartPanel>
+
+      <BeamHeatmap runs={effectiveRuns} />
+
+      <ChartPanel
+        title="Diversity (per-round beam std)"
+        headerActions={
+          <div className="flex items-center gap-2 text-xs text-slate-300">
+            <label className="flex items-center gap-1">
+              <input
+                type="checkbox"
+                checked={showDiversity}
+                onChange={(e) => setShowDiversity(e.target.checked)}
+              />
+              <span>Show chart</span>
+            </label>
+            {diversityChrome.headerActions}
+          </div>
+        }
+      >
+        {showDiversity ? (
+          <PlotlyChart
+            data={diversityTraces}
+            layout={diversityLayout}
+            config={diversityChrome.config}
+            onInitialized={diversityChrome.onInitialized}
+            height="320px"
+            ariaLabel="Per-round standard deviation of beam scores"
+          />
+        ) : (
+          <div className="py-6 text-center text-xs text-slate-400">Diversity chart hidden.</div>
+        )}
+        {diversityChrome.fullscreenOverlay}
+      </ChartPanel>
 
       <ChartPanel title="Wall time per round" headerActions={wallChrome.headerActions}>
         <PlotlyChart
@@ -207,17 +459,17 @@ function BeamHeatmap({ runs }: { runs: RunRow[] }) {
         z[row].push(row < sorted.length ? sorted[row] : null);
       }
     });
-      return {
-        data: [
-          {
-            type: 'heatmap',
-            x,
+    return {
+      data: [
+        {
+          type: 'heatmap',
+          x,
           z,
           colorscale: 'Viridis',
           colorbar: { title: { text: 'Score' } },
         },
-        ],
-        layout: {
+      ],
+      layout: {
         ...plotlyTheme.layout,
         xaxis: { ...plotlyTheme.layout.xaxis, title: { text: 'Round' } },
         yaxis: { ...plotlyTheme.layout.yaxis, title: { text: 'Beam rank (best → worst)' } },

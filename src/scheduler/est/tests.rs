@@ -6,8 +6,10 @@ use super::{Configuration, EstScheduler, MAX_K_BEAMS, run_scheduler};
 use crate::constraints::{ConstraintExpr, PrioritySoftConstraint, SoftConstraintExpr};
 use crate::error::ScheduleError;
 use crate::prescheduler::TaskPeriodMap;
+use crate::schedule::SchedulingProblem;
+use crate::scheduling_block::{Dependency, SchedulingBlock};
 use crate::task::{IcrsTarget, Task};
-use crate::time::{MJD, Period, TaskId, Time};
+use crate::time::{MJD, Period, SchedulingBlockId, TaskId, Time};
 use qtty::{Degrees, Seconds};
 use siderust::coordinates::frames::ICRS;
 use siderust::coordinates::spherical::Direction;
@@ -474,6 +476,66 @@ fn run_scheduler_recomputes_est_from_remaining_horizon() {
     assert!((task_1.start.to::<MJD>().value() - 0.0).abs() < 1e-9);
     assert!((task_2.start.to::<MJD>().value() - 1.0).abs() < 1e-9);
     assert!(task_1.end <= task_2.start);
+}
+
+#[test]
+fn est_problem_schedules_independent_same_block_tasks_by_windows() {
+    let mut possible = TaskPeriodMap::new();
+    possible.insert(TaskId(1), windows(&[(2.0, 3.0)]));
+    possible.insert(TaskId(2), windows(&[(0.0, 1.0)]));
+
+    let block = SchedulingBlock::from_tasks(
+        SchedulingBlockId(1),
+        vec![
+            task_with_priority(1, 1.0, 1.0),
+            task_with_priority(2, 1.0, 1.0),
+        ],
+    )
+    .expect("block should be valid");
+    let problem = SchedulingProblem::from_blocks(vec![block]).expect("problem should be valid");
+
+    let horizon = period(0.0, 3.0);
+    let schedule = EstScheduler::default()
+        .run(&problem, &possible, &horizon)
+        .expect("run should pass");
+
+    assert_eq!(schedule.len(), 2);
+    let task_1 = schedule.get(TaskId(1)).expect("task 1 should be placed");
+    let task_2 = schedule.get(TaskId(2)).expect("task 2 should be placed");
+    assert!((task_2.start.to::<MJD>().value() - 0.0).abs() < 1e-9);
+    assert!((task_1.start.to::<MJD>().value() - 2.0).abs() < 1e-9);
+}
+
+#[test]
+fn est_problem_scans_past_blocked_successor_to_ready_predecessor() {
+    let mut possible = TaskPeriodMap::new();
+    possible.insert(TaskId(1), windows(&[(1.0, 2.0)]));
+    possible.insert(TaskId(2), windows(&[(0.0, 3.0)]));
+
+    let mut block = SchedulingBlock::from_tasks(
+        SchedulingBlockId(1),
+        vec![
+            task_with_priority(1, 1.0, 1.0),
+            task_with_priority(2, 1.0, 1.0),
+        ],
+    )
+    .expect("block should be valid");
+    block
+        .add_dependency(TaskId(1), TaskId(2), Dependency::DependsOn)
+        .expect("dependency should be valid");
+    let problem = SchedulingProblem::from_blocks(vec![block]).expect("problem should be valid");
+
+    let horizon = period(0.0, 3.0);
+    let schedule = EstScheduler::default()
+        .run(&problem, &possible, &horizon)
+        .expect("run should pass");
+
+    assert_eq!(schedule.len(), 2);
+    let predecessor = schedule.get(TaskId(1)).expect("task 1 should be placed");
+    let successor = schedule.get(TaskId(2)).expect("task 2 should be placed");
+    assert!((predecessor.start.to::<MJD>().value() - 1.0).abs() < 1e-9);
+    assert!((successor.start.to::<MJD>().value() - 2.0).abs() < 1e-9);
+    assert!(predecessor.end <= successor.start);
 }
 
 #[test]

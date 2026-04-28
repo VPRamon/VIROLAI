@@ -34,10 +34,10 @@ pub(super) fn check_block_dependencies(
         return Ok(());
     };
 
-    let order = block.topological_order()?;
-    let task_pos = order.iter().position(|&t| t == task_id).unwrap_or(0);
+    let mut predecessors: Vec<_> = block.all_predecessors(task_id).into_iter().collect();
+    predecessors.sort_by_key(|task_id| task_id.0);
 
-    for &pred_id in order.iter().take(task_pos) {
+    for pred_id in predecessors {
         match schedule.get(pred_id) {
             None => {
                 return Err(ScheduleError::ConstraintViolation(format!(
