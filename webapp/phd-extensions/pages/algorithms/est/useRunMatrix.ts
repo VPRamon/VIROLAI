@@ -68,7 +68,7 @@ export function useRunMatrix(schedules: ScheduleInfo[]): RunMatrix {
   const insightsQueries = useQueries({
     queries: ids.map((id) => ({
       queryKey: queryKeys.insights(id),
-      queryFn: () => api.getInsights(id),
+      queryFn: ({ signal }: { signal: AbortSignal }) => api.getInsights(id, { signal }),
       enabled: id > 0,
     })),
   });
@@ -76,7 +76,7 @@ export function useRunMatrix(schedules: ScheduleInfo[]): RunMatrix {
   const traceQueries = useQueries({
     queries: ids.map((id) => ({
       queryKey: queryKeys.algorithmTrace(id),
-      queryFn: () => api.getAlgorithmTrace(id),
+      queryFn: ({ signal }: { signal: AbortSignal }) => api.getAlgorithmTrace(id, { signal }),
       enabled: id > 0,
       retry: false,
     })),

@@ -25,6 +25,12 @@ import {
   RangeFilterGroup,
   TableSkeleton,
 } from '@/components';
+import { useAsyncMemo } from '@/hooks/useAsyncMemo';
+import {
+  computeParetoFront as computeParetoFrontSync,
+  type ObjectiveDirection,
+} from '@/workers/aggregations';
+import { getAggregationsClient } from '@/workers/aggregationsClient';
 import {
   useUrlState,
   stringCodec,
@@ -121,7 +127,8 @@ export default function ParetoPanel({ runs }: { runs: RunRow[] }) {
   const fragQueries = useQueries({
     queries: effective.map((r) => ({
       queryKey: queryKeys.fragmentation(r.schedule.schedule_id),
-      queryFn: () => api.getFragmentation(r.schedule.schedule_id),
+      queryFn: ({ signal }: { signal: AbortSignal }) =>
+        api.getFragmentation(r.schedule.schedule_id, { signal }),
       enabled: r.schedule.schedule_id > 0,
     })),
   });
