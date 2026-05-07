@@ -1,7 +1,9 @@
 pub mod composite;
+pub mod est_kind;
 pub mod soft_constraint;
 
 pub use self::composite::CompositeFom;
+pub use self::est_kind::EstFomKind;
 pub use self::soft_constraint::SoftConstraintFom;
 
 use crate::schedule::Schedule;
