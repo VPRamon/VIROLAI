@@ -1,5 +1,5 @@
 use super::candidate::EstCandidate;
-use super::fom::{EstFomKind, SoftConstraintFom};
+use crate::scheduler::fom::{EstFomKind, SoftConstraintFom};
 use super::ordering::{compare_candidates, sort_candidates};
 use super::queue::CandidateQueue;
 use super::{Configuration, EstScheduler, MAX_K_BEAMS, run_scheduler};
@@ -546,7 +546,7 @@ fn default_config_is_valid() {
 
 #[test]
 fn with_fom_builds_soft_constraint_scheduler() {
-    let scheduler = EstScheduler::with_fom(
+    let scheduler = EstScheduler::new(
         Configuration::default(),
         EstFomKind::SoftConstraint.into_fom(),
     )

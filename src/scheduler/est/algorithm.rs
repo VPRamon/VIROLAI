@@ -1,7 +1,7 @@
 use super::beam;
 use super::configuration::Configuration;
 use super::context::ProblemCtx;
-use super::fom::{ScheduleFom, ScoringContext, SoftConstraintFom};
+use crate::scheduler::fom::{ScheduleFom, ScoringContext, SoftConstraintFom};
 use super::queue::CandidateQueue;
 use super::validation;
 use crate::error::ScheduleError;
@@ -11,37 +11,36 @@ use crate::scheduler::SchedulingAlgorithm;
 use crate::scheduling_block::SchedulingBlock;
 use crate::task::Task;
 use crate::time::{MJD, Period, SchedulingBlockId};
+use std::marker::PhantomData;
 use std::sync::Arc;
 
 /// EST scheduler implementation.
 #[derive(Debug, Clone)]
-pub struct EstScheduler {
+pub struct EstScheduler<F: ScheduleFom> {
     /// Search parameters controlling endangered detection, beam width, and branching.
     pub config: Configuration,
     /// Figure of merit used to rank and prune beam states after each round.
-    pub fom: Arc<dyn ScheduleFom>,
-    /// Human-readable identifier of the FOM, recorded in the trace `Started`
-    /// event. Defaults to `"unknown"` when no FOM kind is supplied.
-    pub fom_label: String,
+    pub fom: F,
+    _phantom: PhantomData<F>,
 }
 
-impl Default for EstScheduler {
+impl Default for EstScheduler<SoftConstraintFom> {
     /// Construct the default single-beam EST scheduler scored by soft constraints.
     fn default() -> Self {
         Self {
             config: Configuration::default(),
-            fom: Arc::new(SoftConstraintFom),
-            fom_label: "soft_constraint".to_string(),
+            fom: SoftConstraintFom::default(),
+            _phantom: PhantomData,
         }
     }
 }
 
-impl EstScheduler {
-    fn from_parts(config: Configuration, fom: Arc<dyn ScheduleFom>) -> Result<Self, ScheduleError> {
+impl<F: ScheduleFom> EstScheduler<F> {
+    fn from_parts(config: Configuration, fom: F) -> Result<Self, ScheduleError> {
         let scheduler = Self {
             config,
             fom,
-            fom_label: "unknown".to_string(),
+            _phantom: PhantomData,
         };
         validation::validate_scheduler(&scheduler)?;
         Ok(scheduler)
@@ -49,24 +48,8 @@ impl EstScheduler {
 
     /// Create an `EstScheduler` with the given config and the default
     /// [`SoftConstraintFom`] figure of merit.
-    pub fn new(config: Configuration) -> Result<Self, ScheduleError> {
-        let mut s = Self::from_parts(config, Arc::new(SoftConstraintFom))?;
-        s.fom_label = "soft_constraint".to_string();
-        Ok(s)
-    }
-
-    /// Create an `EstScheduler` with a custom figure of merit.
-    pub fn with_fom(
-        config: Configuration,
-        fom: Arc<dyn ScheduleFom>,
-    ) -> Result<Self, ScheduleError> {
+    pub fn new(config: Configuration, fom: F) -> Result<Self, ScheduleError> {
         Self::from_parts(config, fom)
-    }
-
-    /// Set the human-readable label included in trace `Started` events.
-    pub fn with_fom_label(mut self, label: impl Into<String>) -> Self {
-        self.fom_label = label.into();
-        self
     }
 
     /// Run beam-search EST on a full scheduling problem.
@@ -77,7 +60,7 @@ impl EstScheduler {
         horizon: &Period<MJD>,
     ) -> Result<Schedule, ScheduleError> {
         log::info!(
-            "est: starting scheduler — blocks={}, tasks={}, endangered_threshold={}, k_beams={}, branching_factor={}, horizon=[{:.4}, {:.4}]",
+            "est: starting scheduler — blocks={}, tasks={}, endangered_threshold={}, k_beams={}, branching_factor={}, horizon=[{:.4}, {:.4}], fom={}",
             problem.block_count(),
             problem.task_count(),
             self.config.endangered_threshold,
@@ -85,6 +68,7 @@ impl EstScheduler {
             self.config.branching_factor,
             horizon.start.value(),
             horizon.end.value(),
+            self.fom.label(),
         );
 
         validation::validate_task_refs(problem.iter_tasks())?;
@@ -137,28 +121,5 @@ impl EstScheduler {
             .collect::<Result<Vec<_>, _>>()?;
         let problem = SchedulingProblem::from_blocks(blocks)?;
         self.run(&problem, possible_periods, horizon)
-    }
-}
-
-/// Convenience entry point for the default single-beam, task-count EST run.
-pub fn run_scheduler<I>(
-    tasks: I,
-    possible_periods: &TaskPeriodMap,
-    horizon: &Period<MJD>,
-) -> Result<Schedule, ScheduleError>
-where
-    I: IntoIterator<Item = Task>,
-{
-    EstScheduler::default().run_scheduler(tasks, possible_periods, horizon)
-}
-
-impl SchedulingAlgorithm for EstScheduler {
-    fn run(
-        &self,
-        problem: &SchedulingProblem,
-        possible_periods: &TaskPeriodMap,
-        horizon: &Period<MJD>,
-    ) -> Result<Schedule, ScheduleError> {
-        EstScheduler::run(self, problem, possible_periods, horizon)
     }
 }

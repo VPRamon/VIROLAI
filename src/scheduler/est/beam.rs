@@ -2,7 +2,7 @@ use super::ScheduleState;
 use super::algorithm::EstScheduler;
 use super::candidate::IntoTaskPlacement;
 use super::context::{ProblemCtx, check_block_dependencies};
-use super::fom::ScoringContext;
+use crate::scheduler::fom::{ScheduleFom, ScoringContext};
 use crate::schedule::Schedule;
 use crate::time::{MJD, Period};
 use std::cmp::Ordering;
@@ -16,8 +16,8 @@ enum BeamExpansion<'a> {
 ///
 /// This owns the branching, pruning, and terminal-state selection logic so the
 /// outer algorithm module can focus on validation and initial queue setup.
-pub(super) fn run_search<'a>(
-    scheduler: &EstScheduler,
+pub(super) fn run_search<'a, F: ScheduleFom>(
+    scheduler: &EstScheduler<F>,
     initial_state: ScheduleState<'a>,
     horizon: &Period<MJD>,
     scoring_ctx: &ScoringContext<'_>,
@@ -73,8 +73,8 @@ pub(super) fn run_search<'a>(
 ///
 /// This owns the per-beam scheduling logic so the outer search loop only
 /// coordinates beam collection and pruning.
-fn expand_beam<'a>(
-    scheduler: &EstScheduler,
+fn expand_beam<'a, F: ScheduleFom>(
+    scheduler: &EstScheduler<F>,
     mut state: ScheduleState<'a>,
     horizon: &Period<MJD>,
     round: u32,
@@ -132,8 +132,8 @@ fn expand_beam<'a>(
 /// dependency predecessor has not been scheduled yet). The caller should treat
 /// a `None` child as a pruned branch.
 #[allow(clippy::too_many_arguments)]
-fn build_child_state<'a>(
-    scheduler: &EstScheduler,
+fn build_child_state<'a, F: ScheduleFom>(
+    scheduler: &EstScheduler<F>,
     scoring_ctx: &ScoringContext<'_>,
     state: &ScheduleState<'a>,
     horizon: &Period<MJD>,
