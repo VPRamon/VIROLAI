@@ -81,13 +81,7 @@
       }
     },
     "horizon": {
-      "type": "object",
-      "required": ["start_mjd_utc", "end_mjd_utc"],
-      "additionalProperties": false,
-      "properties": {
-        "start_mjd_utc": { "type": "number" },
-        "end_mjd_utc": { "type": "number" }
-      }
+      "$ref": "../scheduling_block/time.schema.json#/definitions/TimeWindow"
     },
     "metrics": {
       "$ref": "schedule_metrics.schema.json"

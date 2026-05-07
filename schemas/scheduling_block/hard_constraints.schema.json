@@ -31,7 +31,7 @@
     },
     "time_window": {
       "description": "Fixed time window in which the task must be scheduled.",
-      "$ref": "#/$defs/TimeWindow"
+      "$ref": "time.schema.json#/definitions/TimeWindow"
     },
     "night_time": {
       "description": "Restrict feasibility to nighttime based on a siderust twilight threshold.",
@@ -43,24 +43,13 @@
     }
   },
   "$defs": {
-    "Twilight": {
-      "type": "string",
-      "enum": [
-        "Civil",
-        "Nautical",
-        "Astronomical",
-        "Horizon",
-        "ApparentHorizon"
-      ],
-      "description": "siderust Twilight enum variant used as the solar altitude threshold."
-    },
     "NightTimeConstraint": {
       "type": "object",
       "required": ["twilight"],
       "additionalProperties": false,
       "properties": {
         "twilight": {
-          "$ref": "#/$defs/Twilight"
+          "$ref": "time.schema.json#/definitions/Twilight"
         }
       }
     },
@@ -80,21 +69,6 @@
           "type": "number",
           "minimum": -90,
           "maximum": 0
-        }
-      }
-    },
-    "TimeWindow": {
-      "type": "object",
-      "required": ["start_mjd_utc", "end_mjd_utc"],
-      "additionalProperties": false,
-      "properties": {
-        "start_mjd_utc": {
-          "description": "Window start as Modified Julian Date (UTC scale).",
-          "type": "number"
-        },
-        "end_mjd_utc": {
-          "description": "Window end as Modified Julian Date (UTC scale).",
-          "type": "number"
         }
       }
     }

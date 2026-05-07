@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema",
+  "$id": "scheduling_block/dependency.schema.json",
+  "title": "Dependency",
+  "description": "A directed dependency edge between two tasks.",
+  "type": "object",
+  "required": ["from", "to"],
+  "additionalProperties": false,
+  "properties": {
+    "from": {
+      "description": "ID of the predecessor task.",
+      "type": "integer",
+      "minimum": 0
+    },
+    "to": {
+      "description": "ID of the successor task.",
+      "type": "integer",
+      "minimum": 0
+    },
+    "dependency": {
+      "description": "Dependency type (defaults to depends_on).",
+      "type": "string",
+      "enum": ["depends_on"]
+    }
+  }
+}

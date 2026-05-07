@@ -29,29 +29,7 @@
         "dependencies": {
           "description": "Directed dependency edges between tasks in this block.",
           "type": "array",
-          "items": { "$ref": "#/$defs/Dependency" }
-        }
-      }
-    },
-    "Dependency": {
-      "type": "object",
-      "required": ["from", "to"],
-      "additionalProperties": false,
-      "properties": {
-        "from": {
-          "description": "ID of the predecessor task.",
-          "type": "integer",
-          "minimum": 0
-        },
-        "to": {
-          "description": "ID of the successor task.",
-          "type": "integer",
-          "minimum": 0
-        },
-        "dependency": {
-          "description": "Dependency type (defaults to depends_on).",
-          "type": "string",
-          "enum": ["depends_on"]
+          "items": { "$ref": "dependency.schema.json" }
         }
       }
     }

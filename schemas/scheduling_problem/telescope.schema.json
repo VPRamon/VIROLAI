@@ -16,7 +16,7 @@
       "type": "string"
     },
     "location": {
-      "$ref": "#/$defs/Location"
+      "$ref": "../scheduling_block/coordinate.schema.json#/definitions/GeodeticLocation"
     },
     "hard_constraints": {
       "description": "Hard observability constraints specific to this telescope.",
@@ -25,31 +25,6 @@
     "soft_constraints": {
       "description": "Soft scoring constraints specific to this telescope.",
       "$ref": "../scheduling_block/soft_constraints.schema.json"
-    }
-  },
-  "$defs": {
-    "Location": {
-      "type": "object",
-      "required": ["longitude_deg", "latitude_deg", "height_m"],
-      "additionalProperties": false,
-      "properties": {
-        "longitude_deg": {
-          "description": "Geodetic longitude in degrees (east positive).",
-          "type": "number",
-          "minimum": -180,
-          "maximum": 180
-        },
-        "latitude_deg": {
-          "description": "Geodetic latitude in degrees.",
-          "type": "number",
-          "minimum": -90,
-          "maximum": 90
-        },
-        "height_m": {
-          "description": "Geodetic ellipsoidal height above WGS84 in meters.",
-          "type": "number"
-        }
-      }
     }
   }
 }

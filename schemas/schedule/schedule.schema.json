@@ -16,30 +16,13 @@
       }
     },
     "schedule_time_window": {
-      "$ref": "#/$defs/TimeWindow"
+      "$ref": "../scheduling_block/time.schema.json#/definitions/TimeWindow"
     },
     "scheduling_blocks": {
       "$ref": "scheduling_blocks.schema.json"
     },
     "schedule_metadata": {
       "$ref": "schedule_metadata.schema.json"
-    }
-  },
-  "$defs": {
-    "TimeWindow": {
-      "type": "object",
-      "required": ["start_mjd_utc", "end_mjd_utc"],
-      "additionalProperties": false,
-      "properties": {
-        "start_mjd_utc": {
-          "description": "Inclusive UTC start in Modified Julian Date.",
-          "type": "number"
-        },
-        "end_mjd_utc": {
-          "description": "Exclusive UTC end in Modified Julian Date.",
-          "type": "number"
-        }
-      }
     }
   }
 }
