@@ -1,8 +1,7 @@
 use scheduler::prescheduler::{TaskPeriodMap, preschedule};
 use scheduler::schedule::SchedulingProblem;
-use scheduler::time::{MJD, Period, TaskId, Time};
+use scheduler::time::{MJD, Period, Time};
 use serde_json::Value;
-use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
@@ -18,7 +17,6 @@ pub struct PreparedProblem {
     pub problem: SchedulingProblem,
     pub possible_periods: TaskPeriodMap,
     pub horizon: Period<MJD>,
-    pub priority_by_task: HashMap<TaskId, f64>,
 }
 
 /// Loads `input_path`, runs the prescheduler, and returns a [`PreparedProblem`].
@@ -37,8 +35,6 @@ pub fn prepare_problem(
         return Err("input JSON contains no tasks".to_string());
     }
 
-    let priority_by_task = extract_task_priorities(&raw_json);
-
     let horizon = build_horizon(problem.detected_horizon, horizon_override)?;
     let telescope = problem.telescope.as_ref().ok_or_else(|| {
         "missing observing site in input; expected resources[0] or legacy location".to_string()
@@ -51,7 +47,6 @@ pub fn prepare_problem(
         problem,
         possible_periods,
         horizon,
-        priority_by_task,
     })
 }
 
@@ -77,64 +72,4 @@ fn build_horizon(
     detected.ok_or_else(|| {
         "missing schedule_time_window in input and no horizon override was provided".to_string()
     })
-}
-
-/// Extracts `soft_constraints.priority` for every task in the input JSON.
-fn extract_task_priorities(json: &Value) -> HashMap<TaskId, f64> {
-    let mut priorities = HashMap::new();
-    if let Some(blocks) = json.get("scheduling_blocks").and_then(Value::as_array) {
-        for block in blocks {
-            collect_block_priorities(block, &mut priorities);
-        }
-    } else if let Some(blocks) = json.as_array() {
-        for block in blocks {
-            collect_block_priorities(block, &mut priorities);
-        }
-    }
-    priorities
-}
-
-fn collect_block_priorities(block: &Value, priorities: &mut HashMap<TaskId, f64>) {
-    let Some(tasks) = block.get("tasks").and_then(Value::as_array) else {
-        return;
-    };
-    for task in tasks {
-        let Some(id) = task.get("id").and_then(Value::as_u64) else {
-            continue;
-        };
-        let priority = task
-            .get("soft_constraints")
-            .and_then(|soft| soft.get("priority"))
-            .and_then(Value::as_f64)
-            .filter(|v| v.is_finite())
-            .unwrap_or(0.0);
-        priorities.insert(TaskId(id), priority);
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn extract_task_priorities_defaults_missing_priority_to_zero() {
-        let json: Value = serde_json::from_str(
-            r#"{
-                "scheduling_blocks": [
-                    {
-                        "tasks": [
-                            { "id": 1, "soft_constraints": { "priority": 10.0 } },
-                            { "id": 2, "soft_constraints": {} }
-                        ]
-                    }
-                ]
-            }"#,
-        )
-        .expect("fixture should parse");
-
-        let priorities = extract_task_priorities(&json);
-
-        assert_eq!(priorities.get(&TaskId(1)), Some(&10.0));
-        assert_eq!(priorities.get(&TaskId(2)), Some(&0.0));
-    }
 }

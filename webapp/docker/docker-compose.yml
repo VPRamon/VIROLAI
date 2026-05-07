@@ -56,6 +56,7 @@ services:
       # bounded at ~3 instead of ~6, which is enough to saturate the DB
       # without doubling the memory footprint.
       BULK_IMPORT_CONCURRENCY: ${BULK_IMPORT_CONCURRENCY:-1}
+      PHD_EXPERIMENTS_DIR: /data/experiments
     ports:
       - "${BACKEND_PORT:-8080}:8080"
     # Bulk-import scratch memory is dominated by the parsed schedule_json
@@ -63,6 +64,8 @@ services:
     # period clones. With multi-chunk uploads the working set easily peaks
     # past 2 GB, so we provision generous headroom to avoid OOM-kills
     # (exit code 137) that abort an entire upload batch.
+    volumes:
+      - experiments_data:/data/experiments
     mem_limit: 4g
     mem_reservation: 512m
     cpus: 2
@@ -90,3 +93,4 @@ services:
 
 volumes:
   postgres_data:
+  experiments_data:

@@ -28,6 +28,7 @@ The broader research context is astronomical observation scheduling. A useful re
 | `scheduler` | [`src/main.rs`](src/main.rs) | Reads a scheduling problem, computes feasible windows, runs EST or HAP, and writes an annotated schedule |
 | `ctao_adapter` | [`scripts/ctao_adapter.rs`](scripts/ctao_adapter.rs) | Converts CTAO `*_internalSDC.json` directories into `scheduling_problem.json` |
 | `est_experiment` | [`scripts/est_experiment/main.rs`](scripts/est_experiment/main.rs) | Sweeps EST configurations and writes schedules, a manifest, and a comparison CSV |
+| `experiment_matrix` | [`scripts/experiment_matrix/main.rs`](scripts/experiment_matrix/main.rs) | Cross-algorithm test matrix (datasets × algorithms × sweeps) with rich metrics — see [docs/evaluation-environment.md](docs/evaluation-environment.md) |
 | `phd_tsi_server` | [`webapp/scripts/phd_tsi_server.rs`](webapp/scripts/phd_tsi_server.rs) | Runs the adapted TSI backend locally |
 | Docker web app | [`webapp/setup.sh`](webapp/setup.sh) | Starts the adapted frontend, backend, and PostgreSQL stack |
 

@@ -8,6 +8,7 @@ use scheduler::{
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Algorithm {
@@ -27,6 +28,7 @@ impl Algorithm {
 #[derive(Debug, Clone)]
 struct CliArgs {
     input_path: PathBuf,
+    output_path: Option<PathBuf>,
     horizon_override: Option<(f64, f64)>,
     algorithm: Algorithm,
     est_config: est::Configuration,
@@ -162,7 +164,10 @@ fn run() -> Result<(), String> {
     );
     print_schedule(&schedule, cli.algorithm);
 
-    let output_path = derive_output_path(&input_path);
+    let output_path = cli
+        .output_path
+        .clone()
+        .unwrap_or_else(|| default_output_path(&input_path));
     let metadata = build_schedule_metadata(telescope, &horizon, &cli);
     let output = ScheduleOutput::new(raw_json, &schedule, Some(metadata));
     let output_text = serde_json::to_string_pretty(&output)
@@ -181,6 +186,7 @@ fn parse_cli_args(program: &str, args: &[String]) -> Result<CliArgs, String> {
     }
 
     let mut positionals: Vec<&str> = Vec::new();
+    let mut output_path: Option<PathBuf> = None;
     let mut algorithm = Algorithm::Est;
     let mut est_config = est::Configuration::default();
     let mut est_fom = est::EstFomKind::default();
@@ -329,6 +335,15 @@ fn parse_cli_args(program: &str, args: &[String]) -> Result<CliArgs, String> {
                     "--hap-impatience-alpha is not supported by the active HAP planner".to_string(),
                 );
             }
+            "-o" | "--output" => {
+                let flag = args[i].as_str();
+                let Some(value) = args.get(i + 1) else {
+                    print_usage(program);
+                    return Err(format!("missing value for {flag} (expected a file path)"));
+                };
+                output_path = Some(PathBuf::from(value));
+                i += 2;
+            }
             "-h" | "--help" => {
                 print_usage(program);
                 return Err("help requested".to_string());
@@ -374,6 +389,7 @@ fn parse_cli_args(program: &str, args: &[String]) -> Result<CliArgs, String> {
 
     Ok(CliArgs {
         input_path: resolve_input_path(input_arg),
+        output_path,
         horizon_override,
         algorithm,
         est_config,
@@ -384,12 +400,13 @@ fn parse_cli_args(program: &str, args: &[String]) -> Result<CliArgs, String> {
 
 fn print_usage(program: &str) {
     eprintln!(
-        "Usage: {program} <input_json> [horizon_start_mjd horizon_end_mjd] [--algorithm est|hap] [EST options] [HAP options]\n\
+        "Usage: {program} <input_json> [horizon_start_mjd horizon_end_mjd] [-o <output_json>] [--algorithm est|hap] [EST options] [HAP options]\n\
+         Output: [-o|--output <path>]  write schedule to this file (default: <input_stem>_schedule_<YYYYMMDD_HHMMSS>.json)\n\
          EST options: [--est-fom <soft_constraint>] [--est-e <u32>] [--est-k <usize>] [--est-b <usize>]\n\
          HAP options: [--hap-num-crus <usize>] [--hap-cru-iterations <usize>] [--hap-stochastic-range <usize>] [--hap-seed <u64>]\n\
          Aliases: --est-endangered-threshold <u32> for --est-e, --est-schedule-states <usize> for --est-k, --est-branching-factor <usize> for --est-b\n\
          Example: {program} data/ctao_n.json --algorithm est --est-fom soft_constraint --est-e 2 --est-k 5 --est-b 3\n\
-         Example: {program} data/ctao_n.json --algorithm hap --hap-num-crus 8 --hap-seed 42"
+         Example: {program} data/ctao_n.json -o out/my_schedule.json --algorithm hap --hap-num-crus 8 --hap-seed 42"
     );
 }
 
@@ -445,13 +462,71 @@ fn parse_horizon_args(args: &[&str]) -> Result<Option<(f64, f64)>, String> {
     }
 }
 
-fn derive_output_path(input: &Path) -> PathBuf {
+fn default_output_path(input: &Path) -> PathBuf {
     let stem = input
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("schedule");
     let parent = input.parent().unwrap_or(Path::new("."));
-    parent.join(format!("{stem}_schedule.json"))
+    let ts = timestamp_str();
+    parent.join(format!("{stem}_schedule_{ts}.json"))
+}
+
+fn timestamp_str() -> String {
+    // Seconds since UNIX epoch → YYYYMMDD_HHMMSS (UTC).
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let s = secs % 60;
+    let m = (secs / 60) % 60;
+    let h = (secs / 3600) % 24;
+    // Days since epoch (1970-01-01)
+    let days = secs / 86400;
+    let (y, mo, d) = days_to_ymd(days);
+    format!("{y:04}{mo:02}{d:02}_{h:02}{m:02}{s:02}")
+}
+
+fn days_to_ymd(mut days: u64) -> (u64, u64, u64) {
+    // Gregorian proleptic calendar from days since 1970-01-01.
+    let mut year = 1970u64;
+    loop {
+        let leap = is_leap(year);
+        let days_in_year = if leap { 366 } else { 365 };
+        if days < days_in_year {
+            break;
+        }
+        days -= days_in_year;
+        year += 1;
+    }
+    let leap = is_leap(year);
+    let month_days: [u64; 12] = [
+        31,
+        if leap { 29 } else { 28 },
+        31,
+        30,
+        31,
+        30,
+        31,
+        31,
+        30,
+        31,
+        30,
+        31,
+    ];
+    let mut month = 1u64;
+    for &md in &month_days {
+        if days < md {
+            break;
+        }
+        days -= md;
+        month += 1;
+    }
+    (year, month, days + 1)
+}
+
+fn is_leap(y: u64) -> bool {
+    (y.is_multiple_of(4) && !y.is_multiple_of(100)) || y.is_multiple_of(400)
 }
 
 fn resolve_input_path(arg: &str) -> PathBuf {

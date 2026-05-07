@@ -7,10 +7,14 @@ name = "PhD"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-stream",
  "axum",
  "chrono",
  "csv",
  "env_logger",
+ "futures",
+ "http-body-util",
+ "libc",
  "log",
  "petgraph",
  "qtty 0.4.1",
@@ -23,6 +27,7 @@ dependencies = [
  "tempoch",
  "thiserror",
  "tokio",
+ "tower",
  "tracing",
  "tracing-subscriber",
  "tsi-rust",

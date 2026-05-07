@@ -62,8 +62,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY --from=builder /usr/local/bin/phd_tsi_server /usr/local/bin/phd_tsi_server
 
-RUN useradd -r -s /bin/false phd
+RUN useradd -r -s /bin/false phd \
+    && mkdir -p /data/experiments \
+    && chown phd:phd /data/experiments
 USER phd
+
+ENV PHD_EXPERIMENTS_DIR=/data/experiments
 
 EXPOSE 8080
 

@@ -33,6 +33,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use siderust::calculus::solar::Twilight;
 use siderust::observatories::{EL_PARANAL, ROQUE_DE_LOS_MUCHACHOS};
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -235,6 +236,7 @@ fn infer_observatory(
 ) -> Result<CtaoObservatory, String> {
     let mut saw_north = false;
     let mut saw_south = false;
+    let mut saw_lst_cycle = false;
 
     let dir = dataset_dir.to_string_lossy().to_ascii_uppercase();
     if dir.contains("CTA-N") || dir.contains("CTA_N") {
@@ -242,6 +244,9 @@ fn infer_observatory(
     }
     if dir.contains("CTA-S") || dir.contains("CTA_S") {
         saw_south = true;
+    }
+    if dir.contains("LST") {
+        saw_lst_cycle = true;
     }
 
     for path in json_files {
@@ -255,11 +260,15 @@ fn infer_observatory(
         if name.contains("_S_") || name.contains("CTA-S") || name.contains("CTA_S") {
             saw_south = true;
         }
+        if name.contains("LST") {
+            saw_lst_cycle = true;
+        }
     }
 
     match (saw_north, saw_south) {
         (true, false) => Ok(CtaoObservatory::North),
         (false, true) => Ok(CtaoObservatory::South),
+        (false, false) if saw_lst_cycle => Ok(CtaoObservatory::North),
         (true, true) => Err(format!(
             "cannot infer a single observatory from {}: both CTA-N and CTA-S markers were found",
             dataset_dir.display()
@@ -290,6 +299,54 @@ fn default_schedule_time_window() -> Result<OutTimeWindow, String> {
     })
 }
 
+fn derive_schedule_time_window(blocks: &[OutBlock]) -> Result<OutTimeWindow, String> {
+    let mut start_mjd_utc = f64::INFINITY;
+    let mut end_mjd_utc = f64::NEG_INFINITY;
+
+    for block in blocks {
+        for task in &block.tasks {
+            let Some(time_window) = task.hard_constraints.time_window.as_ref() else {
+                continue;
+            };
+            start_mjd_utc = start_mjd_utc.min(time_window.start_mjd_utc);
+            end_mjd_utc = end_mjd_utc.max(time_window.end_mjd_utc);
+        }
+    }
+
+    if start_mjd_utc.is_finite() && end_mjd_utc.is_finite() {
+        return Ok(OutTimeWindow {
+            start_mjd_utc,
+            end_mjd_utc,
+        });
+    }
+
+    default_schedule_time_window()
+}
+
+fn target_name(target_obj: &Value) -> String {
+    target_obj
+        .get("name")
+        .and_then(Value::as_str)
+        .or_else(|| {
+            target_obj
+                .pointer("/science_targets/0/name")
+                .and_then(Value::as_str)
+        })
+        .unwrap_or("")
+        .to_string()
+}
+
+fn target_coordinate(target_obj: &Value) -> Option<&Value> {
+    [
+        "/position_/coord",
+        "/position_/coordinate",
+        "/science_targets/0/position_/coord",
+        "/science_targets/0/position_/coordinate",
+    ]
+    .into_iter()
+    .find_map(|pointer| target_obj.pointer(pointer))
+}
+
 fn convert_block(raw: &Value) -> Result<OutBlock, String> {
     let id = raw
         .get("scheduling_block_id")
@@ -297,15 +354,11 @@ fn convert_block(raw: &Value) -> Result<OutBlock, String> {
         .ok_or("missing scheduling_block_id")?;
 
     let target_obj = raw.get("target").ok_or("missing target")?;
-    let name = target_obj
-        .get("name")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .to_string();
+    let name = target_name(target_obj);
 
-    let coord = target_obj
-        .pointer("/position_/coord")
-        .ok_or("missing target.position_.coord")?;
+    let coord = target_coordinate(target_obj).ok_or(
+        "missing target coordinate (expected target.position_.coord or target.position_.coordinate)",
+    )?;
     let ra_deg = get_f64(coord, "ra_in_deg").ok_or("missing ra_in_deg")?;
     let dec_deg = get_f64(coord, "dec_in_deg").ok_or("missing dec_in_deg")?;
 
@@ -368,6 +421,40 @@ fn convert_block(raw: &Value) -> Result<OutBlock, String> {
     })
 }
 
+fn normalize_duplicate_block_ids(blocks: &mut [OutBlock]) -> usize {
+    let mut seen = HashSet::new();
+    let mut next_id = blocks
+        .iter()
+        .map(|block| block.id)
+        .max()
+        .unwrap_or(0)
+        .saturating_add(1);
+    let mut renamed = 0;
+
+    for block in blocks {
+        let original_id = block.id;
+        if seen.insert(original_id) {
+            continue;
+        }
+
+        while !seen.insert(next_id) {
+            next_id = next_id.saturating_add(1);
+        }
+
+        block.id = next_id;
+        for task in &mut block.tasks {
+            if task.id == original_id {
+                task.id = next_id;
+            }
+        }
+
+        renamed += 1;
+        next_id = next_id.saturating_add(1);
+    }
+
+    renamed
+}
+
 fn process_file(path: &Path) -> Result<Vec<OutBlock>, String> {
     let text = fs::read_to_string(path).map_err(|e| format!("{}: {}", path.display(), e))?;
     let ctao: CtaoFile =
@@ -410,6 +497,7 @@ fn main() {
         .filter_map(|e| e.ok())
         .map(|e| e.path())
         .filter(|p| p.extension().and_then(|s| s.to_str()) == Some("json"))
+        .filter(|p| p != &output_path)
         .collect();
     json_files.sort();
 
@@ -438,13 +526,20 @@ fn main() {
         std::process::exit(1);
     }
 
+    let renamed = normalize_duplicate_block_ids(&mut all_blocks);
+    if renamed > 0 {
+        eprintln!(
+            "Renumbered {renamed} duplicate scheduling block IDs to keep block/task IDs unique"
+        );
+    }
+
     let observatory = infer_observatory(&dataset_dir, &json_files).unwrap_or_else(|e| {
         eprintln!("{e}");
         std::process::exit(1);
     });
 
-    let schedule_time_window = default_schedule_time_window().unwrap_or_else(|e| {
-        eprintln!("failed to build default schedule_time_window: {e}");
+    let schedule_time_window = derive_schedule_time_window(&all_blocks).unwrap_or_else(|e| {
+        eprintln!("failed to build schedule_time_window: {e}");
         std::process::exit(1);
     });
 
@@ -468,4 +563,122 @@ fn main() {
         observatory.code(),
         output_path.display()
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn sample_block_with_target(target: Value, id: u64) -> Value {
+        json!({
+            "scheduling_block_id": id,
+            "priority": 2.5,
+            "target": target,
+            "scheduling_block_configuration_": {
+                "constraints_": {
+                    "time_constraint_": {
+                        "requested_duration_sec": 1800.0,
+                        "fixed_start_time": [{ "value": 60466.0 }],
+                        "fixed_stop_time": [{ "value": 60467.0 }]
+                    },
+                    "elevation_constraint_": {
+                        "min_elevation_angle_in_deg": 38.0,
+                        "max_elevation_angle_in_deg": 90.0
+                    },
+                    "azimuth_constraint_": {
+                        "min_azimuth_angle_in_deg": 0.0,
+                        "max_azimuth_angle_in_deg": 359.9999
+                    }
+                }
+            }
+        })
+    }
+
+    #[test]
+    fn convert_block_accepts_coordinate_target_shape() {
+        let raw = sample_block_with_target(
+            json!({
+                "name": "PG1553+113",
+                "position_": {
+                    "coordinate": {
+                        "ra_in_deg": 238.93625,
+                        "dec_in_deg": 11.1947222
+                    }
+                }
+            }),
+            1000000001,
+        );
+
+        let block = convert_block(&raw).expect("block should convert");
+        let task = &block.tasks[0];
+        assert_eq!(task.name, "PG1553+113");
+        assert_eq!(task.target.ra_deg, 238.93625);
+        assert_eq!(task.target.dec_deg, 11.1947222);
+    }
+
+    #[test]
+    fn normalize_duplicate_block_ids_keeps_ids_unique() {
+        let mut blocks = vec![
+            convert_block(&sample_block_with_target(
+                json!({
+                    "name": "a",
+                    "position_": { "coord": { "ra_in_deg": 1.0, "dec_in_deg": 2.0 } }
+                }),
+                42,
+            ))
+            .expect("first block"),
+            convert_block(&sample_block_with_target(
+                json!({
+                    "name": "b",
+                    "position_": { "coordinate": { "ra_in_deg": 3.0, "dec_in_deg": 4.0 } }
+                }),
+                42,
+            ))
+            .expect("second block"),
+        ];
+
+        let renamed = normalize_duplicate_block_ids(&mut blocks);
+
+        assert_eq!(renamed, 1);
+        assert_eq!(blocks[0].id, 42);
+        assert_ne!(blocks[1].id, 42);
+        assert_eq!(blocks[1].tasks[0].id, blocks[1].id);
+    }
+
+    #[test]
+    fn derive_schedule_time_window_uses_block_windows() {
+        let blocks = vec![
+            convert_block(&sample_block_with_target(
+                json!({
+                    "name": "a",
+                    "position_": { "coord": { "ra_in_deg": 1.0, "dec_in_deg": 2.0 } }
+                }),
+                1,
+            ))
+            .expect("first block"),
+            convert_block(&json!({
+                "scheduling_block_id": 2,
+                "target": {
+                    "name": "b",
+                    "position_": { "coord": { "ra_in_deg": 3.0, "dec_in_deg": 4.0 } }
+                },
+                "scheduling_block_configuration_": {
+                    "constraints_": {
+                        "time_constraint_": {
+                            "requested_duration_sec": 1800.0,
+                            "fixed_start_time": [{ "value": 60470.0 }],
+                            "fixed_stop_time": [{ "value": 60475.0 }]
+                        }
+                    }
+                }
+            }))
+            .expect("second block"),
+        ];
+
+        let window = derive_schedule_time_window(&blocks).expect("time window");
+
+        assert_eq!(window.start_mjd_utc, 60466.0);
+        assert_eq!(window.end_mjd_utc, 60475.0);
+    }
 }

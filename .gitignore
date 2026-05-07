@@ -3,8 +3,8 @@
 debug
 target
 
-data/CTA-N/
-data/CTA-S/
+data/local/
+
 out/
 docs/architecture-audit/
 

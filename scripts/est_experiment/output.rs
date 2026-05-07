@@ -66,7 +66,6 @@ pub(crate) struct ComparisonRow {
     scheduled_priority_p75: f64,
     scheduled_priority_p90: f64,
 }
-
 pub fn build_manifest(
     input_path: &Path,
     output_dir: &Path,
@@ -134,11 +133,11 @@ pub(crate) fn build_comparison_row(baseline_slug: &str, outcome: &RunOutcome) ->
         run_slug: outcome.config.schedule_file_stem(),
         is_baseline: outcome.config.slug() == baseline_slug,
         scheduled_task_count: outcome.metrics.scheduled_task_count,
-        fitness_priority_sum: outcome.metrics.fitness_priority_sum,
-        scheduled_priority_p25: outcome.metrics.scheduled_priority_p25,
-        scheduled_priority_p50: outcome.metrics.scheduled_priority_p50,
-        scheduled_priority_p75: outcome.metrics.scheduled_priority_p75,
-        scheduled_priority_p90: outcome.metrics.scheduled_priority_p90,
+        fitness_priority_sum: outcome.metrics.priority.sum,
+        scheduled_priority_p25: outcome.metrics.priority.p25,
+        scheduled_priority_p50: outcome.metrics.priority.p50,
+        scheduled_priority_p75: outcome.metrics.priority.p75,
+        scheduled_priority_p90: outcome.metrics.priority.p90,
     }
 }
 
