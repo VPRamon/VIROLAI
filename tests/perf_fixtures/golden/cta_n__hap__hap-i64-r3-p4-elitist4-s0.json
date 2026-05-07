@@ -1,0 +1,56 @@
+{
+  "cell_id": "cta_n__hap__hap-i64-r3-p4-elitist4-s0",
+  "metrics": {
+    "scheduled_task_count": 106,
+    "total_task_count": 2647,
+    "completion_ratio": 0.04004533434076313,
+    "priority": {
+      "count": 106,
+      "sum": 1337.4000000000003,
+      "min": 7.625,
+      "max": 19.2,
+      "mean": 12.616981132075475,
+      "std": 2.4582805464240676,
+      "p25": 11.875,
+      "p50": 11.875,
+      "p75": 11.875,
+      "p90": 19.2
+    },
+    "fragmentation": {
+      "gap_count": 22,
+      "gap_total_sec": 634769.8515324388,
+      "largest_gap_sec": 84309.4794315286,
+      "fragmentation_index": 0.7346873281625449
+    },
+    "total_horizon_sec": 864000.0,
+    "available_time_sec": 864000.0,
+    "scheduled_time_sec": 168000.00001012813,
+    "utilization": 0.19444444445616682,
+    "per_resource": [
+      {
+        "resource_id": "CTA-N",
+        "scheduled_task_count": 106,
+        "scheduled_time_sec": 168000.00001012813,
+        "priority_sum": 1337.4000000000003,
+        "utilization": 0.19444444445616682
+      }
+    ],
+    "composite_rank_score": 0.2892342211491623,
+    "ranking_weights": {
+      "completion": 1.0,
+      "priority": 1.0,
+      "utilization": 1.0,
+      "fragmentation": 1.0
+    }
+  },
+  "tolerances": {
+    "scheduled_task_count_abs": 2,
+    "completion_ratio_rel": 0.05,
+    "priority_sum_rel": 0.05,
+    "priority_p50_rel": 0.05,
+    "priority_p90_rel": 0.05,
+    "utilization_rel": 0.05,
+    "fragmentation_index_rel": 0.1,
+    "composite_rank_score_rel": 0.05
+  }
+}
