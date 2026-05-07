@@ -18,8 +18,6 @@ use crate::output::SummaryRow;
 use crate::spec::ExperimentSpec;
 use crate::state::{CellStatus, StateEvent, StateWriter, completed_cells, read_events};
 
-use scheduler::scheduler::est::JsonlTraceSink;
-
 /// Entry point for `run` and `--resume`.
 pub fn execute(
     spec: &ExperimentSpec,
@@ -206,24 +204,11 @@ fn run_cell_inner(
 ) -> Result<CellPaths, String> {
     let schedule_path = output::schedule_path(run_dir, &cell.cell_id);
     let metrics_path = output::metrics_path(run_dir, &cell.cell_id);
-    let trace_target = if emit_trace && matches!(cell.run_config, RunConfig::Est(_)) {
-        Some(output::trace_path(run_dir, &cell.cell_id))
-    } else {
-        None
-    };
 
     let (schedule, trace_path) = match cell.run_config {
         RunConfig::Est(config) => {
             let mut scheduler = config.build_scheduler()?;
             scheduler = scheduler.with_fom_label(config.fom.to_string());
-            let trace_path_owned = if let Some(p) = trace_target.as_ref() {
-                let sink = JsonlTraceSink::create(p)
-                    .map_err(|e| format!("failed to open trace {}: {e}", p.display()))?;
-                scheduler = scheduler.with_trace_sink(Arc::new(sink));
-                Some(p.clone())
-            } else {
-                None
-            };
             let schedule = scheduler
                 .run(
                     &prepared.problem,
@@ -231,7 +216,8 @@ fn run_cell_inner(
                     &prepared.horizon,
                 )
                 .map_err(|e| format!("EST run {} failed: {e}", cell.cell_id))?;
-            (schedule, trace_path_owned)
+            let _ = emit_trace;
+            (schedule, None)
         }
         RunConfig::Hap(config) => {
             let scheduler = config.build_scheduler()?;

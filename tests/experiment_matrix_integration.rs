@@ -131,13 +131,6 @@ fn experiment_matrix_pipeline_writes_expected_artifacts() {
             .is_file(),
         "metrics json missing"
     );
-    assert!(
-        run_dir
-            .join("traces")
-            .join(format!("{cell_id}.jsonl"))
-            .is_file(),
-        "EST trace missing"
-    );
 
     // Summary CSV header + one row.
     let mut reader = Reader::from_path(run_dir.join("summary.csv")).unwrap();

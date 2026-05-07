@@ -18,10 +18,3 @@ pub struct ScheduleState<'a> {
     /// Cached FOM score for this state.
     pub(super) score: f64,
 }
-
-impl<'a> ScheduleState<'a> {
-    /// Number of placements committed to this beam state.
-    pub(super) fn scheduled_len(&self) -> usize {
-        self.schedule.len()
-    }
-}

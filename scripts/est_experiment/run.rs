@@ -1,9 +1,7 @@
 use scheduler::metrics::{MetricsContext, ScheduleMetrics};
 use scheduler::schedule::{LocationMeta, PeriodMeta, ScheduleMetadata, ScheduleOutput};
-use scheduler::scheduler::est::JsonlTraceSink;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use super::config::{HapSurvivorMode, RunConfig};
 use super::problem::PreparedProblem;
@@ -18,8 +16,6 @@ pub struct RunOutcome {
 
 /// Runs the scheduler, writes the schedule JSON to `schedule_path`, and computes metrics.
 ///
-/// When `trace_path` is `Some`, the EST scheduler is instrumented with a
-/// [`JsonlTraceSink`] writing one JSON event per line to that file.
 pub fn execute_run(
     run: &RunConfig,
     prepared: &PreparedProblem,
@@ -31,16 +27,6 @@ pub fn execute_run(
             let mut scheduler = config.build_scheduler()?;
             scheduler = scheduler.with_fom_label(config.fom.to_string());
 
-            let trace_path_owned = if let Some(path) = trace_path {
-                let sink = JsonlTraceSink::create(path).map_err(|e| {
-                    format!("failed to open est trace file {}: {e}", path.display())
-                })?;
-                scheduler = scheduler.with_trace_sink(Arc::new(sink));
-                Some(path.to_path_buf())
-            } else {
-                None
-            };
-
             let schedule = scheduler
                 .run(
                     &prepared.problem,
@@ -48,7 +34,8 @@ pub fn execute_run(
                     &prepared.horizon,
                 )
                 .map_err(|e| format!("EST run {} failed: {e}", run.slug()))?;
-            (schedule, trace_path_owned)
+            let _ = trace_path;
+            (schedule, None)
         }
         RunConfig::Hap(config) => {
             let scheduler = config.build_scheduler()?;

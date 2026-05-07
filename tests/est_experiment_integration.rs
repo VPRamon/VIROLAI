@@ -83,13 +83,6 @@ fn est_experiment_pipeline_writes_expected_artifacts() {
     for name in &expected_schedule_names {
         assert!(schedules_dir.join(name).exists(), "{name} should exist");
     }
-    assert!(schedules_dir.join("e1-k1-b1.est_trace.jsonl").exists());
-    assert!(schedules_dir.join("e2-k1-b1.est_trace.jsonl").exists());
-    assert!(
-        !schedules_dir
-            .join("hap-i8-r2-p2-elitist2-s0.est_trace.jsonl")
-            .exists()
-    );
 
     let manifest: Value = serde_json::from_str(
         &fs::read_to_string(&manifest_path).expect("manifest should be readable"),

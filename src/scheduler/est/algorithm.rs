@@ -3,7 +3,6 @@ use super::configuration::Configuration;
 use super::context::ProblemCtx;
 use super::fom::{ScheduleFom, ScoringContext, SoftConstraintFom};
 use super::queue::CandidateQueue;
-use super::trace::EstTraceSink;
 use super::validation;
 use crate::error::ScheduleError;
 use crate::prescheduler::TaskPeriodMap;
@@ -21,9 +20,6 @@ pub struct EstScheduler {
     pub config: Configuration,
     /// Figure of merit used to rank and prune beam states after each round.
     pub fom: Arc<dyn ScheduleFom>,
-    /// Optional sink that receives one event per algorithm round plus
-    /// start/summary records. `None` keeps the loop overhead-free.
-    pub trace_sink: Option<Arc<dyn EstTraceSink>>,
     /// Human-readable identifier of the FOM, recorded in the trace `Started`
     /// event. Defaults to `"unknown"` when no FOM kind is supplied.
     pub fom_label: String,
@@ -35,7 +31,6 @@ impl Default for EstScheduler {
         Self {
             config: Configuration::default(),
             fom: Arc::new(SoftConstraintFom),
-            trace_sink: None,
             fom_label: "soft_constraint".to_string(),
         }
     }
@@ -46,7 +41,6 @@ impl EstScheduler {
         let scheduler = Self {
             config,
             fom,
-            trace_sink: None,
             fom_label: "unknown".to_string(),
         };
         validation::validate_scheduler(&scheduler)?;
@@ -67,14 +61,6 @@ impl EstScheduler {
         fom: Arc<dyn ScheduleFom>,
     ) -> Result<Self, ScheduleError> {
         Self::from_parts(config, fom)
-    }
-
-    /// Attach an event sink that records per-iteration tracing information.
-    ///
-    /// Returns `self` to allow builder-style chaining.
-    pub fn with_trace_sink(mut self, sink: Arc<dyn EstTraceSink>) -> Self {
-        self.trace_sink = Some(sink);
-        self
     }
 
     /// Set the human-readable label included in trace `Started` events.
