@@ -55,6 +55,10 @@ const ExperimentsListPage = lazy(() => import('./pages/experiments/ExperimentsLi
 const NewExperimentPage = lazy(() => import('./pages/experiments/NewExperimentPage'));
 const ExperimentDetailPage = lazy(() => import('./pages/experiments/ExperimentDetailPage'));
 
+// ── Workspaces section (manifest-first comparison) ─────────────────────────
+const WorkspacesListPage = lazy(() => import('./pages/workspaces/WorkspacesListPage'));
+const WorkspaceDetailPage = lazy(() => import('./pages/workspaces/WorkspaceDetailPage'));
+
 function lazyRoute(node: React.ReactNode): React.ReactNode {
   return <Suspense fallback={<LoadingSpinner />}>{node}</Suspense>;
 }
@@ -66,8 +70,11 @@ export const extensions: TsiExtensions = {
     // Trailing `/*` lets the detail page mount its own nested
     // <Routes> for tabs and the cell-detail subroute.
     { path: 'experiments/:slug/:runId/*', element: lazyRoute(<ExperimentDetailPage />) },
+    { path: 'workspaces', element: lazyRoute(<WorkspacesListPage />) },
+    { path: 'workspaces/:id', element: lazyRoute(<WorkspaceDetailPage />) },
   ],
   navItems: [
+    { path: '/workspaces', label: 'Workspaces', scope: 'global' },
     { path: '/experiments', label: 'Experiments', scope: 'global' },
   ],
   algorithms: [

@@ -1,5 +1,6 @@
 pub mod constraints;
 pub mod error;
+pub mod manifest;
 pub mod metrics;
 pub mod prescheduler;
 pub mod schedule;

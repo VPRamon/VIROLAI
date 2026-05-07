@@ -14,6 +14,10 @@ use std::path::{Path, PathBuf};
 
 fn main() {
     env_logger::init();
+    eprintln!(
+        "warning: `est_experiment` is deprecated; use `phd matrix --spec <experiment.json>` \
+         (see README.md). This binary will be removed in a future release."
+    );
     if let Err(e) = run() {
         eprintln!("Error: {e}");
         std::process::exit(1);

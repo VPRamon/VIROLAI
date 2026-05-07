@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema",
+  "$id": "scheduling_block/scheduling_blocks.schema.json",
+  "title": "SchedulingBlockList",
+  "description": "A list of scheduling blocks, each containing tasks and dependency edges.",
+  "type": "array",
+  "items": { "$ref": "#/$defs/SchedulingBlock" },
+  "$defs": {
+    "SchedulingBlock": {
+      "type": "object",
+      "required": ["id", "tasks", "dependencies"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "description": "Unique numeric identifier for the scheduling block.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "tasks": {
+          "description": "Tasks belonging to this block. Each entry is either a bare task ID or a full task object.",
+          "type": "array",
+          "items": {
+            "oneOf": [
+              { "type": "integer", "minimum": 0 },
+              { "$ref": "task.schema.json" }
+            ]
+          }
+        },
+        "dependencies": {
+          "description": "Directed dependency edges between tasks in this block.",
+          "type": "array",
+          "items": { "$ref": "#/$defs/Dependency" }
+        }
+      }
+    },
+    "Dependency": {
+      "type": "object",
+      "required": ["from", "to"],
+      "additionalProperties": false,
+      "properties": {
+        "from": {
+          "description": "ID of the predecessor task.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "to": {
+          "description": "ID of the successor task.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "dependency": {
+          "description": "Dependency type (defaults to depends_on).",
+          "type": "string",
+          "enum": ["depends_on"]
+        }
+      }
+    }
+  }
+}

@@ -3,6 +3,19 @@
 # PhD Scheduler
 
 Rust tooling for astronomical observation scheduling:
+
+> **Quick start:** the `phd` binary is the primary user entry point.
+> ```bash
+> cargo run --bin phd -- run --dataset data/CTA-N/scheduling_problem.json --algorithm est --out runs/run-001
+> cargo run --bin phd -- matrix --spec experiments/ctao_n_est.json
+> cargo run --bin phd -- manifest create --run runs/run-001 --out runs/run-001
+> cargo run --bin phd -- manifest validate runs/run-001/manifest.json
+> cargo run --bin phd -- publish --workspace paper-comparisons --create-workspace --manifest-dir runs/run-001
+> ```
+> Set `PHD_WEBAPP_URL` (default `http://localhost:8080`) and start the webapp with
+> `cargo run --bin phd_tsi_server` (workspace data lives under `$PHD_WORKSPACES_DIR`,
+> default `./workspaces`).
+> The legacy `est_experiment` binary is deprecated; `phd matrix` is its replacement.
 CTAO dataset adaptation, EST- and HAP-based scheduling, experiment sweeps, and TSI-backed schedule inspection.
 
 [Quick Start](#quick-start) | [Components](#components) | [Data Model](#data-model) | [Web App](#web-app) | [QA](#qa)
@@ -77,7 +90,7 @@ What the adapter does:
 
 - resolves shorthand dataset names `CTA-N` and `CTA-S` under `data/`
 - writes `<dataset_dir>/scheduling_problem.json` when `output_json` is omitted
-- emits the envelope validated by [`schemas/scheduling_problem.schema.json`](schemas/scheduling_problem.schema.json)
+- emits the envelope validated by [`schemas/scheduling_problem/scheduling_problem.schema.json`](schemas/scheduling_problem/scheduling_problem.schema.json)
 - converts each CTAO scheduling block into one scheduler block containing one task
 - infers the observing site from the dataset and fills telescope-level hard constraints
 - sets `night_time.twilight = "Nautical"` and `moon_altitude = [-90, 0]` on the generated resource
@@ -269,7 +282,7 @@ For Docker-specific details and troubleshooting, see [`webapp/docker/README.md`]
 
 ## Data Model
 
-The preferred on-disk format is the top-level envelope described by [`schemas/scheduling_problem.schema.json`](schemas/scheduling_problem.schema.json):
+The preferred on-disk format is the top-level envelope described by [`schemas/scheduling_problem/scheduling_problem.schema.json`](schemas/scheduling_problem/scheduling_problem.schema.json):
 
 ```json
 {
@@ -311,15 +324,15 @@ The preferred on-disk format is the top-level envelope described by [`schemas/sc
 }
 ```
 
-Key schema files:
+Key schema modules:
 
-- [`schemas/scheduling_problem.schema.json`](schemas/scheduling_problem.schema.json): top-level envelope
-- [`schemas/scheduling_blocks.schema.json`](schemas/scheduling_blocks.schema.json): block list and intra-block dependencies
-- [`schemas/task.schema.json`](schemas/task.schema.json): task representation
-- [`schemas/hard_constraints.schema.json`](schemas/hard_constraints.schema.json): task and resource hard constraints
-- [`schemas/soft_constraints.schema.json`](schemas/soft_constraints.schema.json): soft-constraint payloads
+- [`schemas/scheduling_problem/`](schemas/scheduling_problem/): top-level problem envelope and telescope/resource schema
+- [`schemas/scheduling_block/`](schemas/scheduling_block/): scheduling blocks, tasks, and task/resource constraints
+- [`schemas/scheduling_algorithms/`](schemas/scheduling_algorithms/): algorithm selector and per-algorithm config
+- [`schemas/scheduling_statistics/`](schemas/scheduling_statistics/): schedule metrics and run manifest schemas
+- [`schemas/schedule/`](schemas/schedule/): annotated schedule output and embedded schedule metadata
 
-The scheduler output preserves the original structure and adds scheduling annotations to each task instead of writing a separate result schema.
+The scheduler output is now formalized by [`schemas/schedule/schedule.schema.json`](schemas/schedule/schedule.schema.json), which preserves the original problem structure and adds scheduling annotations to each task.
 
 ## Repository Layout
 
@@ -327,7 +340,7 @@ The scheduler output preserves the original structure and adds scheduling annota
 | --- | --- |
 | [`src/`](src/) | Scheduler library and `scheduler` CLI |
 | [`scripts/`](scripts/) | CLI utilities, including the CTAO adapter, EST sweep runner, and QA pipeline |
-| [`schemas/`](schemas/) | JSON schemas for problems, blocks, tasks, and constraints |
+| [`schemas/`](schemas/) | Modular JSON schemas for scheduling problems, blocks, algorithms, statistics, and schedules |
 | [`data/`](data/) | Example datasets and convenience JSON files |
 | [`webapp/`](webapp/) | Adapted TSI integration, Docker stack, and helper scripts |
 | [`webapp/TSI/`](webapp/TSI/) | TSI submodule used by the web app |

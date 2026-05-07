@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft-07/schema",
-  "$id": "algorithm.schema.json",
+  "$id": "scheduling_algorithms/algorithm.schema.json",
   "title": "AlgorithmConfig",
   "description": "Algorithm type and per-algorithm configuration used for a scheduling run.",
   "type": "object",

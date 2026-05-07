@@ -1,6 +1,6 @@
 // Converts CTAO (Cherenkov Telescope Array Observatory) dataset JSON files
 // into a single `scheduling_problem.json` that conforms to
-// `schemas/scheduling_problem.schema.json`.
+// `schemas/scheduling_problem/scheduling_problem.schema.json`.
 //
 // Each CTAO block maps to exactly one scheduler block containing one task:
 //

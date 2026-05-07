@@ -1,7 +1,7 @@
 //! Shared JSON representation types used across the scheduler deserializers.
 //!
 //! These types mirror the on-disk schema fragments defined in
-//! `schemas/hard_constraints.schema.json` and related files. They are kept
+//! `schemas/scheduling_block/hard_constraints.schema.json` and related files. They are kept
 //! in one place so that task, telescope, and top-level problem deserializers
 //! all agree on the wire format.
 

@@ -2,7 +2,7 @@
 
 ## `ctao_adapter`
 
-Rust CLI that converts CTA dataset files in one directory (`*_internalSDC.json`) into one aggregated `scheduling_problem.json` file compliant with `schemas/scheduling_problem.schema.json`.
+Rust CLI that converts CTA dataset files in one directory (`*_internalSDC.json`) into one aggregated `scheduling_problem.json` file compliant with `schemas/scheduling_problem/scheduling_problem.schema.json`.
 
 The output is a minimal scheduler-ready PhD payload:
 
@@ -38,7 +38,7 @@ cargo run --bin ctao_adapter -- data/CTA-N data/CTA-N/scheduling_problem.json
 
 ## `phd_tsi_server`
 
-Rust HTTP server that embeds the TSI backend and registers a custom import adapter for this repository's current scheduling schema (`schemas/scheduling_problem.schema.json`).
+Rust HTTP server that embeds the TSI backend and registers a custom import adapter for this repository's current scheduling schema (`schemas/scheduling_problem/scheduling_problem.schema.json`).
 
 The adapter accepts payloads with top-level fields:
 
@@ -89,7 +89,7 @@ Services:
 
 The Docker stack uses a persistent PostgreSQL volume (`postgres_data`) by default.
 
-Upload any `scheduling_problem.json` compatible with `schemas/scheduling_problem.schema.json` directly in the TSI UI.
+Upload any `scheduling_problem.json` compatible with `schemas/scheduling_problem/scheduling_problem.schema.json` directly in the TSI UI.
 
 ## `est_experiment`
 

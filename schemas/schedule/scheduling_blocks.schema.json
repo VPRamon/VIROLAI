@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft-07/schema",
-  "$id": "scheduling_blocks.schema.json",
-  "title": "SchedulingBlockList",
-  "description": "A list of scheduling blocks, each containing tasks and dependency edges.",
+  "$id": "schedule/scheduling_blocks.schema.json",
+  "title": "ScheduledBlockList",
+  "description": "A list of scheduling blocks as emitted in an annotated schedule output.",
   "type": "array",
   "items": { "$ref": "#/$defs/SchedulingBlock" },
   "$defs": {
@@ -17,12 +17,12 @@
           "minimum": 0
         },
         "tasks": {
-          "description": "Tasks belonging to this block. Each entry is either a bare task ID or a full task object.",
+          "description": "Tasks belonging to this block, each annotated with schedule allocation fields.",
           "type": "array",
           "items": {
             "oneOf": [
               { "type": "integer", "minimum": 0 },
-              { "$ref": "task.schema.json" }
+              { "$ref": "scheduled_task.schema.json" }
             ]
           }
         },

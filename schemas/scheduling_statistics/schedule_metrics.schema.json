@@ -1,0 +1,131 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/VPRamon/PhD/schemas/scheduling_statistics/schedule_metrics.schema.json",
+  "title": "ScheduleMetrics",
+  "description": "Algorithm-agnostic schedule evaluation metrics emitted by the scheduler and experiment runners.",
+  "type": "object",
+  "required": [
+    "scheduled_task_count",
+    "total_task_count",
+    "completion_ratio",
+    "priority",
+    "fragmentation",
+    "total_horizon_sec",
+    "available_time_sec",
+    "scheduled_time_sec",
+    "utilization",
+    "per_resource",
+    "composite_rank_score",
+    "ranking_weights"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "scheduled_task_count": { "type": "integer", "minimum": 0 },
+    "total_task_count": { "type": "integer", "minimum": 0 },
+    "completion_ratio": { "type": "number" },
+    "priority": { "$ref": "#/$defs/PriorityStats" },
+    "fragmentation": { "$ref": "#/$defs/FragmentationStats" },
+    "total_horizon_sec": { "type": "number", "minimum": 0 },
+    "available_time_sec": { "type": "number", "minimum": 0 },
+    "scheduled_time_sec": { "type": "number", "minimum": 0 },
+    "utilization": { "type": "number" },
+    "per_resource": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/ResourceMetrics" }
+    },
+    "composite_rank_score": { "type": "number" },
+    "ranking_weights": { "$ref": "#/$defs/RankingWeights" },
+    "scheduled_priority_stair": {
+      "$ref": "#/$defs/ScheduledPriorityStair"
+    }
+  },
+  "$defs": {
+    "RankingWeights": {
+      "type": "object",
+      "required": ["completion", "priority", "utilization", "fragmentation"],
+      "additionalProperties": false,
+      "properties": {
+        "completion": { "type": "number" },
+        "priority": { "type": "number" },
+        "utilization": { "type": "number" },
+        "fragmentation": { "type": "number" }
+      }
+    },
+    "PriorityStats": {
+      "type": "object",
+      "required": ["count", "sum", "min", "max", "mean", "std", "p25", "p50", "p75", "p90"],
+      "additionalProperties": false,
+      "properties": {
+        "count": { "type": "integer", "minimum": 0 },
+        "sum": { "type": "number" },
+        "min": { "type": "number" },
+        "max": { "type": "number" },
+        "mean": { "type": "number" },
+        "std": { "type": "number" },
+        "p25": { "type": "number" },
+        "p50": { "type": "number" },
+        "p75": { "type": "number" },
+        "p90": { "type": "number" }
+      }
+    },
+    "FragmentationStats": {
+      "type": "object",
+      "required": ["gap_count", "gap_total_sec", "largest_gap_sec", "fragmentation_index"],
+      "additionalProperties": false,
+      "properties": {
+        "gap_count": { "type": "integer", "minimum": 0 },
+        "gap_total_sec": { "type": "number", "minimum": 0 },
+        "largest_gap_sec": { "type": "number", "minimum": 0 },
+        "fragmentation_index": { "type": "number" }
+      }
+    },
+    "PriorityStair": {
+      "type": "object",
+      "required": ["priority", "start_index", "end_index", "count"],
+      "additionalProperties": false,
+      "properties": {
+        "priority": { "type": "number" },
+        "start_index": { "type": "integer", "minimum": 0 },
+        "end_index": { "type": "integer", "minimum": 0 },
+        "count": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "ScheduledPriorityStair": {
+      "type": "object",
+      "required": ["metric", "sort", "direction", "stairs", "total_scheduled_items"],
+      "additionalProperties": false,
+      "properties": {
+        "metric": { "type": "string", "const": "scheduled_priority_stair" },
+        "sort": { "type": "string", "const": "priority" },
+        "direction": { "$ref": "#/$defs/StairDirection" },
+        "stairs": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/PriorityStair" }
+        },
+        "total_scheduled_items": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "StairDirection": {
+      "type": "string",
+      "enum": ["ascending", "descending"]
+    },
+    "ResourceMetrics": {
+      "type": "object",
+      "required": [
+        "resource_id",
+        "scheduled_task_count",
+        "scheduled_time_sec",
+        "priority_sum",
+        "utilization"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "resource_id": { "type": "string", "minLength": 1 },
+        "scheduled_task_count": { "type": "integer", "minimum": 0 },
+        "scheduled_time_sec": { "type": "number", "minimum": 0 },
+        "priority_sum": { "type": "number" },
+        "utilization": { "type": "number" }
+      }
+    }
+  }
+}

@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema",
+  "$id": "schedule/scheduled_task.schema.json",
+  "title": "ScheduledTask",
+  "description": "Task representation used in annotated schedule outputs.",
+  "oneOf": [
+    {
+      "allOf": [
+        {
+          "$ref": "../scheduling_block/task.schema.json"
+        },
+        {
+          "type": "object",
+          "required": ["scheduled"],
+          "properties": {
+            "scheduled": { "const": false }
+          }
+        }
+      ]
+    },
+    {
+      "allOf": [
+        {
+          "$ref": "../scheduling_block/task.schema.json"
+        },
+        {
+          "type": "object",
+          "required": [
+            "scheduled",
+            "scheduled_start_mjd_utc",
+            "scheduled_end_mjd_utc"
+          ],
+          "properties": {
+            "scheduled": { "const": true },
+            "scheduled_start_mjd_utc": {
+              "description": "Scheduled start in Modified Julian Date (UTC scale).",
+              "type": "number"
+            },
+            "scheduled_end_mjd_utc": {
+              "description": "Scheduled end in Modified Julian Date (UTC scale).",
+              "type": "number"
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

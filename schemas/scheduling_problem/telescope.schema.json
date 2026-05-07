@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema",
+  "$id": "scheduling_problem/telescope.schema.json",
+  "title": "Telescope",
+  "type": "object",
+  "required": ["id", "location"],
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "description": "Unique numeric identifier for the telescope resource.",
+      "type": "integer",
+      "minimum": 0
+    },
+    "name": {
+      "description": "Human-readable label for this telescope.",
+      "type": "string"
+    },
+    "location": {
+      "$ref": "#/$defs/Location"
+    },
+    "hard_constraints": {
+      "description": "Hard observability constraints specific to this telescope.",
+      "$ref": "../scheduling_block/hard_constraints.schema.json"
+    },
+    "soft_constraints": {
+      "description": "Soft scoring constraints specific to this telescope.",
+      "$ref": "../scheduling_block/soft_constraints.schema.json"
+    }
+  },
+  "$defs": {
+    "Location": {
+      "type": "object",
+      "required": ["longitude_deg", "latitude_deg", "height_m"],
+      "additionalProperties": false,
+      "properties": {
+        "longitude_deg": {
+          "description": "Geodetic longitude in degrees (east positive).",
+          "type": "number",
+          "minimum": -180,
+          "maximum": 180
+        },
+        "latitude_deg": {
+          "description": "Geodetic latitude in degrees.",
+          "type": "number",
+          "minimum": -90,
+          "maximum": 90
+        },
+        "height_m": {
+          "description": "Geodetic ellipsoidal height above WGS84 in meters.",
+          "type": "number"
+        }
+      }
+    }
+  }
+}

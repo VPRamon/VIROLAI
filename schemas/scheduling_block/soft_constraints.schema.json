@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft-07/schema",
-  "$id": "soft_constraints.schema.json",
+  "$id": "scheduling_block/soft_constraints.schema.json",
   "title": "SoftConstraints",
   "type": "object",
   "additionalProperties": false,

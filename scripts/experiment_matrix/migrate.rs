@@ -373,6 +373,7 @@ fn zero_metrics() -> ScheduleMetrics {
         per_resource: Vec::<ResourceMetrics>::new(),
         composite_rank_score: 0.0,
         ranking_weights: RankingWeights::default(),
+        scheduled_priority_stair: scheduler::metrics::ScheduledPriorityStair::default(),
     }
 }
 

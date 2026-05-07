@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema",
+  "$id": "scheduling_block/time.schema.json",
+  "title": "Time Definitions",
+  "description": "Common time and temporal definitions.",
+  "definitions": {
+    "TimeWindow": {
+      "type": "object",
+      "required": ["start_mjd_utc", "end_mjd_utc"],
+      "additionalProperties": false,
+      "properties": {
+        "start_mjd_utc": {
+          "description": "Inclusive UTC start in Modified Julian Date.",
+          "type": "number"
+        },
+        "end_mjd_utc": {
+          "description": "Exclusive UTC end in Modified Julian Date.",
+          "type": "number"
+        }
+      }
+    },
+    "Twilight": {
+      "type": "string",
+      "enum": [
+        "Civil",
+        "Nautical",
+        "Astronomical",
+        "Horizon",
+        "ApparentHorizon"
+      ],
+      "description": "siderust Twilight enum variant used as the solar altitude threshold."
+    }
+  }
+}

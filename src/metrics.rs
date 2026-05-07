@@ -131,6 +131,92 @@ pub struct FragmentationStats {
     pub fragmentation_index: f64,
 }
 
+/// Sort direction used by [`ScheduledPriorityStair`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum StairDirection {
+    /// Lowest priority first.
+    Ascending,
+    /// Highest priority first.
+    #[default]
+    Descending,
+}
+
+/// One contiguous run of identical priorities in the sorted scheduled
+/// sequence.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct PriorityStair {
+    pub priority: f64,
+    /// Zero-based, inclusive.
+    pub start_index: usize,
+    /// Zero-based, inclusive.
+    pub end_index: usize,
+    pub count: usize,
+}
+
+/// Run-length encoding of the priorities of scheduled tasks after sorting.
+///
+/// Lets the webapp compare priority block structure across algorithms
+/// without loading the full schedule. See the project plan for details.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ScheduledPriorityStair {
+    /// Always `"scheduled_priority_stair"`.
+    pub metric: String,
+    /// Always `"priority"` for v1.
+    pub sort: String,
+    pub direction: StairDirection,
+    pub stairs: Vec<PriorityStair>,
+    pub total_scheduled_items: usize,
+}
+
+impl Default for ScheduledPriorityStair {
+    fn default() -> Self {
+        Self {
+            metric: "scheduled_priority_stair".to_string(),
+            sort: "priority".to_string(),
+            direction: StairDirection::default(),
+            stairs: Vec::new(),
+            total_scheduled_items: 0,
+        }
+    }
+}
+
+impl ScheduledPriorityStair {
+    /// Build the stair from an unsorted slice of scheduled-task priorities.
+    pub fn from_priorities(priorities: &[f64], direction: StairDirection) -> Self {
+        let mut sorted: Vec<f64> = priorities.to_vec();
+        sorted.sort_by(|a, b| match direction {
+            StairDirection::Ascending => a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal),
+            StairDirection::Descending => b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal),
+        });
+
+        let mut stairs: Vec<PriorityStair> = Vec::new();
+        let n = sorted.len();
+        let mut i = 0;
+        while i < n {
+            let mut j = i;
+            while j + 1 < n && sorted[j + 1].to_bits() == sorted[i].to_bits() {
+                j += 1;
+            }
+            stairs.push(PriorityStair {
+                priority: sorted[i],
+                start_index: i,
+                end_index: j,
+                count: j - i + 1,
+            });
+            i = j + 1;
+        }
+
+        Self {
+            metric: "scheduled_priority_stair".to_string(),
+            sort: "priority".to_string(),
+            direction,
+            stairs,
+            total_scheduled_items: n,
+        }
+    }
+}
+
 /// Per-resource scheduling breakdown. Currently the data model exposes one
 /// telescope per problem, but the type is a `Vec<ResourceMetrics>` so the
 /// metric surface does not need to change when multi-resource support is
@@ -159,6 +245,10 @@ pub struct ScheduleMetrics {
     pub per_resource: Vec<ResourceMetrics>,
     pub composite_rank_score: f64,
     pub ranking_weights: RankingWeights,
+    /// Stair encoding of scheduled priorities. Defaults to an empty stair
+    /// when deserializing older payloads that did not include it.
+    #[serde(default)]
+    pub scheduled_priority_stair: ScheduledPriorityStair,
 }
 
 impl ScheduleMetrics {
@@ -195,6 +285,10 @@ impl ScheduleMetrics {
         let utilization = ratio(scheduled_time_sec, available_time_sec);
 
         let priority = PriorityStats::from_values(&scheduled_priorities);
+        let scheduled_priority_stair = ScheduledPriorityStair::from_priorities(
+            &scheduled_priorities,
+            StairDirection::default(),
+        );
         let fragmentation = FragmentationStats::from_schedule(schedule, available_time_sec);
 
         let resource_label = context
@@ -232,6 +326,7 @@ impl ScheduleMetrics {
             per_resource,
             composite_rank_score,
             ranking_weights,
+            scheduled_priority_stair,
         }
     }
 }
@@ -643,5 +738,129 @@ mod tests {
         assert!((percentile(&values, 0.50) - 25.0).abs() < 1e-9);
         assert!((percentile(&values, 0.75) - 32.5).abs() < 1e-9);
         assert!((percentile(&values, 0.90) - 37.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn stair_empty_input_yields_empty_stair() {
+        let s = ScheduledPriorityStair::from_priorities(&[], StairDirection::Descending);
+        assert_eq!(s.total_scheduled_items, 0);
+        assert!(s.stairs.is_empty());
+        assert_eq!(s.metric, "scheduled_priority_stair");
+        assert_eq!(s.sort, "priority");
+    }
+
+    #[test]
+    fn stair_uniform_priorities_yields_single_stair() {
+        let s =
+            ScheduledPriorityStair::from_priorities(&[3.0, 3.0, 3.0], StairDirection::Descending);
+        assert_eq!(s.stairs.len(), 1);
+        assert_eq!(s.stairs[0].priority, 3.0);
+        assert_eq!(s.stairs[0].start_index, 0);
+        assert_eq!(s.stairs[0].end_index, 2);
+        assert_eq!(s.stairs[0].count, 3);
+        assert_eq!(s.total_scheduled_items, 3);
+    }
+
+    #[test]
+    fn stair_distinct_priorities_yields_singletons() {
+        let s =
+            ScheduledPriorityStair::from_priorities(&[1.0, 2.0, 3.0], StairDirection::Ascending);
+        assert_eq!(s.stairs.len(), 3);
+        assert_eq!(s.stairs[0].priority, 1.0);
+        assert_eq!(s.stairs[1].priority, 2.0);
+        assert_eq!(s.stairs[2].priority, 3.0);
+        for (i, stair) in s.stairs.iter().enumerate() {
+            assert_eq!(stair.start_index, i);
+            assert_eq!(stair.end_index, i);
+            assert_eq!(stair.count, 1);
+        }
+    }
+
+    #[test]
+    fn stair_descending_groups_correctly() {
+        let s = ScheduledPriorityStair::from_priorities(
+            &[1.0, 5.0, 3.0, 5.0, 1.0, 3.0, 3.0],
+            StairDirection::Descending,
+        );
+        let priorities: Vec<f64> = s.stairs.iter().map(|x| x.priority).collect();
+        let counts: Vec<usize> = s.stairs.iter().map(|x| x.count).collect();
+        assert_eq!(priorities, vec![5.0, 3.0, 1.0]);
+        assert_eq!(counts, vec![2, 3, 2]);
+        assert_eq!(s.total_scheduled_items, 7);
+        // Indices form a contiguous partition of [0, 7).
+        let mut next = 0;
+        for stair in &s.stairs {
+            assert_eq!(stair.start_index, next);
+            assert_eq!(stair.end_index, next + stair.count - 1);
+            next = stair.end_index + 1;
+        }
+        assert_eq!(next, s.total_scheduled_items);
+    }
+
+    #[test]
+    fn stair_partition_property() {
+        let priorities = [1.0, 1.0, 2.0, 2.0, 2.0, 3.0, 4.0, 4.0];
+        for direction in [StairDirection::Ascending, StairDirection::Descending] {
+            let s = ScheduledPriorityStair::from_priorities(&priorities, direction);
+            let total: usize = s.stairs.iter().map(|x| x.count).sum();
+            assert_eq!(total, s.total_scheduled_items);
+            assert_eq!(s.total_scheduled_items, priorities.len());
+            // Every stair end_index = start_index + count - 1 and stairs are
+            // contiguous starting at 0.
+            let mut cursor = 0;
+            for stair in &s.stairs {
+                assert_eq!(stair.start_index, cursor);
+                assert_eq!(stair.end_index, cursor + stair.count - 1);
+                cursor = stair.end_index + 1;
+            }
+        }
+    }
+
+    #[test]
+    fn stair_present_in_compute_output() {
+        let problem = problem_with_priorities(&[(1, 5.0), (2, 5.0), (3, 1.0), (4, 3.0)]);
+        let mut schedule = Schedule::new();
+        place(&mut schedule, 1, 0.0, 0.01);
+        place(&mut schedule, 2, 0.02, 0.03);
+        place(&mut schedule, 3, 0.04, 0.05);
+        place(&mut schedule, 4, 0.06, 0.07);
+        let h = horizon(0.0, 1.0);
+        let metrics = ScheduleMetrics::compute(&schedule, &problem, &h, &MetricsContext::default());
+        assert_eq!(metrics.scheduled_priority_stair.total_scheduled_items, 4);
+        let priorities: Vec<f64> = metrics
+            .scheduled_priority_stair
+            .stairs
+            .iter()
+            .map(|s| s.priority)
+            .collect();
+        assert_eq!(priorities, vec![5.0, 3.0, 1.0]);
+    }
+
+    #[test]
+    fn stair_serde_round_trip() {
+        let s = ScheduledPriorityStair::from_priorities(
+            &[2.0, 1.0, 1.0, 2.0],
+            StairDirection::Descending,
+        );
+        let text = serde_json::to_string(&s).unwrap();
+        let back: ScheduledPriorityStair = serde_json::from_str(&text).unwrap();
+        assert_eq!(s, back);
+        // Backwards-compat: a payload missing scheduled_priority_stair on
+        // ScheduleMetrics still deserializes thanks to serde(default).
+        let problem = problem_with_priorities(&[(1, 1.0)]);
+        let mut schedule = Schedule::new();
+        place(&mut schedule, 1, 0.0, 0.01);
+        let h = horizon(0.0, 1.0);
+        let m = ScheduleMetrics::compute(&schedule, &problem, &h, &MetricsContext::default());
+        let mut value = serde_json::to_value(&m).unwrap();
+        value
+            .as_object_mut()
+            .unwrap()
+            .remove("scheduled_priority_stair");
+        let restored: ScheduleMetrics = serde_json::from_value(value).unwrap();
+        assert_eq!(
+            restored.scheduled_priority_stair,
+            ScheduledPriorityStair::default()
+        );
     }
 }

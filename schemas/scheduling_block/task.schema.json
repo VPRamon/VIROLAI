@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft-07/schema",
-  "$id": "task.schema.json",
+  "$id": "scheduling_block/task.schema.json",
   "title": "Task",
   "type": "object",
   "required": ["id", "requested_duration_sec"],
@@ -21,7 +21,7 @@
     },
     "target": {
       "description": "Celestial target for this task in the ICRS frame.",
-      "$ref": "#/$defs/IcrsTarget"
+      "$ref": "coordinate.schema.json#/definitions/IcrsTarget"
     },
     "hard_constraints": {
       "description": "Hard observability constraints for this task.",
@@ -30,27 +30,6 @@
     "soft_constraints": {
       "description": "Soft scoring constraints for this task.",
       "$ref": "soft_constraints.schema.json"
-    }
-  },
-  "$defs": {
-    "IcrsTarget": {
-      "type": "object",
-      "required": ["ra_deg", "dec_deg"],
-      "additionalProperties": false,
-      "properties": {
-        "ra_deg": {
-          "description": "Right ascension in degrees [0, 360).",
-          "type": "number",
-          "minimum": 0,
-          "exclusiveMaximum": 360
-        },
-        "dec_deg": {
-          "description": "Declination in degrees [-90, 90].",
-          "type": "number",
-          "minimum": -90,
-          "maximum": 90
-        }
-      }
     }
   }
 }

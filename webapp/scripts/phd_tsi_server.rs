@@ -12,6 +12,7 @@ use tsi_rust::http::{
 
 mod experiments;
 mod phd_tsi_adapter;
+mod workspaces;
 
 use phd_tsi_adapter::phd_schedule_import_adapter;
 
@@ -71,8 +72,17 @@ async fn main() -> anyhow::Result<()> {
     );
     let experiments_router = experiments::experiments_router(experiments_state);
 
+    let workspaces_state = workspaces::state_from_env()
+        .map_err(|e| anyhow::anyhow!("failed to init workspaces domain: {e}"))?;
+    info!(
+        "Workspaces backend ready (root={})",
+        workspaces_state.store.root().display()
+    );
+    let workspaces_router = workspaces::workspaces_router(workspaces_state);
+
     let extensions = BackendExtensions::builder()
         .with_routes(experiments_router)
+        .with_routes(workspaces_router)
         .with_trace_validator(EstTraceValidator)
         .build();
 

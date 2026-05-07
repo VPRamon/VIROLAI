@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema",
+  "$id": "scheduling_problem/scheduling_problem.schema.json",
+  "title": "SchedulingProblem",
+  "description": "Scheduler problem payload containing telescope resources, a global scheduling horizon, and scheduling blocks.",
+  "type": "object",
+  "required": ["resources", "schedule_time_window", "scheduling_blocks"],
+  "additionalProperties": false,
+  "properties": {
+    "resources": {
+      "description": "Available telescope resources that can execute scheduled tasks.",
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "telescope.schema.json"
+      }
+    },
+    "schedule_time_window": {
+      "$ref": "#/$defs/TimeWindow"
+    },
+    "scheduling_blocks": {
+      "$ref": "../scheduling_block/scheduling_blocks.schema.json"
+    }
+  },
+  "$defs": {
+    "TimeWindow": {
+      "type": "object",
+      "required": ["start_mjd_utc", "end_mjd_utc"],
+      "additionalProperties": false,
+      "properties": {
+        "start_mjd_utc": {
+          "description": "Inclusive UTC start in Modified Julian Date.",
+          "type": "number"
+        },
+        "end_mjd_utc": {
+          "description": "Exclusive UTC end in Modified Julian Date.",
+          "type": "number"
+        }
+      }
+    }
+  }
+}

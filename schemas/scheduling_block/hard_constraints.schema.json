@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft-07/schema",
-  "$id": "hard_constraints.schema.json",
+  "$id": "scheduling_block/hard_constraints.schema.json",
   "title": "HardConstraints",
   "type": "object",
   "additionalProperties": false,
