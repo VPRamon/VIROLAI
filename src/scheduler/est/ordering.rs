@@ -1,4 +1,4 @@
-use super::candidate::EstCandidate;
+use super::candidate::Candidate;
 use crate::time::{MJD, TaskId, Time};
 use std::cmp::Ordering;
 
@@ -22,11 +22,7 @@ struct OrderingKey {
 /// Non-endangered candidates that would obstruct an endangered one have their
 /// `effective_est` promoted to the endangered candidate's EST so they are
 /// deferred behind it.
-pub fn sort_candidates(
-    candidates: &mut [EstCandidate<'_>],
-    priority_at: Time<MJD>,
-    threshold: u32,
-) {
+pub fn sort_candidates(candidates: &mut [Candidate<'_>], priority_at: Time<MJD>, threshold: u32) {
     let endangered_ests: Vec<Time<MJD>> = candidates
         .iter()
         .filter(|c| !c.is_impossible() && c.is_endangered(threshold))
@@ -51,7 +47,7 @@ pub fn sort_candidates(
 ///   endangered candidate E whose EST falls within `[c.est, c.est + c.dur)`,
 ///   `effective_est` is promoted to `max(effective_est, E.est)`.
 fn compute_effective_est(
-    candidate: &EstCandidate<'_>,
+    candidate: &Candidate<'_>,
     is_endangered: bool,
     endangered_ests: &[Time<MJD>],
 ) -> Option<Time<MJD>> {
@@ -88,7 +84,7 @@ fn compute_effective_est(
 /// 5. lower flexibility,
 /// 6. higher soft-constraint score,
 /// 7. lower task id.
-pub(crate) fn compare_by_cached(a: &EstCandidate<'_>, b: &EstCandidate<'_>) -> Ordering {
+pub(crate) fn compare_by_cached(a: &Candidate<'_>, b: &Candidate<'_>) -> Ordering {
     match (a.is_impossible(), b.is_impossible()) {
         (false, true) => return Ordering::Less,
         (true, false) => return Ordering::Greater,
@@ -129,8 +125,8 @@ pub(crate) fn compare_by_cached(a: &EstCandidate<'_>, b: &EstCandidate<'_>) -> O
 /// [`sort_candidates`] or [`super::queue::CandidateQueue::refresh`] can
 /// provide.
 pub fn compare_candidates(
-    left: &EstCandidate<'_>,
-    right: &EstCandidate<'_>,
+    left: &Candidate<'_>,
+    right: &Candidate<'_>,
     priority_at: Time<MJD>,
     threshold: u32,
 ) -> Ordering {

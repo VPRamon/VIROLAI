@@ -1,4 +1,4 @@
-use super::candidate::EstCandidate;
+use super::candidate::Candidate;
 use super::ordering::{compare_candidates, sort_candidates};
 use super::queue::CandidateQueue;
 use super::{Configuration, EstScheduler, run_scheduler};
@@ -48,7 +48,7 @@ fn helper_analysis_updates_est_and_deadline() {
     let task = task_with_priority(1, 1.0, 1.0);
     let feasible = windows(&[(-2.0, -1.0), (0.2, 0.9), (1.0, 3.0), (5.0, 8.0)]);
     let horizon = period(0.0, 6.0);
-    let candidate = EstCandidate::new(&task, &feasible, &horizon);
+    let candidate = Candidate::new(&task, &feasible, &horizon);
 
     let est = candidate.est.expect("est should exist");
     let deadline = candidate.deadline.expect("deadline should exist");
@@ -62,7 +62,7 @@ fn helper_analysis_sums_window_ratios_into_flexibility() {
     let task = task_with_priority(1, 1.0, 1.0);
     let feasible = windows(&[(-1.0, 0.5), (1.0, 2.5), (3.0, 5.0)]);
     let horizon = period(0.0, 4.0);
-    let candidate = EstCandidate::new(&task, &feasible, &horizon);
+    let candidate = Candidate::new(&task, &feasible, &horizon);
 
     assert!((candidate.flexibility - 2.5).abs() < 1e-9);
 }
@@ -74,8 +74,8 @@ fn comparator_puts_impossible_candidates_last() {
     let task_1 = task_with_priority(1, 1.0, 10.0);
     let task_2 = task_with_priority(2, 1.0, 1.0);
     let mut candidates = [
-        EstCandidate::new(&task_1, &empty_windows, &horizon),
-        EstCandidate::new(&task_2, &empty_windows, &horizon),
+        Candidate::new(&task_1, &empty_windows, &horizon),
+        Candidate::new(&task_2, &empty_windows, &horizon),
     ];
     candidates[0].flexibility = 0.25;
     candidates[1].est = Some(Time::<MJD>::new(1.0));
@@ -93,11 +93,11 @@ fn comparator_orders_by_earlier_est_first() {
     let earlier_task = task_with_priority(1, 1.0, 1.0);
     let later_task = task_with_priority(2, 1.0, 100.0);
 
-    let mut earlier = EstCandidate::new(&earlier_task, &empty_windows, &horizon);
+    let mut earlier = Candidate::new(&earlier_task, &empty_windows, &horizon);
     earlier.est = Some(Time::<MJD>::new(1.0));
     earlier.flexibility = 5.0;
 
-    let mut later = EstCandidate::new(&later_task, &empty_windows, &horizon);
+    let mut later = Candidate::new(&later_task, &empty_windows, &horizon);
     later.est = Some(Time::<MJD>::new(2.0));
     later.flexibility = 1.0;
 
@@ -114,11 +114,11 @@ fn comparator_orders_by_lower_flexibility_before_priority() {
     let low_flex_task = task_with_priority(1, 1.0, 1.0);
     let high_flex_task = task_with_priority(2, 1.0, 100.0);
 
-    let mut low_flex = EstCandidate::new(&low_flex_task, &empty_windows, &horizon);
+    let mut low_flex = Candidate::new(&low_flex_task, &empty_windows, &horizon);
     low_flex.est = Some(Time::<MJD>::new(1.0));
     low_flex.flexibility = 1.5;
 
-    let mut high_flex = EstCandidate::new(&high_flex_task, &empty_windows, &horizon);
+    let mut high_flex = Candidate::new(&high_flex_task, &empty_windows, &horizon);
     high_flex.est = Some(Time::<MJD>::new(1.0));
     high_flex.flexibility = 3.0;
 
@@ -135,11 +135,11 @@ fn comparator_orders_by_higher_soft_priority_after_est_and_flexibility() {
     let low_priority_task = task_with_priority(1, 1.0, 1.0);
     let high_priority_task = task_with_priority(2, 1.0, 10.0);
 
-    let mut low_priority = EstCandidate::new(&low_priority_task, &empty_windows, &horizon);
+    let mut low_priority = Candidate::new(&low_priority_task, &empty_windows, &horizon);
     low_priority.est = Some(Time::<MJD>::new(1.0));
     low_priority.flexibility = 2.0;
 
-    let mut high_priority = EstCandidate::new(&high_priority_task, &empty_windows, &horizon);
+    let mut high_priority = Candidate::new(&high_priority_task, &empty_windows, &horizon);
     high_priority.est = Some(Time::<MJD>::new(1.0));
     high_priority.flexibility = 2.0;
 
@@ -156,11 +156,11 @@ fn comparator_orders_by_task_id_after_other_keys_tie() {
     let lower_id_task = task_with_priority(1, 1.0, 5.0);
     let higher_id_task = task_with_priority(2, 1.0, 5.0);
 
-    let mut lower_id = EstCandidate::new(&lower_id_task, &empty_windows, &horizon);
+    let mut lower_id = Candidate::new(&lower_id_task, &empty_windows, &horizon);
     lower_id.est = Some(Time::<MJD>::new(1.0));
     lower_id.flexibility = 2.0;
 
-    let mut higher_id = EstCandidate::new(&higher_id_task, &empty_windows, &horizon);
+    let mut higher_id = Candidate::new(&higher_id_task, &empty_windows, &horizon);
     higher_id.est = Some(Time::<MJD>::new(1.0));
     higher_id.flexibility = 2.0;
 
@@ -177,11 +177,11 @@ fn comparator_sorts_missing_est_after_candidates_with_est() {
     let with_est_task = task_with_priority(1, 1.0, 1.0);
     let missing_est_task = task_with_priority(2, 1.0, 1.0);
 
-    let mut with_est = EstCandidate::new(&with_est_task, &empty_windows, &horizon);
+    let mut with_est = Candidate::new(&with_est_task, &empty_windows, &horizon);
     with_est.est = Some(Time::<MJD>::new(1.0));
     with_est.flexibility = 2.0;
 
-    let mut missing_est = EstCandidate::new(&missing_est_task, &empty_windows, &horizon);
+    let mut missing_est = Candidate::new(&missing_est_task, &empty_windows, &horizon);
     missing_est.est = None;
     missing_est.flexibility = 2.0;
 
@@ -215,11 +215,11 @@ fn sort_candidates_defers_non_endangered_that_obstructs_endangered() {
     let non_endangered_task = task_with_priority(1, 1.0, 1.0);
     let endangered_task = task_with_priority(2, 1.0, 1.0);
 
-    let mut non_endangered = EstCandidate::new(&non_endangered_task, &empty_windows, &horizon);
+    let mut non_endangered = Candidate::new(&non_endangered_task, &empty_windows, &horizon);
     non_endangered.est = Some(Time::<MJD>::new(0.0));
     non_endangered.flexibility = 3.0;
 
-    let mut endangered = EstCandidate::new(&endangered_task, &empty_windows, &horizon);
+    let mut endangered = Candidate::new(&endangered_task, &empty_windows, &horizon);
     endangered.est = Some(Time::<MJD>::new(0.5));
     endangered.flexibility = 1.5;
 
@@ -242,11 +242,11 @@ fn sort_candidates_does_not_defer_when_end_matches_endangered_est() {
     let earlier_task = task_with_priority(1, 1.0, 1.0);
     let endangered_task = task_with_priority(2, 1.0, 1.0);
 
-    let mut earlier = EstCandidate::new(&earlier_task, &empty_windows, &horizon);
+    let mut earlier = Candidate::new(&earlier_task, &empty_windows, &horizon);
     earlier.est = Some(Time::<MJD>::new(0.0));
     earlier.flexibility = 3.0;
 
-    let mut endangered = EstCandidate::new(&endangered_task, &empty_windows, &horizon);
+    let mut endangered = Candidate::new(&endangered_task, &empty_windows, &horizon);
     endangered.est = Some(Time::<MJD>::new(1.0));
     endangered.flexibility = 1.5;
 
@@ -265,11 +265,11 @@ fn sort_candidates_does_not_defer_earlier_endangered_task() {
     let earlier_task = task_with_priority(1, 1.0, 1.0);
     let later_task = task_with_priority(2, 1.0, 1.0);
 
-    let mut earlier = EstCandidate::new(&earlier_task, &empty_windows, &horizon);
+    let mut earlier = Candidate::new(&earlier_task, &empty_windows, &horizon);
     earlier.est = Some(Time::<MJD>::new(0.0));
     earlier.flexibility = 1.5;
 
-    let mut later = EstCandidate::new(&later_task, &empty_windows, &horizon);
+    let mut later = Candidate::new(&later_task, &empty_windows, &horizon);
     later.est = Some(Time::<MJD>::new(0.5));
     later.flexibility = 1.5;
 
@@ -288,11 +288,11 @@ fn sort_candidates_keeps_unrelated_non_endangered_task_ahead() {
     let non_endangered_task = task_with_priority(1, 0.5, 1.0);
     let endangered_task = task_with_priority(2, 1.0, 1.0);
 
-    let mut non_endangered = EstCandidate::new(&non_endangered_task, &empty_windows, &horizon);
+    let mut non_endangered = Candidate::new(&non_endangered_task, &empty_windows, &horizon);
     non_endangered.est = Some(Time::<MJD>::new(0.0));
     non_endangered.flexibility = 3.0;
 
-    let mut endangered = EstCandidate::new(&endangered_task, &empty_windows, &horizon);
+    let mut endangered = Candidate::new(&endangered_task, &empty_windows, &horizon);
     endangered.est = Some(Time::<MJD>::new(1.0));
     endangered.flexibility = 1.5;
 
@@ -312,15 +312,15 @@ fn sort_candidates_promotes_to_latest_obstructed_endangered_est() {
     let endangered_task_a = task_with_priority(2, 1.0, 1.0);
     let endangered_task_b = task_with_priority(3, 1.0, 1.0);
 
-    let mut non_endangered = EstCandidate::new(&non_endangered_task, &empty_windows, &horizon);
+    let mut non_endangered = Candidate::new(&non_endangered_task, &empty_windows, &horizon);
     non_endangered.est = Some(Time::<MJD>::new(0.0));
     non_endangered.flexibility = 3.0;
 
-    let mut endangered_a = EstCandidate::new(&endangered_task_a, &empty_windows, &horizon);
+    let mut endangered_a = Candidate::new(&endangered_task_a, &empty_windows, &horizon);
     endangered_a.est = Some(Time::<MJD>::new(1.0));
     endangered_a.flexibility = 1.5;
 
-    let mut endangered_b = EstCandidate::new(&endangered_task_b, &empty_windows, &horizon);
+    let mut endangered_b = Candidate::new(&endangered_task_b, &empty_windows, &horizon);
     endangered_b.est = Some(Time::<MJD>::new(2.0));
     endangered_b.flexibility = 1.5;
 
@@ -340,15 +340,15 @@ fn candidate_queue_pop_at_uses_schedulable_index_not_raw_index() {
     let task_2 = task_with_priority(2, 1.0, 1.0);
     let task_3 = task_with_priority(3, 1.0, 5.0);
 
-    let mut first = EstCandidate::new(&task_1, &empty_windows, &horizon);
+    let mut first = Candidate::new(&task_1, &empty_windows, &horizon);
     first.est = Some(Time::<MJD>::new(1.0));
     first.flexibility = 2.0;
 
-    let mut impossible = EstCandidate::new(&task_2, &empty_windows, &horizon);
+    let mut impossible = Candidate::new(&task_2, &empty_windows, &horizon);
     impossible.est = None;
     impossible.flexibility = 0.25;
 
-    let mut second = EstCandidate::new(&task_3, &empty_windows, &horizon);
+    let mut second = Candidate::new(&task_3, &empty_windows, &horizon);
     second.est = Some(Time::<MJD>::new(2.0));
     second.flexibility = 3.0;
 
@@ -844,11 +844,11 @@ fn pop_at_direct_prefix_index() {
     let task_1 = task_with_priority(1, 1.0, 10.0);
     let task_2 = task_with_priority(2, 1.0, 5.0);
 
-    let mut first = EstCandidate::new(&task_1, &empty_windows, &horizon);
+    let mut first = Candidate::new(&task_1, &empty_windows, &horizon);
     first.est = Some(Time::<MJD>::new(1.0));
     first.flexibility = 1.5;
 
-    let mut second = EstCandidate::new(&task_2, &empty_windows, &horizon);
+    let mut second = Candidate::new(&task_2, &empty_windows, &horizon);
     second.est = Some(Time::<MJD>::new(2.0));
     second.flexibility = 2.0;
 
@@ -870,11 +870,11 @@ fn schedulable_count_decrements_after_pop_at() {
     let task_1 = task_with_priority(1, 1.0, 1.0);
     let task_2 = task_with_priority(2, 1.0, 1.0);
 
-    let mut c1 = EstCandidate::new(&task_1, &empty_windows, &horizon);
+    let mut c1 = Candidate::new(&task_1, &empty_windows, &horizon);
     c1.est = Some(Time::<MJD>::new(1.0));
     c1.flexibility = 2.0;
 
-    let mut c2 = EstCandidate::new(&task_2, &empty_windows, &horizon);
+    let mut c2 = Candidate::new(&task_2, &empty_windows, &horizon);
     c2.est = Some(Time::<MJD>::new(2.0));
     c2.flexibility = 2.0;
 

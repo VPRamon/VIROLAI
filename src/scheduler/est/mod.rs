@@ -24,7 +24,7 @@ pub use crate::scheduler::fom::{
     CompositeFom, EstFomKind, ScheduleFom, ScoringContext, SoftConstraintFom,
 };
 pub use algorithm::{EstScheduler, run_scheduler};
-pub use candidate::{EstCandidate, IntoTaskPlacement};
+pub use candidate::{Candidate, IntoTaskPlacement};
 pub use configuration::Configuration;
 pub use ordering::{compare_candidates, sort_candidates};
 pub use schedule_state::ScheduleState;

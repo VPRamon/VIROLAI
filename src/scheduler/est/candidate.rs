@@ -13,7 +13,7 @@ pub trait IntoTaskPlacement {
 
 /// Mutable EST work item used during candidate ordering and placement.
 #[derive(Debug, Clone)]
-pub struct EstCandidate<'a> {
+pub struct Candidate<'a> {
     task: &'a Task,
     windows: &'a PeriodSet<MJD>,
     pub(crate) next_window_idx: usize,
@@ -26,7 +26,7 @@ pub struct EstCandidate<'a> {
     pub(super) priority_at_cursor: f64,
 }
 
-impl<'a> EstCandidate<'a> {
+impl<'a> Candidate<'a> {
     /// Create a candidate and immediately compute its first EST metadata.
     pub fn new(task: &'a Task, windows: &'a PeriodSet<MJD>, horizon: &Period<MJD>) -> Self {
         let mut candidate = Self {
@@ -133,6 +133,47 @@ impl<'a> EstCandidate<'a> {
             .unwrap_or(0.0)
     }
 
+    /// Update the cached sort fields used by [`CandidateQueue`].
+    ///
+    /// Must be called after [`Self::refresh`] and after `endangered` has been
+    /// collected for the current beam step.
+    pub(super) fn update_caches(
+        &mut self,
+        priority_at: Time<MJD>,
+        threshold: u32,
+        endangered: &[Time<MJD>],
+    ) {
+        let is_endangered = !self.is_impossible() && self.is_endangered(threshold);
+        self.priority_at_cursor = self.priority(priority_at);
+        self.is_endangered_cached = is_endangered;
+        self.effective_est = if self.is_impossible() {
+            None
+        } else if is_endangered {
+            self.est
+        } else {
+            self.est.map(|est| {
+                let est_days = est.value();
+                let dur = self.duration().value();
+                // Effective EST is the latest endangered EST that falls strictly
+                // inside this candidate's scheduling window; keeps endangered
+                // tasks from being leapfrogged.
+                endangered
+                    .iter()
+                    .copied()
+                    .filter(|&e| {
+                        let ed = e.value();
+                        ed > est_days && ed < est_days + dur
+                    })
+                    .max_by(|a, b| {
+                        a.value()
+                            .partial_cmp(&b.value())
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    })
+                    .unwrap_or(est)
+            })
+        };
+    }
+
     /// Return `true` when the task has little scheduling slack relative to
     /// `threshold`.  A threshold of 0 disables the protection entirely.
     pub fn is_endangered(&self, threshold: u32) -> bool {
@@ -147,7 +188,7 @@ impl<'a> EstCandidate<'a> {
     }
 }
 
-impl IntoTaskPlacement for EstCandidate<'_> {
+impl IntoTaskPlacement for Candidate<'_> {
     /// Materialise the candidate into a placement occupying `[est, est + duration)`.
     fn into_task_placement(self, horizon_end: Time<MJD>) -> TaskPlacement {
         let start = self
