@@ -1,12 +1,12 @@
 use super::candidate::EstCandidate;
-use crate::scheduler::fom::{EstFomKind, SoftConstraintFom};
 use super::ordering::{compare_candidates, sort_candidates};
 use super::queue::CandidateQueue;
-use super::{Configuration, EstScheduler, MAX_K_BEAMS, run_scheduler};
+use super::{Configuration, EstScheduler, run_scheduler};
 use crate::constraints::{ConstraintExpr, PrioritySoftConstraint, SoftConstraintExpr};
 use crate::error::ScheduleError;
 use crate::prescheduler::TaskPeriodMap;
 use crate::schedule::SchedulingProblem;
+use crate::scheduler::fom::{EstFomKind, SoftConstraintFom};
 use crate::scheduling_block::{Dependency, SchedulingBlock};
 use crate::task::{IcrsTarget, Task};
 use crate::time::{MJD, Period, SchedulingBlockId, TaskId, Time};
@@ -546,7 +546,7 @@ fn default_config_is_valid() {
 
 #[test]
 fn with_fom_builds_soft_constraint_scheduler() {
-    let scheduler = EstScheduler::new(
+    let scheduler = EstScheduler::with_fom(
         Configuration::default(),
         EstFomKind::SoftConstraint.into_fom(),
     )
@@ -556,48 +556,35 @@ fn with_fom_builds_soft_constraint_scheduler() {
 }
 
 #[test]
-fn zero_k_beams_is_rejected() {
-    let error = EstScheduler::new(Configuration {
+fn zero_k_beams_is_normalized_to_one() {
+    let scheduler = EstScheduler::new(Configuration {
         k_beams: 0,
         ..Configuration::default()
     })
-    .expect_err("scheduler config should fail");
+    .expect("scheduler config should be normalized");
 
-    assert!(matches!(
-        error,
-        ScheduleError::InvalidConfiguration(message)
-            if message.contains("est.k_beams must be at least 1")
-    ));
+    assert_eq!(scheduler.config.k_beams, 1);
 }
 
 #[test]
-fn k_beams_above_max_is_rejected() {
-    let error = EstScheduler::new(Configuration {
-        k_beams: MAX_K_BEAMS + 1,
+fn large_k_beams_is_accepted() {
+    let scheduler = EstScheduler::new(Configuration {
+        k_beams: 10_000,
         ..Configuration::default()
-    })
-    .expect_err("scheduler config should fail");
+    });
 
-    assert!(matches!(
-        error,
-        ScheduleError::InvalidConfiguration(message)
-            if message.contains(&format!("est.k_beams must be <= {MAX_K_BEAMS}"))
-    ));
+    assert!(scheduler.is_ok());
 }
 
 #[test]
-fn zero_branching_factor_is_rejected() {
-    let error = EstScheduler::new(Configuration {
+fn zero_branching_factor_is_normalized_to_one() {
+    let scheduler = EstScheduler::new(Configuration {
         branching_factor: 0,
         ..Configuration::default()
     })
-    .expect_err("scheduler config should fail");
+    .expect("scheduler config should be normalized");
 
-    assert!(matches!(
-        error,
-        ScheduleError::InvalidConfiguration(message)
-            if message.contains("est.branching_factor must be at least 1")
-    ));
+    assert_eq!(scheduler.config.branching_factor, 1);
 }
 
 #[test]

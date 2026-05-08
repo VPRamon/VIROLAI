@@ -1,10 +1,10 @@
 //! User-facing EST figure-of-merit selector.
 
+use crate::scheduler::fom::{ScheduleFom, SoftConstraintFom};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::str::FromStr;
 use std::sync::Arc;
-use crate::scheduler::fom::{ScheduleFom, SoftConstraintFom};
 
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, Default,

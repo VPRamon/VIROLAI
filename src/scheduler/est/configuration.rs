@@ -1,6 +1,3 @@
-/// Maximum allowed value for `k_beams`.
-pub const MAX_K_BEAMS: usize = 100;
-
 /// EST configuration — plain data, `Copy`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Configuration {

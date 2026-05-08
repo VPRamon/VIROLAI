@@ -1,5 +1,5 @@
-use crate::schedule::Schedule;
 use super::{ScheduleFom, ScoringContext};
+use crate::schedule::Schedule;
 
 /// FOM: lexicographic combination of two FOMs.
 ///

@@ -10,6 +10,7 @@ use crate::schedule::Schedule;
 use crate::schedule::SchedulingProblem;
 use crate::task::Task;
 use crate::time::TaskId;
+use std::sync::Arc;
 
 /// Prepared scoring context for FOM evaluation.
 ///
@@ -42,4 +43,14 @@ pub trait ScheduleFom: std::fmt::Debug + Send + Sync {
     fn evaluate(&self, schedule: &Schedule, ctx: &ScoringContext) -> f64;
     /// Return a human-readable label for this FOM.
     fn label(&self) -> &'static str;
+}
+
+impl<T: ScheduleFom + ?Sized> ScheduleFom for Arc<T> {
+    fn evaluate(&self, schedule: &Schedule, ctx: &ScoringContext) -> f64 {
+        (**self).evaluate(schedule, ctx)
+    }
+
+    fn label(&self) -> &'static str {
+        (**self).label()
+    }
 }

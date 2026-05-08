@@ -2,8 +2,8 @@ use super::ScheduleState;
 use super::algorithm::EstScheduler;
 use super::candidate::IntoTaskPlacement;
 use super::context::{ProblemCtx, check_block_dependencies};
-use crate::scheduler::fom::{ScheduleFom, ScoringContext};
 use crate::schedule::Schedule;
+use crate::scheduler::fom::{ScheduleFom, ScoringContext};
 use crate::time::{MJD, Period};
 use std::cmp::Ordering;
 

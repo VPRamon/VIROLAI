@@ -80,7 +80,7 @@ impl HapScheduler {
 }
 
 impl SchedulingAlgorithm for HapScheduler {
-    fn run(
+    fn run_unchecked(
         &self,
         problem: &SchedulingProblem,
         possible_periods: &TaskPeriodMap,

@@ -1,9 +1,11 @@
 use scheduler::scheduler::est::{Configuration as EstConfiguration, EstFomKind, EstScheduler};
+use scheduler::scheduler::fom::ScheduleFom;
 use scheduler::scheduler::hap::{
     HapScheduler, PlannerConfig, SurvivorSelector as HapSurvivorSelector,
 };
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use std::sync::Arc;
 
 /// An explicit observing window to substitute for the one detected in the input JSON.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -152,7 +154,7 @@ impl EstRunConfig {
         }
     }
 
-    pub fn build_scheduler(self) -> Result<EstScheduler, String> {
+    pub fn build_scheduler(self) -> Result<EstScheduler<Arc<dyn ScheduleFom>>, String> {
         EstScheduler::with_fom(self.est_config(), self.fom.into_fom())
             .map_err(|e| format!("invalid EST configuration for {}: {e}", self.slug()))
     }

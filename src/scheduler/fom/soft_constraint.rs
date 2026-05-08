@@ -1,6 +1,6 @@
+use super::{ScheduleFom, ScoringContext};
 use crate::schedule::Schedule;
 use crate::time::MJD;
-use super::{ScheduleFom, ScoringContext};
 
 /// FOM: sum of soft-constraint scores of all placed tasks (maximize).
 ///
