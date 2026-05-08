@@ -51,6 +51,35 @@ impl<'a> CandidateQueue<'a> {
             .count()
     }
 
+    /// Return `true` if the candidate at `idx` is dominated by candidate 0.
+    ///
+    /// A candidate is dominated when its raw EST falls at or beyond candidate 0's
+    /// scheduling window end (`c0.est + c0.duration`).  In that case c0 can
+    /// always be scheduled first without conflict: c0 fills its optimal slot and
+    /// the dominated candidate can still be placed at its own EST afterwards.
+    /// Any branch that picks the dominated candidate first is therefore suboptimal.
+    ///
+    /// `idx == 0` always returns `false` (c0 is never dominated by itself).
+    pub(super) fn is_dominated_by_first(&self, idx: usize) -> bool {
+        if idx == 0 {
+            return false;
+        }
+        let Some(first) = self.candidates.first() else {
+            return false;
+        };
+        if first.is_impossible() {
+            return false;
+        }
+        let Some(first_est) = first.est else {
+            return false;
+        };
+        let cutoff = first_est + first.duration();
+        self.candidates
+            .get(idx)
+            .and_then(|c| c.est)
+            .is_some_and(|est| est >= cutoff)
+    }
+
     /// Remove and return the candidate at sorted position `idx`.
     ///
     /// `idx` must be in `[0, schedulable_count)`.  Because all schedulable

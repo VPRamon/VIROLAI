@@ -97,8 +97,23 @@ fn expand_beam<'a, F: ScheduleFom>(
         return BeamExpansion::Terminal(state);
     }
 
+    let mut c0_placed = false;
     let mut children = Vec::new();
     for candidate_idx in 0..schedulable_count {
+        // Dominance pruning: once c0 has been successfully placed, any
+        // candidate whose raw EST is at or beyond c0's window end is
+        // dominated — scheduling c0 first is always at least as good.
+        // The guard `c0_placed` ensures we only skip when c0 was actually
+        // accepted by domain validation; if c0 was rejected (e.g. an unmet
+        // dependency), dominated candidates must still be explored.
+        if c0_placed && state.candidates.is_dominated_by_first(candidate_idx) {
+            log::trace!(
+                "est: round={} candidate={} pruned (dominated by candidate 0)",
+                round,
+                candidate_idx,
+            );
+            continue;
+        }
         if let Some(child) = build_child_state(
             scheduler,
             scoring_ctx,
@@ -109,6 +124,7 @@ fn expand_beam<'a, F: ScheduleFom>(
             schedulable_count,
             ctx,
         ) {
+            c0_placed |= candidate_idx == 0;
             children.push(child);
             if children.len() == branching_factor {
                 break;

@@ -886,3 +886,100 @@ fn schedulable_count_decrements_after_pop_at() {
     queue.pop_at(0);
     assert_eq!(queue.count_schedulable(), 0);
 }
+
+// --- Dominance pruning tests ---
+
+/// c0 is never reported as dominated by itself.
+#[test]
+fn is_dominated_by_first_returns_false_for_idx_zero() {
+    let horizon = period(0.0, 10.0);
+    let empty_windows = crate::time::PeriodSet::new();
+    let task = task_with_priority(1, 1.0, 1.0);
+
+    let mut c0 = Candidate::new(&task, &empty_windows, &horizon);
+    c0.est = Some(Time::<MJD>::new(0.0));
+    c0.flexibility = 3.0;
+
+    let queue = CandidateQueue::from_candidates_for_test(vec![c0]);
+    assert!(!queue.is_dominated_by_first(0));
+}
+
+/// A candidate whose EST is at or beyond c0.est + c0.duration is dominated.
+/// Scheduling it first would push c0 into a later window unnecessarily.
+#[test]
+fn is_dominated_by_first_detects_non_overlapping_candidate() {
+    let horizon = period(0.0, 10.0);
+    let empty_windows = crate::time::PeriodSet::new();
+    let task_1 = task_with_priority(1, 1.0, 1.0); // c0: est=0, dur=1 → cutoff=1
+    let task_2 = task_with_priority(2, 1.0, 1.0); // c1: est=1.0 >= 1 → dominated
+
+    let mut c0 = Candidate::new(&task_1, &empty_windows, &horizon);
+    c0.est = Some(Time::<MJD>::new(0.0));
+    c0.flexibility = 3.0;
+
+    let mut c1 = Candidate::new(&task_2, &empty_windows, &horizon);
+    c1.est = Some(Time::<MJD>::new(1.0));
+    c1.flexibility = 2.0;
+
+    let queue = CandidateQueue::from_candidates_for_test(vec![c0, c1]);
+    assert!(!queue.is_dominated_by_first(0));
+    assert!(queue.is_dominated_by_first(1));
+}
+
+/// A candidate whose EST overlaps c0's window is not dominated.
+#[test]
+fn is_dominated_by_first_returns_false_for_overlapping_candidate() {
+    let horizon = period(0.0, 10.0);
+    let empty_windows = crate::time::PeriodSet::new();
+    let task_1 = task_with_priority(1, 1.0, 1.0); // c0: est=0, dur=1 → cutoff=1
+    let task_2 = task_with_priority(2, 1.0, 1.0); // c1: est=0.5 < 1 → not dominated
+
+    let mut c0 = Candidate::new(&task_1, &empty_windows, &horizon);
+    c0.est = Some(Time::<MJD>::new(0.0));
+    c0.flexibility = 3.0;
+
+    let mut c1 = Candidate::new(&task_2, &empty_windows, &horizon);
+    c1.est = Some(Time::<MJD>::new(0.5));
+    c1.flexibility = 2.0;
+
+    let queue = CandidateQueue::from_candidates_for_test(vec![c0, c1]);
+    assert!(!queue.is_dominated_by_first(0));
+    assert!(!queue.is_dominated_by_first(1));
+}
+
+/// With three tasks in non-overlapping windows and branching_factor=3, the
+/// dominance pruning should still schedule all tasks correctly (the second and
+/// third tasks are dominated at the first step, but c0 schedules them
+/// sequentially in subsequent rounds).
+#[test]
+fn beam_dominance_pruning_schedules_all_non_overlapping_tasks() {
+    let tasks = vec![
+        task_with_priority(1, 1.0, 1.0),
+        task_with_priority(2, 1.0, 1.0),
+        task_with_priority(3, 1.0, 1.0),
+    ];
+    let mut possible = TaskPeriodMap::new();
+    possible.insert(TaskId(1), windows(&[(0.0, 1.5)]));
+    possible.insert(TaskId(2), windows(&[(2.0, 3.5)]));
+    possible.insert(TaskId(3), windows(&[(4.0, 5.5)]));
+
+    let horizon = period(0.0, 6.0);
+    let config = Configuration {
+        k_beams: 1,
+        branching_factor: 3,
+        endangered_threshold: 0,
+    };
+    let schedule = EstScheduler::new(config)
+        .expect("config should be valid")
+        .run_scheduler(tasks, &possible, &horizon)
+        .expect("run should pass");
+
+    assert_eq!(
+        schedule.len(),
+        3,
+        "all three non-overlapping tasks should be scheduled"
+    );
+    assert!(schedule.contains(TaskId(1)));
+    assert!(schedule.contains(TaskId(2)));
+    assert!(schedule.contains(TaskId(3)));
+}
