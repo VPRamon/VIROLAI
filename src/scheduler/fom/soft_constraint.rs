@@ -1,4 +1,4 @@
-use super::ScheduleFom;
+use super::{FomContext, ScheduleFom};
 use crate::schedule::{Schedule, SchedulingProblem};
 use crate::time::MJD;
 
@@ -11,7 +11,14 @@ pub struct SoftConstraintFom;
 
 impl ScheduleFom for SoftConstraintFom {
     /// Score by summing the soft-constraint score of every placed task.
-    fn evaluate(&self, schedule: &Schedule, problem: &SchedulingProblem) -> f64 {
+    ///
+    /// The `ctx` parameter is accepted for interface compatibility but not used.
+    fn evaluate(
+        &self,
+        schedule: &Schedule,
+        problem: &SchedulingProblem,
+        _ctx: &FomContext<'_>,
+    ) -> f64 {
         schedule
             .placements()
             .map(|placement| {

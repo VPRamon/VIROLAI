@@ -266,6 +266,7 @@ fn collect_est_axes(cells: &[MatrixCell]) -> Option<EstSweepAxes> {
         endangered_thresholds: e.into_iter().collect(),
         k_beams: k.into_iter().collect(),
         branching_factors: b.into_iter().collect(),
+        foms: vec![],
     })
 }
 

@@ -50,6 +50,12 @@ pub struct EstSweepAxes {
     /// Values of branching factor (b) to sweep.
     #[serde(default)]
     pub branching_factors: Vec<usize>,
+    /// FOM variants to sweep.
+    ///
+    /// Empty falls back to the default (`soft_constraint`). The FOM is
+    /// included in the cell slug only when it is not the default.
+    #[serde(default)]
+    pub foms: Vec<FomKind>,
 }
 
 // ── HAP sweep axes ───────────────────────────────────────────────────────────
@@ -218,11 +224,19 @@ impl EstRunConfig {
     }
 
     /// Returns a short, filesystem-safe string that uniquely encodes all EST
-    /// configuration axes (e.g. `"e2-k5-b3"`).
+    /// configuration axes (e.g. `"e2-k5-b3"` or `"e2-k5-b3-future_flexibility"`).
+    ///
+    /// The FOM suffix is omitted when it is the default (`soft_constraint`) so
+    /// existing run-directory names remain stable.
     pub fn slug(self) -> String {
+        let fom_suffix = if self.fom == FomKind::default() {
+            String::new()
+        } else {
+            format!("-{}", self.fom.as_str())
+        };
         format!(
-            "e{}-k{}-b{}",
-            self.endangered_threshold, self.k_beams, self.branching_factor
+            "e{}-k{}-b{}{}",
+            self.endangered_threshold, self.k_beams, self.branching_factor, fom_suffix
         )
     }
 }
@@ -394,7 +408,7 @@ mod tests {
     #[test]
     fn schedule_file_stem_uses_slug() {
         let run = RunConfig::Est(EstRunConfig {
-            fom: EstFomKind::SoftConstraint,
+            fom: FomKind::SoftConstraint,
             endangered_threshold: 2,
             k_beams: 5,
             branching_factor: 3,

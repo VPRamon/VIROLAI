@@ -153,16 +153,23 @@ fn insert_est_configs(axes: &EstSweepAxes, set: &mut BTreeSet<RunConfig>) {
     let endangered = pick_or_default(&axes.endangered_thresholds, def.endangered_threshold);
     let k_beams = pick_or_default(&axes.k_beams, def.k_beams);
     let branching = pick_or_default(&axes.branching_factors, def.branching_factor);
+    let foms = if axes.foms.is_empty() {
+        vec![def.fom]
+    } else {
+        axes.foms.clone()
+    };
 
     for &e in &endangered {
         for &k in &k_beams {
             for &b in &branching {
-                set.insert(RunConfig::Est(EstRunConfig {
-                    fom: def.fom,
-                    endangered_threshold: e,
-                    k_beams: k,
-                    branching_factor: b,
-                }));
+                for &fom in &foms {
+                    set.insert(RunConfig::Est(EstRunConfig {
+                        fom,
+                        endangered_threshold: e,
+                        k_beams: k,
+                        branching_factor: b,
+                    }));
+                }
             }
         }
     }
@@ -248,6 +255,7 @@ mod tests {
                         endangered_thresholds: vec![1, 2],
                         k_beams: vec![1, 2],
                         branching_factors: vec![1],
+                        foms: vec![],
                     },
                 },
                 AlgorithmSweep::Hap {

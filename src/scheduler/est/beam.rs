@@ -3,7 +3,7 @@ use super::algorithm::EstScheduler;
 use super::candidate::IntoTaskPlacement;
 use super::context::{ProblemCtx, check_block_dependencies};
 use crate::schedule::{Schedule, SchedulingProblem};
-use crate::scheduler::fom::ScheduleFom;
+use crate::scheduler::fom::{FomContext, ScheduleFom};
 use crate::time::{MJD, Period};
 use std::cmp::Ordering;
 
@@ -203,6 +203,11 @@ fn build_child_state<'a, F: ScheduleFom>(
 
     // FOM scoring is the pruning signal: higher-scoring child beams are more
     // likely to survive into the next round.
-    child.score = scheduler.fom.evaluate(&child.schedule, problem);
+    let fom_ctx = FomContext {
+        cursor: child.cursor,
+        horizon: *horizon,
+        possible_periods: ctx.map(|c| c.possible_periods),
+    };
+    child.score = scheduler.fom.evaluate(&child.schedule, problem, &fom_ctx);
     Some(child)
 }

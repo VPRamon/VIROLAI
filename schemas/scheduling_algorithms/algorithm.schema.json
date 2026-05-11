@@ -46,7 +46,8 @@
         },
         "fom": {
           "description": "Figure-of-merit function used to score and rank candidate placements.",
-          "type": "string"
+          "type": "string",
+          "enum": ["soft_constraint", "future_flexibility"]
         }
       }
     },

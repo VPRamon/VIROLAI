@@ -109,7 +109,10 @@ impl<F: ScheduleFom> EstScheduler<F> {
             initial_state,
             horizon,
             problem,
-            Some(&ProblemCtx { problem }),
+            Some(&ProblemCtx {
+                problem,
+                possible_periods,
+            }),
         ))
     }
 

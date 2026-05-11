@@ -224,7 +224,7 @@ fn parse_cli_args(program: &str, args: &[String]) -> Result<CliArgs, String> {
                 let Some(value) = args.get(i + 1) else {
                     print_usage(program);
                     return Err(format!(
-                        "missing value for {flag} (expected 'soft_constraint')"
+                        "missing value for {flag} (expected 'soft_constraint' or 'future_flexibility')"
                     ));
                 };
                 est_fom = value
@@ -402,10 +402,11 @@ fn print_usage(program: &str) {
     eprintln!(
         "Usage: {program} <input_json> [horizon_start_mjd horizon_end_mjd] [-o <output_json>] [--algorithm est|hap] [EST options] [HAP options]\n\
          Output: [-o|--output <path>]  write schedule to this file (default: <input_stem>_schedule_<YYYYMMDD_HHMMSS>.json)\n\
-         EST options: [--est-fom <soft_constraint>] [--est-e <u32>] [--est-k <usize>] [--est-b <usize>]\n\
+         EST options: [--est-fom <soft_constraint|future_flexibility>] [--est-e <u32>] [--est-k <usize>] [--est-b <usize>]\n\
          HAP options: [--hap-num-crus <usize>] [--hap-cru-iterations <usize>] [--hap-stochastic-range <usize>] [--hap-seed <u64>]\n\
          Aliases: --est-endangered-threshold <u32> for --est-e, --est-schedule-states <usize> for --est-k, --est-branching-factor <usize> for --est-b\n\
          Example: {program} data/ctao_n.json --algorithm est --est-fom soft_constraint --est-e 2 --est-k 5 --est-b 3\n\
+         Example: {program} data/ctao_n.json --algorithm est --est-fom future_flexibility --est-k 5 --est-b 3\n\
          Example: {program} data/ctao_n.json -o out/my_schedule.json --algorithm hap --hap-num-crus 8 --hap-seed 42"
     );
 }

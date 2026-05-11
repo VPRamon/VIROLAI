@@ -1,4 +1,5 @@
 use crate::error::ScheduleError;
+use crate::prescheduler::TaskPeriodMap;
 use crate::schedule::Schedule;
 use crate::schedule::SchedulingProblem;
 use crate::time::{MJD, TaskId, Time};
@@ -14,6 +15,8 @@ use crate::time::{MJD, TaskId, Time};
 pub(super) struct ProblemCtx<'p> {
     /// The full problem definition used for dependency lookups.
     pub(super) problem: &'p SchedulingProblem,
+    /// Pre-computed per-task feasibility windows, forwarded to FOM evaluation.
+    pub(super) possible_periods: &'p TaskPeriodMap,
 }
 
 /// Check that all predecessor tasks in the same block are already scheduled

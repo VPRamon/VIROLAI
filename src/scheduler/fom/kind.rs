@@ -1,6 +1,6 @@
 //! User-facing figure-of-merit selector for all scheduling algorithms.
 
-use crate::scheduler::fom::{ScheduleFom, SoftConstraintFom};
+use crate::scheduler::fom::{FutureFlexibilityFom, ScheduleFom, SoftConstraintFom};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::str::FromStr;
@@ -13,18 +13,26 @@ use std::sync::Arc;
 pub enum FomKind {
     #[default]
     SoftConstraint,
+    /// Feasibility-first future flexibility for EST beam search.
+    ///
+    /// Ranks partial states by how many tasks remain recoverable from the
+    /// current beam cursor, then by future window density, then by residual
+    /// slack, and finally by already-captured soft-constraint quality.
+    FutureFlexibility,
 }
 
 impl FomKind {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::SoftConstraint => "soft_constraint",
+            Self::FutureFlexibility => "future_flexibility",
         }
     }
 
     pub fn into_fom(self) -> Arc<dyn ScheduleFom> {
         match self {
             Self::SoftConstraint => Arc::new(SoftConstraintFom),
+            Self::FutureFlexibility => Arc::new(FutureFlexibilityFom),
         }
     }
 }
@@ -41,8 +49,9 @@ impl FromStr for FomKind {
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value.trim() {
             "soft_constraint" => Ok(Self::SoftConstraint),
+            "future_flexibility" => Ok(Self::FutureFlexibility),
             other => Err(format!(
-                "invalid FOM '{other}' (expected 'soft_constraint')"
+                "invalid FOM '{other}' (expected 'soft_constraint' or 'future_flexibility')"
             )),
         }
     }
