@@ -294,9 +294,18 @@ impl WorkspaceStore {
         manifest: &Manifest,
         idempotency_key: Option<String>,
     ) -> WorkspaceResult<(ManifestEntry, /* created */ bool)> {
-        self.ensure_workspace_exists(workspace_id)?;
         let key = idempotency_key.unwrap_or_else(|| manifest.manifest_id.clone());
         let ws_dir = self.workspace_dir(workspace_id);
+
+        // Hold the global lock for the entire read→modify→write cycle to
+        // prevent concurrent requests from racing on the same index.json.
+        let mut g = self.workspaces.lock().expect("workspaces mutex poisoned");
+        if !g.contains_key(workspace_id) {
+            return Err(WorkspaceError::NotFound(format!(
+                "workspace `{workspace_id}`"
+            )));
+        }
+
         let mut idx: WsIndex = read_or_default(&ws_dir.join(WS_INDEX_FILE))?;
         if let Some(existing) = idx.entries.iter().find(|e| e.idempotency_key == key) {
             return Ok((existing.clone(), false));
@@ -326,7 +335,7 @@ impl WorkspaceStore {
             slot.manifest_ids.push(manifest.manifest_id.clone());
         }
         write_atomic(&ws_dir.join(WS_INDEX_FILE), &idx)?;
-        self.bump_count(workspace_id, idx.entries.len())?;
+        self.bump_count_locked(workspace_id, idx.entries.len(), &mut g)?;
         Ok((entry, true))
     }
 
@@ -358,8 +367,16 @@ impl WorkspaceStore {
         manifest_id: &str,
         delete_artifact: bool,
     ) -> WorkspaceResult<()> {
-        self.ensure_workspace_exists(workspace_id)?;
         let ws_dir = self.workspace_dir(workspace_id);
+
+        // Hold the global lock for the entire read→modify→write cycle.
+        let mut g = self.workspaces.lock().expect("workspaces mutex poisoned");
+        if !g.contains_key(workspace_id) {
+            return Err(WorkspaceError::NotFound(format!(
+                "workspace `{workspace_id}`"
+            )));
+        }
+
         let mut idx: WsIndex = read_or_default(&ws_dir.join(WS_INDEX_FILE))?;
         let before = idx.entries.len();
         idx.entries.retain(|e| e.manifest_id != manifest_id);
@@ -409,11 +426,9 @@ impl WorkspaceStore {
             }
         }
         write_atomic(&ws_dir.join(WS_INDEX_FILE), &idx)?;
-        self.bump_count(workspace_id, idx.entries.len())?;
+        self.bump_count_locked(workspace_id, idx.entries.len(), &mut g)?;
         Ok(())
     }
-
-    // ── schedule artifact storage ─────────────────────────────────────
 
     /// Persist a schedule body to the workspace using content-addressed
     /// storage (filename = SHA-256 hex of canonical bytes). Idempotent:
@@ -426,7 +441,6 @@ impl WorkspaceStore {
         workspace_id: &str,
         schedule: &Value,
     ) -> WorkspaceResult<(String, u64, DateTime<Utc>)> {
-        self.ensure_workspace_exists(workspace_id)?;
         let bytes = serde_json::to_vec(schedule)
             .map_err(|e| WorkspaceError::Internal(format!("serialize schedule: {e}")))?;
         let mut hasher = Sha256::new();
@@ -435,6 +449,15 @@ impl WorkspaceStore {
         let size = bytes.len() as u64;
 
         let ws_dir = self.workspace_dir(workspace_id);
+
+        // Hold the global lock for the entire read→modify→write cycle.
+        let guard = self.workspaces.lock().expect("workspaces mutex poisoned");
+        if !guard.contains_key(workspace_id) {
+            return Err(WorkspaceError::NotFound(format!(
+                "workspace `{workspace_id}`"
+            )));
+        }
+
         let path = ws_dir.join(SCHEDULES_DIR).join(format!("{sha}.json"));
         let mut idx: WsIndex = read_or_default(&ws_dir.join(WS_INDEX_FILE))?;
 
@@ -566,13 +589,19 @@ impl WorkspaceStore {
         }
     }
 
-    fn bump_count(&self, id: &str, count: usize) -> WorkspaceResult<()> {
-        let mut g = self.workspaces.lock().expect("workspaces mutex poisoned");
+    /// Like `bump_count` but called when the caller already holds the
+    /// `workspaces` mutex guard. Avoids a re-lock (which would deadlock).
+    fn bump_count_locked(
+        &self,
+        id: &str,
+        count: usize,
+        g: &mut HashMap<String, WorkspaceRecord>,
+    ) -> WorkspaceResult<()> {
         if let Some(rec) = g.get_mut(id) {
             rec.manifest_count = count;
             rec.updated_at = Utc::now();
             write_atomic(&self.workspace_dir(id).join(WORKSPACE_FILE), rec)?;
-            self.persist_top_locked(&g)?;
+            self.persist_top_locked(g)?;
         }
         Ok(())
     }
