@@ -137,12 +137,7 @@ fn experiment_matrix_pipeline_writes_expected_artifacts() {
 
     // The schedule JSON carries embedded schedule_metrics.
     let schedule_val: Value = serde_json::from_str(
-        &fs::read_to_string(
-            run_dir
-                .join("schedules")
-                .join(format!("{cell_id}.json")),
-        )
-        .unwrap(),
+        &fs::read_to_string(run_dir.join("schedules").join(format!("{cell_id}.json"))).unwrap(),
     )
     .unwrap();
     assert!(

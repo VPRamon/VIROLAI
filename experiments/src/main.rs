@@ -1,7 +1,7 @@
 //! `experiments` binary entry point.
 //!
-//! Provides a `clap`-based CLI for running parameter-sweep experiments against
-//! the `scheduler` library.
+//! Provides a `clap`-based CLI for running parameter-sweep experiments
+//! against the `scheduler` library.
 //!
 //! # Commands
 //!
@@ -14,23 +14,14 @@
 //!                 [--dry-run]
 //! ```
 //!
-//! Loads an experiment spec, resolves the Cartesian product of cells, and
-//! executes them in parallel.  With `--resume` it skips cells already marked
-//! `completed` in the existing run's `state.jsonl`.  With `--dry-run` it only
-//! resolves cells and writes `experiment.json` without running any scheduler.
-//!
-//! ## `migrate`
-//!
-//! ```text
-//! experiments migrate <old_run_dir> [--output <new_dir>]
-//! ```
-//!
-//! Ports a run directory produced by the deprecated `est_experiment` binary
-//! into the current layout.
+//! Loads an experiment spec, resolves the Cartesian product of cells,
+//! and executes them in parallel.  With `--resume` it skips cells
+//! already marked `completed` in the existing run's `state.jsonl`.
+//! With `--dry-run` it only resolves cells and writes
+//! `experiment.json` without running any scheduler.
 
 use clap::{Parser, Subcommand};
 use experiments::cell::resolve_cells;
-use experiments::migrate;
 use experiments::output;
 use experiments::runner;
 use experiments::spec::ExperimentSpec;
@@ -52,10 +43,8 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Cmd {
-    /// Run an experiment matrix (default command).
+    /// Run an experiment matrix.
     Run(RunArgs),
-    /// Port a legacy `est_experiment` run directory to the current layout.
-    Migrate(MigrateArgs),
 }
 
 // ── `run` sub-command ─────────────────────────────────────────────────────────
@@ -87,20 +76,6 @@ struct RunArgs {
     no_state: bool,
 }
 
-// ── `migrate` sub-command ─────────────────────────────────────────────────────
-
-/// Arguments for `experiments migrate`.
-#[derive(Parser, Debug)]
-struct MigrateArgs {
-    /// Path to the legacy `est_experiment` run directory to migrate.
-    old_run_dir: PathBuf,
-
-    /// Output directory for the migrated run. Defaults to
-    /// `<old_run_dir>/migrated`.
-    #[arg(long, short, value_name = "DIR")]
-    output: Option<PathBuf>,
-}
-
 // ── Entry point ───────────────────────────────────────────────────────────────
 
 fn main() -> ExitCode {
@@ -118,7 +93,6 @@ fn main() -> ExitCode {
 fn dispatch(cmd: Cmd) -> Result<(), String> {
     match cmd {
         Cmd::Run(args) => run(args),
-        Cmd::Migrate(args) => migrate_cmd(args),
     }
 }
 
@@ -175,19 +149,6 @@ fn run(args: RunArgs) -> Result<(), String> {
             run_dir.join(output::STATE_FILE).display()
         ));
     }
-    Ok(())
-}
-
-// ── `migrate` implementation ──────────────────────────────────────────────────
-
-fn migrate_cmd(args: MigrateArgs) -> Result<(), String> {
-    let summary = migrate::migrate(&args.old_run_dir, args.output.as_deref())?;
-    println!(
-        "migrated {} cells from {} -> {}",
-        summary.cells_migrated,
-        args.old_run_dir.display(),
-        summary.run_dir.display()
-    );
     Ok(())
 }
 

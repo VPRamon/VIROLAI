@@ -97,7 +97,6 @@ struct Golden {
 const FAST_SPEC_JSON: &str = r#"{
   "name": "perf_regression_fast",
   "output_dir": "__PLACEHOLDER__",
-  "emit_trace": false,
   "max_parallel": 4,
   "datasets": [
     {
@@ -136,7 +135,6 @@ const FAST_SPEC_JSON: &str = r#"{
 const SLOW_SPEC_JSON: &str = r#"{
   "name": "perf_regression_slow",
   "output_dir": "__PLACEHOLDER__",
-  "emit_trace": false,
   "max_parallel": 3,
   "datasets": [
     {

@@ -3,18 +3,20 @@
 //! Endpoints (all JSON unless noted):
 //!
 //! ```text
-//! GET    /v1/workspaces                       list (active by default; ?include_archived=1)
-//! POST   /v1/workspaces                       create   { name, description? }
-//! GET    /v1/workspaces/{id}                  detail
-//! PATCH  /v1/workspaces/{id}                  rename / archive
-//! DELETE /v1/workspaces/{id}                  delete (cascades manifests in this ws only)
-//! GET    /v1/workspaces/{id}/manifests        list manifest entries
-//! POST   /v1/workspaces/{id}/manifests        add one  ({manifest, idempotency_key?})
-//! POST   /v1/workspaces/{id}/manifests/batch  add many ({items: [{manifest, idempotency_key?}, ...]})
-//! GET    /v1/workspaces/{id}/manifests/{mid}  full manifest payload
-//! DELETE /v1/workspaces/{id}/manifests/{mid}  remove (?delete_artifact=1 to drop the file)
-//! GET    /v1/workspaces/{id}/comparison       lightweight summary across all manifests (no schedules)
-//! POST   /v1/workspaces/{id}/schedules        ingest schedule JSON → auto-build manifest
+//! GET    /v1/workspaces                                list (active by default; ?include_archived=1)
+//! POST   /v1/workspaces                                create   { name, description? }
+//! GET    /v1/workspaces/{id}                           detail
+//! PATCH  /v1/workspaces/{id}                           rename / archive
+//! DELETE /v1/workspaces/{id}                           delete (cascades manifests in this ws only)
+//! GET    /v1/workspaces/{id}/manifests                 list manifest entries
+//! POST   /v1/workspaces/{id}/manifests                 add one  ({manifest, idempotency_key?})
+//! POST   /v1/workspaces/{id}/manifests/batch           add many ({items: [{manifest, idempotency_key?}, ...]})
+//! GET    /v1/workspaces/{id}/manifests/{mid}           full manifest payload
+//! GET    /v1/workspaces/{id}/manifests/{mid}/schedule  full schedule payload (drill-down; 404 if not stored)
+//! DELETE /v1/workspaces/{id}/manifests/{mid}           remove (?delete_artifact=1 to drop manifest + orphan schedule)
+//! GET    /v1/workspaces/{id}/comparison                lightweight summary across all manifests (no schedules)
+//! POST   /v1/workspaces/{id}/schedules                 ingest one schedule JSON → persist + auto-build manifest
+//! POST   /v1/workspaces/{id}/schedules/batch           ingest many schedules
 //! ```
 
 use axum::extract::{Extension, Path, Query};
@@ -23,8 +25,8 @@ use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use scheduler::manifest::{
-    AlgorithmRef, Artifacts, DatasetRef, Horizon, Links, MANIFEST_SCHEMA_VERSION, Manifest,
-    Producer, Provenance, RunInfo, RunKind, RunStatus,
+    AlgorithmRef, ArtifactRef, Artifacts, DatasetRef, Horizon, Links, MANIFEST_SCHEMA_VERSION,
+    Manifest, Producer, Provenance, RunInfo, RunKind, RunStatus,
 };
 use scheduler::metrics::ScheduleMetrics;
 use serde::Deserialize;
@@ -63,8 +65,16 @@ where
             "/workspaces/{id}/manifests/{mid}",
             get(get_manifest).delete(remove_manifest),
         )
+        .route(
+            "/workspaces/{id}/manifests/{mid}/schedule",
+            get(get_manifest_schedule),
+        )
         .route("/workspaces/{id}/comparison", get(comparison_summary))
         .route("/workspaces/{id}/schedules", post(ingest_schedule))
+        .route(
+            "/workspaces/{id}/schedules/batch",
+            post(ingest_schedule_batch),
+        )
         .layer(Extension(state))
 }
 
@@ -297,9 +307,18 @@ struct IngestScheduleBody {
     idempotency_key: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct IngestScheduleBatchBody {
+    items: Vec<IngestScheduleBody>,
+}
+
 /// Build a [`Manifest`] from a self-contained schedule JSON (one that
 /// carries embedded `schedule_metadata` and `schedule_metrics` fields,
 /// as produced by `phd sweep`).
+///
+/// The resulting manifest does **not** populate `artifacts.schedule` —
+/// that is filled in by [`ingest_schedule`] after persisting the
+/// schedule body, so the URI/SHA-256 reflect the workspace store.
 fn manifest_from_schedule(schedule: &Value) -> Result<Manifest, String> {
     let meta = schedule
         .get("schedule_metadata")
@@ -393,15 +412,35 @@ fn manifest_from_schedule(schedule: &Value) -> Result<Manifest, String> {
     })
 }
 
+/// Persist a schedule body, derive its manifest, fill
+/// `artifacts.schedule` with the workspace-relative URI, and register
+/// the manifest in the workspace.
+fn ingest_one(
+    store: &WorkspaceStore,
+    workspace_id: &str,
+    body: IngestScheduleBody,
+) -> WorkspaceResult<(ManifestEntry, bool)> {
+    let mut manifest =
+        manifest_from_schedule(&body.schedule).map_err(WorkspaceError::BadRequest)?;
+    let (sha, size, _stored_at) = store.put_schedule(workspace_id, &body.schedule)?;
+    manifest.artifacts.schedule = Some(ArtifactRef {
+        uri: format!("{}{}.json", WorkspaceStore::schedule_uri_prefix(), sha),
+        size_bytes: size,
+        sha256: sha,
+        media_type: "application/json".to_string(),
+    });
+    // Re-run the structural validator with the new artifact ref so the
+    // stored manifest carries an up-to-date validation report.
+    manifest.validation = manifest.validate();
+    store.add_manifest(workspace_id, &manifest, body.idempotency_key)
+}
+
 async fn ingest_schedule(
     Extension(state): Extension<Arc<WorkspacesState>>,
     Path(id): Path<String>,
     Json(body): Json<IngestScheduleBody>,
 ) -> WorkspaceResult<(StatusCode, Json<Value>)> {
-    let manifest = manifest_from_schedule(&body.schedule).map_err(WorkspaceError::BadRequest)?;
-    let (entry, created) = state
-        .store
-        .add_manifest(&id, &manifest, body.idempotency_key)?;
+    let (entry, created) = ingest_one(&state.store, &id, body)?;
     tracing::info!(
         target: "phd.workspaces",
         workspace = %id,
@@ -418,4 +457,61 @@ async fn ingest_schedule(
         status,
         Json(json!({ "manifest": entry, "created": created })),
     ))
+}
+
+async fn ingest_schedule_batch(
+    Extension(state): Extension<Arc<WorkspacesState>>,
+    Path(id): Path<String>,
+    Json(body): Json<IngestScheduleBatchBody>,
+) -> WorkspaceResult<Json<Value>> {
+    if body.items.is_empty() {
+        return Err(WorkspaceError::BadRequest("items cannot be empty".into()));
+    }
+    let mut created = 0usize;
+    let mut deduped = 0usize;
+    let mut failed = 0usize;
+    let mut results: Vec<Value> = Vec::with_capacity(body.items.len());
+    for item in body.items {
+        match ingest_one(&state.store, &id, item) {
+            Ok((entry, c)) => {
+                if c {
+                    created += 1;
+                } else {
+                    deduped += 1;
+                }
+                results.push(json!({ "ok": true, "created": c, "manifest": entry }));
+            }
+            Err(e) => {
+                failed += 1;
+                results.push(json!({
+                    "ok": false,
+                    "error": { "message": e.to_string() }
+                }));
+            }
+        }
+    }
+    tracing::info!(
+        target: "phd.workspaces",
+        workspace = %id,
+        created,
+        deduplicated = deduped,
+        failed,
+        "schedules.batch.ingested"
+    );
+    Ok(Json(json!({
+        "summary": {
+            "created": created,
+            "deduplicated": deduped,
+            "failed": failed,
+        },
+        "results": results,
+    })))
+}
+
+async fn get_manifest_schedule(
+    Extension(state): Extension<Arc<WorkspacesState>>,
+    Path((id, mid)): Path<(String, String)>,
+) -> WorkspaceResult<Json<Value>> {
+    let schedule = state.store.get_schedule_for_manifest(&id, &mid)?;
+    Ok(Json(json!({ "schedule": schedule })))
 }

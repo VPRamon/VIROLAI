@@ -324,3 +324,259 @@ async fn delete_workspace_removes_storage() {
     let (status, _) = json_call(&app, Method::GET, "/v1/workspaces/ws", None).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
+
+// ── schedule ingestion / persistence / GC ────────────────────────────
+
+fn sample_schedule(algorithm: &str, dataset: &str, completion: f64) -> Value {
+    json!({
+        "schedule_metadata": {
+            "algorithm": algorithm,
+            "algorithm_config": {},
+            "dataset_id": dataset,
+            "dataset_label": dataset,
+            "period": { "start_mjd_utc": 60000.0, "end_mjd_utc": 60001.0 }
+        },
+        "schedule_metrics": {
+            "scheduled_task_count": 5,
+            "total_task_count": 10,
+            "completion_ratio": completion,
+            "priority": {"count":5,"sum":15.0,"min":1.0,"max":5.0,"mean":3.0,"std":1.0,"p25":2.0,"p50":3.0,"p75":4.0,"p90":4.5},
+            "fragmentation": {"gap_count":1,"gap_total_sec":300.0,"largest_gap_sec":300.0,"fragmentation_index":0.05},
+            "total_horizon_sec": 86400.0,
+            "available_time_sec": 86400.0,
+            "scheduled_time_sec": 50000.0,
+            "utilization": 0.58,
+            "per_resource": [],
+            "composite_rank_score": 0.7,
+            "ranking_weights": {"completion":1.0,"priority":1.0,"utilization":1.0,"fragmentation":1.0},
+            "scheduled_priority_stair": {
+                "metric": "scheduled_priority_stair",
+                "sort": "priority",
+                "direction": "descending",
+                "stairs": [],
+                "total_scheduled_items": 5
+            }
+        },
+        "events": []
+    })
+}
+
+#[tokio::test]
+async fn ingest_schedule_persists_and_drill_down() {
+    let (tmp, app) = build_app();
+    let _ = json_call(
+        &app,
+        Method::POST,
+        "/v1/workspaces",
+        Some(json!({"name":"ws"})),
+    )
+    .await;
+
+    let sched = sample_schedule("est", "ds-1", 0.5);
+    let (status, body) = json_call(
+        &app,
+        Method::POST,
+        "/v1/workspaces/ws/schedules",
+        Some(json!({ "schedule": sched })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let mid = body["manifest"]["manifest_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // The schedule file lives under workspaces/ws/schedules/<sha>.json
+    let schedules_dir = tmp.path().join("ws").join("schedules");
+    let count = std::fs::read_dir(&schedules_dir).unwrap().count();
+    assert_eq!(count, 1);
+
+    // Comparison surfaces `has_full_schedule = true`.
+    let (_, body) = json_call(&app, Method::GET, "/v1/workspaces/ws/comparison", None).await;
+    assert_eq!(body["summaries"][0]["has_full_schedule"], true);
+
+    // Drill-down endpoint returns the schedule body.
+    let (status, body) = json_call(
+        &app,
+        Method::GET,
+        &format!("/v1/workspaces/ws/manifests/{mid}/schedule"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["schedule"]["schedule_metadata"]["algorithm"], "est");
+
+    // The stored manifest carries the workspace-relative URI.
+    let (_, body) = json_call(
+        &app,
+        Method::GET,
+        &format!("/v1/workspaces/ws/manifests/{mid}"),
+        None,
+    )
+    .await;
+    let uri = body["manifest"]["artifacts"]["schedule"]["uri"]
+        .as_str()
+        .unwrap();
+    assert!(uri.starts_with("ws:///schedules/"));
+}
+
+#[tokio::test]
+async fn ingest_schedule_dedupes_by_sha() {
+    let (tmp, app) = build_app();
+    let _ = json_call(
+        &app,
+        Method::POST,
+        "/v1/workspaces",
+        Some(json!({"name":"ws"})),
+    )
+    .await;
+
+    let sched = sample_schedule("est", "ds-1", 0.5);
+    let _ = json_call(
+        &app,
+        Method::POST,
+        "/v1/workspaces/ws/schedules",
+        Some(json!({ "schedule": sched.clone(), "idempotency_key": "k1" })),
+    )
+    .await;
+    let _ = json_call(
+        &app,
+        Method::POST,
+        "/v1/workspaces/ws/schedules",
+        Some(json!({ "schedule": sched, "idempotency_key": "k2" })),
+    )
+    .await;
+
+    // Two manifests, one shared schedule file.
+    let schedules_dir = tmp.path().join("ws").join("schedules");
+    assert_eq!(std::fs::read_dir(&schedules_dir).unwrap().count(), 1);
+    let (_, body) = json_call(&app, Method::GET, "/v1/workspaces/ws/manifests", None).await;
+    assert_eq!(body["manifests"].as_array().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn schedule_gc_when_last_manifest_deleted() {
+    let (tmp, app) = build_app();
+    let _ = json_call(
+        &app,
+        Method::POST,
+        "/v1/workspaces",
+        Some(json!({"name":"ws"})),
+    )
+    .await;
+
+    let sched = sample_schedule("est", "ds-1", 0.5);
+    let (_, body_a) = json_call(
+        &app,
+        Method::POST,
+        "/v1/workspaces/ws/schedules",
+        Some(json!({ "schedule": sched.clone(), "idempotency_key": "ka" })),
+    )
+    .await;
+    let (_, body_b) = json_call(
+        &app,
+        Method::POST,
+        "/v1/workspaces/ws/schedules",
+        Some(json!({ "schedule": sched, "idempotency_key": "kb" })),
+    )
+    .await;
+    let mid_a = body_a["manifest"]["manifest_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let mid_b = body_b["manifest"]["manifest_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let schedules_dir = tmp.path().join("ws").join("schedules");
+    assert_eq!(std::fs::read_dir(&schedules_dir).unwrap().count(), 1);
+
+    // Delete the first manifest with delete_artifact: schedule still
+    // referenced by the second manifest, so it must survive.
+    let (status, _) = json_call(
+        &app,
+        Method::DELETE,
+        &format!("/v1/workspaces/ws/manifests/{mid_a}?delete_artifact=1"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert_eq!(std::fs::read_dir(&schedules_dir).unwrap().count(), 1);
+
+    // Delete the second one too → schedule file should be GC'd.
+    let (status, _) = json_call(
+        &app,
+        Method::DELETE,
+        &format!("/v1/workspaces/ws/manifests/{mid_b}?delete_artifact=1"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert_eq!(std::fs::read_dir(&schedules_dir).unwrap().count(), 0);
+}
+
+#[tokio::test]
+async fn schedules_batch_summary_counts() {
+    let (_tmp, app) = build_app();
+    let _ = json_call(
+        &app,
+        Method::POST,
+        "/v1/workspaces",
+        Some(json!({"name":"ws"})),
+    )
+    .await;
+
+    let body = json!({
+        "items": [
+            { "schedule": sample_schedule("est", "d1", 0.5), "idempotency_key": "a" },
+            { "schedule": sample_schedule("hap", "d1", 0.7), "idempotency_key": "b" },
+            // duplicate idempotency key → counted as deduplicated
+            { "schedule": sample_schedule("est", "d1", 0.5), "idempotency_key": "a" },
+            // missing schedule_metrics → failed
+            { "schedule": json!({ "schedule_metadata": {} }) },
+        ]
+    });
+    let (status, body) = json_call(
+        &app,
+        Method::POST,
+        "/v1/workspaces/ws/schedules/batch",
+        Some(body),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["summary"]["created"], 2);
+    assert_eq!(body["summary"]["deduplicated"], 1);
+    assert_eq!(body["summary"]["failed"], 1);
+}
+
+#[tokio::test]
+async fn schedule_drill_down_404_when_not_stored() {
+    let (_tmp, app) = build_app();
+    let _ = json_call(
+        &app,
+        Method::POST,
+        "/v1/workspaces",
+        Some(json!({"name":"ws"})),
+    )
+    .await;
+
+    // A plain manifest (no workspace-stored schedule) should yield 404
+    // on the drill-down endpoint.
+    let m = sample_manifest("m-x", "est", "ds");
+    let _ = json_call(
+        &app,
+        Method::POST,
+        "/v1/workspaces/ws/manifests",
+        Some(json!({ "manifest": m })),
+    )
+    .await;
+    let (status, _) = json_call(
+        &app,
+        Method::GET,
+        "/v1/workspaces/ws/manifests/m-x/schedule",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}

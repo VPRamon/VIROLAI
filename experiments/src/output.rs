@@ -4,14 +4,22 @@
 //!
 //! ```text
 //! <output_dir>/<experiment_slug>/run-<timestamp>/
-//!   schedules/          — one schedule JSON per cell
-//!   metrics/            — one metrics JSON per cell
+//!   schedules/          — one self-contained schedule JSON per cell
+//!                         (includes `schedule_metadata` and the embedded
+//!                         `schedule_metrics` block)
 //!   experiment.json     — resolved spec + full cell list
-//!   state.jsonl         — append-only checkpoint stream
+//!   state.jsonl         — append-only checkpoint stream (omitted when
+//!                         the runner is invoked with `--no-state`)
 //! ```
 //!
-//! This module provides helpers to create that layout, compute per-cell file
-//! paths, and serialise / deserialise the `experiment.json` manifest.
+//! Note: there is no separate `metrics/` directory and no `traces/`
+//! directory. Metrics live inside each schedule. Traces are not part of
+//! the canonical layout — if reintroduced they would be referenced by a
+//! manifest as a workspace-stored artifact.
+//!
+//! This module provides helpers to create that layout, compute per-cell
+//! file paths, and serialise / deserialise the `experiment.json`
+//! manifest.
 
 use chrono::Utc;
 use serde::{Deserialize, Serialize};

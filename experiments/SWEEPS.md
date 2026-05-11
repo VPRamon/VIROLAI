@@ -1,106 +1,111 @@
-# Scheduler experiment sweeps
+# Sweeps — operational guide
 
-The canonical way to run a sweep is via `phd sweep`. It handles temp directory
-management, flat output, and per-cell terminal progress automatically.
+A **sweep** is a single invocation of the experiment runner over a
+matrix of cells. This document covers the operational details: how to
+size sweeps, how to resume them, and how to publish their output.
 
-```bash
-# Minimal — schedules land in ./out/
-phd sweep --spec experiments/est_sweep.json
-
-# Custom output directory
-phd sweep --spec experiments/est_sweep.json --out results/my-run
-
-# Also emit companion manifest JSONs (for phd publish)
-phd sweep --spec experiments/est_sweep.json --manifest
-```
-
-`phd sweep` runs the `experiments` binary internally with `--no-state`, so no
-`state.jsonl` is produced and per-cell `▶/✓/✗` progress lines are printed to
-stderr.
-
-Each output schedule JSON is self-contained and carries an embedded
-`schedule_metrics` field — no separate `metrics/` directory.
+For the conceptual pipeline (sweep → publish → workspace), see
+`docs/architecture.md`. For the runner internals, see
+`experiments/README.md`.
 
 ---
 
-## Direct `experiments` binary usage
+## 1. Plan the sweep
 
-The `experiments` binary is available for advanced use (custom output dirs,
-resume, programmatic access):
+A spec is a matrix of `datasets × algorithms × seeds × params`. Pick:
+
+- **`max_parallel`** — concurrent cells. Match to physical cores.
+- **`seeds`** — repetitions per `(dataset, algorithm)` pair. Use ≥ 3
+  for any statistic you intend to publish.
+- **Algorithm `kind`s** — see `scheduler::algorithms` for the full list.
+
+Templates live in `experiments/hap_sweep.json` and
+`experiments/paper_sweep.json`.
+
+---
+
+## 2. Run
+
+Recommended (flat output, manifests on the side):
 
 ```bash
-# Run and write output under the directory declared in the spec
-cargo run --manifest-path experiments/Cargo.toml -- run --spec experiments/est_sweep.json
-
-# No state file — same behaviour as phd sweep
-cargo run --manifest-path experiments/Cargo.toml -- run --spec experiments/est_sweep.json --no-state
-
-# Resume a previous run (requires state.jsonl — incompatible with --no-state)
-cargo run --manifest-path experiments/Cargo.toml -- run \
-  --spec experiments/est_sweep.json \
-  --resume out/my-sweep/run-<ts>
+cargo run --release --bin phd -- sweep \
+    --spec experiments/paper_sweep.json \
+    --out  out/paper-sweep \
+    --manifest
 ```
 
-Output directory layout produced by `experiments run`:
+This produces:
 
+```text
+out/paper-sweep/
+    <cell_id>.json           # self-contained schedule (metrics embedded)
+    <cell_id>.manifest.json  # lightweight manifest referencing the schedule
 ```
-<output_dir>/<run-timestamp>/
-├── experiment.json          # spec + resolved cell list
-├── state.jsonl              # per-cell completion log (omitted with --no-state)
-└── schedules/
-    └── <cell_id>.json       # one self-contained schedule JSON per cell
+
+Cell ids are deterministic: `<dataset>__<algorithm>__seed<N>__<params-hash>`.
+
+---
+
+## 3. Resume
+
+`phd sweep` checkpoints by default. Re-running with the same `--out`
+and `--spec` skips cells already present (matched by `cell_id`). To
+force a full re-run, delete the relevant `<cell_id>.json` files (or
+`--out` entirely).
+
+For checkpoint-free runs (faster IO, no resume), invoke the runner
+directly with `--no-state`:
+
+```bash
+cargo run -p experiments -- run --spec … --out … --no-state
 ```
 
 ---
 
-## EST sweep
+## 4. Publish
 
-`est_sweep.json` sweeps:
-
-- `endangered_thresholds`
-- `k_beams`
-- `branching_factors`
-
-## HAP sweep
-
-`hap_sweep.json` sweeps the HAP planner configuration:
-
-- `iota_max_values`: CRU task-scheduling iteration cap
-- `rho_values`: CRU-S stochastic candidate range
-- `population_sizes`: HAP multi-start population per block
-- `survivor_modes`: `elitist_top_k` or `pareto_front`
-- `survivor_caps`: `k`/front cap for the survivor mode
-- `seeds`: deterministic master RNG seeds
-
-## Combined paper sweep
+A single command publishes the whole sweep:
 
 ```bash
-phd sweep --spec experiments/paper_sweep.json --manifest
+cargo run --release --bin phd -- publish \
+    --workspace paper-2024 \
+    --dir       out/paper-sweep \
+    --create-workspace \
+    --include-schedules
 ```
 
-## Spec shape
+Behaviour:
 
-```json
-{
-  "name": "my-sweep",
-  "datasets": [
-    { "id": "ctao_n", "path": "../data/ctao_n.json" }
-  ],
-  "output_dir": "../out/my-sweep",
-  "algorithms": {
-    "est": {
-      "endangered_thresholds": [1, 2],
-      "k_beams": [1, 4],
-      "branching_factors": [1, 2]
-    },
-    "hap": {
-      "iota_max_values": [128],
-      "rho_values": [3],
-      "population_sizes": [4],
-      "survivor_modes": ["elitist_top_k"],
-      "survivor_caps": [4],
-      "seeds": [0]
-    }
-  }
-}
-```
+- Every `*.manifest.json` is POSTed to `…/manifests/batch`.
+- Every other `.json` is parsed; if it carries `schedule_metadata` and
+  `schedule_metrics` it is POSTed to `…/schedules/batch` (the server
+  derives a manifest and persists the full schedule for drill-down).
+- `--include-schedules false` skips the schedule batch entirely
+  (smaller payload, no drill-down later).
+- Idempotency is automatic: manifests deduplicate on `manifest_id`,
+  schedules on content SHA-256.
+
+---
+
+## 5. Sizing & performance tips
+
+- Use `--release` for any sweep > a few minutes wall time.
+- `max_parallel` saturates first; tune `seeds` second.
+- `out/` lives on the local disk by default — sweeps with > 10 k cells
+  produce > 1 GB. Either prune intermediate cells or publish to the
+  workspace and rely on its content-addressed dedupe.
+- The webapp's `/workspaces/<id>/comparison` endpoint reads only
+  manifests, so even very large sweeps stay browsable.
+
+---
+
+## 6. Anti-patterns
+
+- **Do not** edit individual cell JSONs by hand — their
+  `schedule_metrics` block is the source of truth for any downstream
+  comparison.
+- **Do not** maintain parallel `metrics/` or `traces/` directories.
+  That layout is gone; metrics live inside the schedule.
+- **Do not** roll your own HTTP client to upload results — `phd
+  publish` (or the `upload_results.sh` wrapper) is the supported path.

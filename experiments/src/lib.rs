@@ -1,8 +1,9 @@
 //! `experiments` — experiment runner for the PhD scheduling workspace.
 //!
-//! This crate provides the tooling to run parameter-sweep experiments against
-//! the [`scheduler`] library crate.  It is deliberately decoupled from the
-//! main crate so it can be evolved, tested, and versioned independently.
+//! This crate provides the tooling to run parameter-sweep experiments
+//! against the [`scheduler`] library crate.  It is intentionally
+//! decoupled from the main crate so it can evolve and be tested
+//! independently.
 //!
 //! # Crate structure
 //!
@@ -12,33 +13,28 @@
 //! | [`spec`] | `ExperimentSpec` JSON format for the matrix runner |
 //! | [`cell`] | `MatrixCell` and `resolve_cells` — Cartesian-product expansion |
 //! | [`problem`] | `PreparedProblem` — dataset loading and prescheduling |
-//! | [`run`] | `execute_run` — single-cell scheduler invocation |
-//! | [`runner`] | `execute` — parallel matrix runner with checkpointing |
+//! | [`runner`] | `execute` — parallel matrix runner with checkpointing; embeds metrics into each schedule |
 //! | [`output`] | Run-directory layout helpers |
 //! | [`state`] | `state.jsonl` append-only checkpoint stream |
-//! | [`migrate`] | Legacy run-directory migration |
 //!
 //! # Usage
 //!
-//! The `experiments` binary exposes a `clap`-based CLI with the following
-//! sub-commands:
+//! The `experiments` binary exposes a single sub-command:
 //!
 //! ```text
-//! experiments run    --spec <experiment.json>
-//! experiments run    --spec <experiment.json> --resume <existing_run_dir>
-//! experiments run    --spec <experiment.json> --dry-run
-//! experiments migrate <old_run_dir> [--output <new_dir>]
+//! experiments run --spec <experiment.json>
+//!                 [--resume <existing_run_dir>]
+//!                 [--output-dir <dir>]
+//!                 [--dry-run] [--no-state]
 //! ```
 //!
-//! It is also wired as the target of `phd matrix` and `phd sweep` in the
-//! `phd` unified CLI.
+//! It is also wired as the target of `phd matrix` and `phd sweep` in
+//! the `phd` unified CLI.
 
 pub mod cell;
 pub mod config;
-pub mod migrate;
 pub mod output;
 pub mod problem;
-pub mod run;
 pub mod runner;
 pub mod spec;
 pub mod state;

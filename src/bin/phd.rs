@@ -10,7 +10,9 @@
 //!   `<run-dir>/cells/<cell_id>/manifest.json`.
 //! - `phd manifest validate` — load a manifest and run the structural
 //!   validator from [`scheduler::manifest`].
-//! - `phd publish` — stub returning a clear "not yet implemented" error;
+//! - `phd publish` — uploads manifests and (optionally) full schedules
+//!   to the webapp `/v1/workspaces/{id}` endpoints with idempotency,
+//!   chunked batches and exponential-backoff retries;
 //!   wired in Phase 3.
 //!
 //! Subprocess dispatch uses the sibling binary that lives next to
@@ -152,11 +154,22 @@ struct PublishArgs {
     #[arg(long)]
     workspace: String,
     /// Publish a single manifest file.
-    #[arg(long, value_name = "FILE", conflicts_with = "manifest_dir")]
+    #[arg(long, value_name = "FILE", conflicts_with_all = ["manifest_dir", "dir"])]
     manifest: Option<PathBuf>,
-    /// Publish every `manifest.json` found under DIR (recursive).
-    #[arg(long = "manifest-dir", value_name = "DIR")]
+    /// Publish every `*.manifest.json` found under DIR (recursive).
+    /// Deprecated alias of `--dir`; kept for back-compat.
+    #[arg(long = "manifest-dir", value_name = "DIR", conflicts_with = "dir")]
     manifest_dir: Option<PathBuf>,
+    /// Publish every artifact under DIR (recursive). Files are
+    /// classified by content: manifests go to the manifests/batch
+    /// endpoint and self-contained schedules to schedules/batch.
+    #[arg(long, value_name = "DIR")]
+    dir: Option<PathBuf>,
+    /// When publishing from a directory, also upload self-contained
+    /// schedules so the webapp persists them for drill-down.
+    /// Set to `false` to upload manifests only.
+    #[arg(long = "include-schedules", default_value_t = true, action = clap::ArgAction::Set)]
+    include_schedules: bool,
     /// Webapp base URL (default: http://localhost:8080 or $PHD_WEBAPP_URL).
     #[arg(long, value_name = "URL")]
     url: Option<String>,
@@ -916,8 +929,10 @@ fn current_rfc3339() -> String {
 // ---------------------------------------------------------------------------
 
 fn publish(args: PublishArgs) -> Result<ExitCode, String> {
-    if args.manifest.is_none() && args.manifest_dir.is_none() {
-        return Err("either --manifest <FILE> or --manifest-dir <DIR> is required".into());
+    if args.manifest.is_none() && args.manifest_dir.is_none() && args.dir.is_none() {
+        return Err(
+            "either --manifest <FILE>, --dir <DIR> or --manifest-dir <DIR> is required".into(),
+        );
     }
     let base = args
         .url
@@ -932,7 +947,7 @@ fn publish(args: PublishArgs) -> Result<ExitCode, String> {
 
     let agent = ureq::AgentBuilder::new()
         .timeout_connect(std::time::Duration::from_secs(10))
-        .timeout(std::time::Duration::from_secs(30))
+        .timeout(std::time::Duration::from_secs(60))
         .build();
 
     if args.create_workspace {
@@ -949,13 +964,7 @@ fn publish(args: PublishArgs) -> Result<ExitCode, String> {
         }
     }
 
-    let manifests = collect_manifest_paths(&args)?;
-    if manifests.is_empty() {
-        return Err("no manifest files found".into());
-    }
-    let total = manifests.len();
-
-    // Single-manifest path: use single endpoint (unchanged UX for the simple case).
+    // Single-manifest path: simplest case, kept verbatim.
     if let Some(single) = &args.manifest {
         let path = single.as_path();
         match publish_one(
@@ -980,41 +989,93 @@ fn publish(args: PublishArgs) -> Result<ExitCode, String> {
         return Ok(ExitCode::SUCCESS);
     }
 
-    // Directory path: chunked batch upload.
-    const CHUNK_SIZE: usize = 100;
-    let mut created = 0usize;
-    let mut deduped = 0usize;
-    let mut failed = 0usize;
-    let mut done = 0usize;
+    // Directory path: classify each .json as manifest or schedule.
+    let dir = args
+        .dir
+        .as_deref()
+        .or(args.manifest_dir.as_deref())
+        .unwrap();
+    let (manifest_paths, schedule_paths) = collect_dir_paths(dir, args.include_schedules)?;
+    if manifest_paths.is_empty() && schedule_paths.is_empty() {
+        return Err(format!(
+            "no manifest or schedule files found under `{}`",
+            dir.display()
+        ));
+    }
+    println!(
+        "phd publish: detected {} manifest(s) and {} schedule(s) under `{}`",
+        manifest_paths.len(),
+        schedule_paths.len(),
+        dir.display()
+    );
 
-    for chunk in manifests.chunks(CHUNK_SIZE) {
-        match publish_batch_chunk(
-            &agent,
-            &base,
-            token.as_deref(),
-            &args.workspace,
-            chunk,
-            args.retries,
-        ) {
-            Ok((c, d, f)) => {
-                created += c;
-                deduped += d;
-                failed += f;
+    const CHUNK_SIZE: usize = 100;
+    const SCHEDULE_CHUNK_SIZE: usize = 25;
+    let mut total_created = 0usize;
+    let mut total_deduped = 0usize;
+    let mut total_failed = 0usize;
+
+    // Manifests first: cheap and useful even if schedules fail later.
+    if !manifest_paths.is_empty() {
+        let total = manifest_paths.len();
+        let mut done = 0usize;
+        for chunk in manifest_paths.chunks(CHUNK_SIZE) {
+            match publish_batch_chunk(
+                &agent,
+                &base,
+                token.as_deref(),
+                &args.workspace,
+                chunk,
+                args.retries,
+            ) {
+                Ok((c, d, f)) => {
+                    total_created += c;
+                    total_deduped += d;
+                    total_failed += f;
+                }
+                Err(e) => {
+                    eprintln!("  ! manifest batch failed: {e}");
+                    total_failed += chunk.len();
+                }
             }
-            Err(e) => {
-                eprintln!("  ! batch failed: {e}");
-                failed += chunk.len();
-            }
+            done += chunk.len();
+            eprintln!("[{done}/{total}] manifests uploaded");
         }
-        done += chunk.len();
-        eprintln!("[{done}/{total}] manifests uploaded");
+    }
+
+    // Schedules next: heavier payload, smaller chunks.
+    if !schedule_paths.is_empty() {
+        let total = schedule_paths.len();
+        let mut done = 0usize;
+        for chunk in schedule_paths.chunks(SCHEDULE_CHUNK_SIZE) {
+            match publish_schedules_batch_chunk(
+                &agent,
+                &base,
+                token.as_deref(),
+                &args.workspace,
+                chunk,
+                args.retries,
+            ) {
+                Ok((c, d, f)) => {
+                    total_created += c;
+                    total_deduped += d;
+                    total_failed += f;
+                }
+                Err(e) => {
+                    eprintln!("  ! schedule batch failed: {e}");
+                    total_failed += chunk.len();
+                }
+            }
+            done += chunk.len();
+            eprintln!("[{done}/{total}] schedules uploaded");
+        }
     }
 
     println!(
         "phd publish: {} created, {} deduplicated, {} failed → {} (workspace `{}`)",
-        created, deduped, failed, base, args.workspace
+        total_created, total_deduped, total_failed, base, args.workspace
     );
-    Ok(if failed > 0 {
+    Ok(if total_failed > 0 {
         ExitCode::FAILURE
     } else {
         ExitCode::SUCCESS
@@ -1040,35 +1101,83 @@ impl std::fmt::Display for PublishError {
     }
 }
 
-fn collect_manifest_paths(args: &PublishArgs) -> Result<Vec<PathBuf>, String> {
-    let mut out = Vec::new();
-    if let Some(p) = &args.manifest {
-        if !p.is_file() {
-            return Err(format!("manifest file `{}` not found", p.display()));
-        }
-        out.push(p.clone());
+/// Walk DIR and classify each `.json` file as a manifest or a
+/// self-contained schedule by reading it. Files that are neither (or
+/// invalid JSON) are skipped with a warning. Returns
+/// `(manifests, schedules)`. When `include_schedules` is false, the
+/// schedule list is left empty.
+fn collect_dir_paths(
+    dir: &Path,
+    include_schedules: bool,
+) -> Result<(Vec<PathBuf>, Vec<PathBuf>), String> {
+    if !dir.is_dir() {
+        return Err(format!("dir `{}` not found", dir.display()));
     }
-    if let Some(dir) = &args.manifest_dir {
-        if !dir.is_dir() {
-            return Err(format!("manifest dir `{}` not found", dir.display()));
+    let mut all = Vec::new();
+    walk_json(dir, &mut all);
+    all.sort();
+
+    let mut manifests = Vec::new();
+    let mut schedules = Vec::new();
+    for path in all {
+        match classify_json(&path) {
+            JsonKind::Manifest => manifests.push(path),
+            JsonKind::Schedule if include_schedules => schedules.push(path),
+            JsonKind::Schedule => { /* dropped per --include-schedules=false */ }
+            JsonKind::Unknown => {
+                eprintln!(
+                    "  · skipping `{}` (not a manifest nor a self-contained schedule)",
+                    path.display()
+                );
+            }
+            JsonKind::Unreadable(e) => {
+                eprintln!("  · skipping `{}`: {e}", path.display());
+            }
         }
-        walk_manifests(dir, &mut out);
-        out.sort();
     }
-    Ok(out)
+    Ok((manifests, schedules))
 }
 
-fn walk_manifests(dir: &Path, out: &mut Vec<PathBuf>) {
+fn walk_json(dir: &Path, out: &mut Vec<PathBuf>) {
     let Ok(rd) = fs::read_dir(dir) else { return };
     for entry in rd.flatten() {
         let p = entry.path();
         if p.is_dir() {
-            walk_manifests(&p, out);
-        } else if let Some(name) = p.file_name().and_then(|s| s.to_str())
-            && (name == "manifest.json" || name.ends_with(".manifest.json"))
-        {
+            walk_json(&p, out);
+        } else if p.extension().and_then(|s| s.to_str()) == Some("json") {
             out.push(p);
         }
+    }
+}
+
+enum JsonKind {
+    Manifest,
+    Schedule,
+    Unknown,
+    Unreadable(String),
+}
+
+fn classify_json(path: &Path) -> JsonKind {
+    // Cheap path-name heuristic first; fall back to content inspection.
+    if let Some(name) = path.file_name().and_then(|s| s.to_str())
+        && (name == "manifest.json" || name.ends_with(".manifest.json"))
+    {
+        return JsonKind::Manifest;
+    }
+    let bytes = match fs::read(path) {
+        Ok(b) => b,
+        Err(e) => return JsonKind::Unreadable(e.to_string()),
+    };
+    let value: serde_json::Value = match serde_json::from_slice(&bytes) {
+        Ok(v) => v,
+        Err(e) => return JsonKind::Unreadable(e.to_string()),
+    };
+    if value.get("manifest_schema_version").is_some() && value.get("manifest_id").is_some() {
+        JsonKind::Manifest
+    } else if value.get("schedule_metadata").is_some() && value.get("schedule_metrics").is_some() {
+        JsonKind::Schedule
+    } else {
+        JsonKind::Unknown
     }
 }
 
@@ -1213,6 +1322,72 @@ fn publish_batch_chunk(
                     .count();
                 let failed = results.iter().filter(|r| r.get("error").is_some()).count();
                 let deduped = results.len().saturating_sub(created + failed);
+                return Ok((created, deduped, failed));
+            }
+            Err(ureq::Error::Status(code, resp)) => {
+                let body = resp.into_string().unwrap_or_default();
+                if (500..600).contains(&code) && attempt < retries {
+                    attempt += 1;
+                    std::thread::sleep(backoff(attempt));
+                    continue;
+                }
+                return Err(PublishError::Http(code, body));
+            }
+            Err(e) => {
+                if attempt < retries {
+                    attempt += 1;
+                    std::thread::sleep(backoff(attempt));
+                    continue;
+                }
+                return Err(PublishError::Transport(e.to_string()));
+            }
+        }
+    }
+}
+
+/// Upload a batch of self-contained schedules to the
+/// `/v1/workspaces/{workspace}/schedules/batch` endpoint. The webapp
+/// derives a manifest for each one and persists the schedule body so
+/// drill-down stays possible.
+fn publish_schedules_batch_chunk(
+    agent: &ureq::Agent,
+    base: &str,
+    token: Option<&str>,
+    workspace: &str,
+    paths: &[PathBuf],
+    retries: u32,
+) -> Result<(usize, usize, usize), PublishError> {
+    let mut items: Vec<serde_json::Value> = Vec::with_capacity(paths.len());
+    for path in paths {
+        let bytes = fs::read(path).map_err(|e| PublishError::Body(e.to_string()))?;
+        let schedule: serde_json::Value =
+            serde_json::from_slice(&bytes).map_err(|e| PublishError::Body(e.to_string()))?;
+        items.push(serde_json::json!({
+            "schedule": schedule,
+            "idempotency_key": sha256_short(&bytes),
+        }));
+    }
+    let payload = serde_json::json!({ "items": items });
+    let url = format!("{base}/v1/workspaces/{workspace}/schedules/batch");
+
+    let mut attempt = 0u32;
+    loop {
+        let mut req = agent.post(&url);
+        if let Some(t) = token {
+            req = req.set("Authorization", &format!("Bearer {t}"));
+        }
+        match req.send_json(payload.clone()) {
+            Ok(resp) => {
+                let body: serde_json::Value = resp
+                    .into_json()
+                    .map_err(|e| PublishError::Body(e.to_string()))?;
+                let summary = body.get("summary").cloned().unwrap_or_default();
+                let created = summary.get("created").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+                let deduped = summary
+                    .get("deduplicated")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0) as usize;
+                let failed = summary.get("failed").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
                 return Ok((created, deduped, failed));
             }
             Err(ureq::Error::Status(code, resp)) => {

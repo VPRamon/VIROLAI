@@ -12,13 +12,12 @@
 //! string that uniquely identifies each configuration — used as the stem of
 //! schedule output files and as the last component of `cell_id` strings.
 
-use scheduler::scheduler::est::{Configuration as EstConfiguration, FomKind, EstScheduler};
+use scheduler::scheduler::est::{Configuration as EstConfiguration, EstScheduler, FomKind};
 use scheduler::scheduler::fom::ScheduleFom;
 use scheduler::scheduler::hap::{
     HapScheduler, PlannerConfig, SurvivorSelector as HapSurvivorSelector,
 };
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
 use std::sync::Arc;
 
 // ── Horizon override ─────────────────────────────────────────────────────────
@@ -153,33 +152,11 @@ pub struct ExperimentSweep {
     pub hap: Option<HapSweepAxes>,
 }
 
-// ── Top-level experiment spec (legacy single-dataset format) ─────────────────
-
-/// Top-level experiment specification for the legacy single-dataset sweep
-/// format (used by the deprecated `est_experiment` binary).
-///
-/// The matrix runner uses [`crate::spec::ExperimentSpec`] instead.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ExperimentSpec {
-    /// Path to the scheduling-problem JSON (absolute, or relative to the spec file).
-    pub input_json: PathBuf,
-    /// Directory where all output artifacts will be written.
-    pub output_dir: PathBuf,
-    /// Optional horizon override; falls back to the value in the input JSON.
-    #[serde(default)]
-    pub horizon_override: Option<HorizonOverride>,
-    /// Parameter axes to sweep; defaults to a single EST run when omitted.
-    #[serde(default)]
-    pub sweep: ExperimentSweep,
-    /// When `true` (default), each EST run also writes an `est_trace.jsonl`
-    /// file next to the schedule JSON.
-    #[serde(default = "default_emit_trace")]
-    pub emit_trace: bool,
-}
-
-fn default_emit_trace() -> bool {
-    true
-}
+// ── Top-level experiment spec ────────────────────────────────────────────────
+//
+// The legacy single-dataset `ExperimentSpec` (used only by the removed
+// `est_experiment` binary) has been deleted. The matrix runner uses
+// [`crate::spec::ExperimentSpec`] exclusively.
 
 // ── EST run configuration ────────────────────────────────────────────────────
 

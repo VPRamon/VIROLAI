@@ -1,15 +1,35 @@
 {
   "input_json": "../data/ctao_n.json",
   "output_dir": "../out/hap/",
-  "emit_trace": false,
   "sweep": {
     "hap": {
-      "iota_max_values": [64, 128],
-      "rho_values": [2, 3, 4],
-      "population_sizes": [2, 4, 8],
-      "survivor_modes": ["elitist_top_k", "pareto_front"],
-      "survivor_caps": [4, 8],
-      "seeds": [0, 1, 2]
+      "iota_max_values": [
+        64,
+        128
+      ],
+      "rho_values": [
+        2,
+        3,
+        4
+      ],
+      "population_sizes": [
+        2,
+        4,
+        8
+      ],
+      "survivor_modes": [
+        "elitist_top_k",
+        "pareto_front"
+      ],
+      "survivor_caps": [
+        4,
+        8
+      ],
+      "seeds": [
+        0,
+        1,
+        2
+      ]
     }
   }
 }

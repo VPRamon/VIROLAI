@@ -118,7 +118,7 @@ export default function WorkspacesListPage() {
         <p className="mt-3 text-xs text-slate-500">
           Or publish from the terminal:{' '}
           <code className="text-slate-300">
-            phd publish --workspace &lt;id&gt; --manifest-dir out/&lt;run&gt;
+            phd publish --workspace &lt;id&gt; --dir out/&lt;run&gt; --include-schedules
           </code>
         </p>
       </Card>

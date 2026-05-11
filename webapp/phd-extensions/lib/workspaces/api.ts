@@ -163,6 +163,35 @@ export function ingestSchedule(
   );
 }
 
+export function ingestScheduleBatch(
+  id: string,
+  items: { schedule: unknown; idempotency_key?: string }[],
+): Promise<{
+  summary: { created: number; deduplicated: number; failed: number };
+  results: Array<
+    | { ok: true; created: boolean; manifest: ManifestEntry }
+    | { ok: false; error: { message: string } }
+  >;
+}> {
+  return unwrap(
+    getWorkspacesClient().post(
+      `${WORKSPACES_BASE}/${encodeURIComponent(id)}/schedules/batch`,
+      { items },
+    ),
+  );
+}
+
+export function getScheduleForManifest(
+  id: string,
+  manifestId: string,
+): Promise<{ schedule: unknown }> {
+  return unwrap(
+    getWorkspacesClient().get(
+      `${WORKSPACES_BASE}/${encodeURIComponent(id)}/manifests/${encodeURIComponent(manifestId)}/schedule`,
+    ),
+  );
+}
+
 export function getComparison(id: string): Promise<ComparisonResponse> {
   return unwrap(
     getWorkspacesClient().get(`${WORKSPACES_BASE}/${encodeURIComponent(id)}/comparison`),
