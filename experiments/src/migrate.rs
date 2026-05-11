@@ -1,6 +1,6 @@
 //! Legacy run-directory migration.
 //!
-//! `phd-experiments migrate <old_run_dir>` ports a run directory produced by
+//! `experiments migrate <old_run_dir>` ports a run directory produced by
 //! the deprecated `est_experiment` binary into the current
 //! `experiment_matrix`-compatible layout.
 //!

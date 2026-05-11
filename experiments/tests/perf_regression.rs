@@ -1,6 +1,6 @@
 //! Performance regression tests for scheduling algorithms.
 //!
-//! These tests run the `phd-experiments` binary against the archived local
+//! These tests run the `experiments` binary against the archived local
 //! datasets and compare `ScheduleMetrics` values against committed golden
 //! baselines. A regression failure means a key metric moved outside the
 //! recorded tolerance band.
@@ -40,18 +40,18 @@ use std::process::Command;
 use std::sync::OnceLock;
 use tempfile::TempDir;
 
-const BIN: &str = env!("CARGO_BIN_EXE_phd-experiments");
+const BIN: &str = env!("CARGO_BIN_EXE_experiments");
 
 // ─── Path helpers ──────────────────────────────────────────────────────────
 
 /// Root of the PhD repository.
 ///
-/// `CARGO_MANIFEST_DIR` is `phd-experiments/`, so the repository root is one
+/// `CARGO_MANIFEST_DIR` is `experiments/`, so the repository root is one
 /// level up.
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
-        .expect("phd-experiments must be inside the repo root")
+        .expect("experiments must be inside the repo root")
         .to_path_buf()
 }
 
@@ -200,12 +200,12 @@ fn run_spec(spec_template: &str) -> RunResult {
         .args(["run", "--spec", spec_path.to_str().unwrap()])
         .env("RUST_LOG", "error")
         .output()
-        .expect("failed to spawn phd-experiments");
+        .expect("failed to spawn experiments");
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         panic!(
-            "phd-experiments failed (exit {:?}):\n{stderr}",
+            "experiments failed (exit {:?}):\n{stderr}",
             output.status.code()
         );
     }

@@ -1,15 +1,15 @@
 [package]
-name = "phd-experiments"
+name = "experiments"
 version = "0.1.0"
 edition = "2024"
 description = "Experiment runner for the PhD scheduling workspace — runs parameter sweeps against the scheduler library and writes structured output artifacts."
 
 [lib]
-name = "phd_experiments"
+name = "experiments"
 path = "src/lib.rs"
 
 [[bin]]
-name = "phd-experiments"
+name = "experiments"
 path = "src/main.rs"
 
 [dependencies]

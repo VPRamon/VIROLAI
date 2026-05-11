@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use tempfile::TempDir;
 
-const BIN: &str = env!("CARGO_BIN_EXE_phd-experiments");
+const BIN: &str = env!("CARGO_BIN_EXE_experiments");
 
 fn write_input(dir: &Path) {
     let json = r#"{
@@ -106,7 +106,7 @@ fn experiment_matrix_pipeline_writes_expected_artifacts() {
         .args(["run", "--spec", spec_path.to_str().unwrap()])
         .status()
         .expect("binary should run");
-    assert!(status.success(), "phd-experiments exited with failure");
+    assert!(status.success(), "experiments exited with failure");
 
     let run_dir = find_run_dir(&tmp.path().join("out"));
 

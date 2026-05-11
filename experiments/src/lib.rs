@@ -1,4 +1,4 @@
-//! `phd-experiments` — experiment runner for the PhD scheduling workspace.
+//! `experiments` — experiment runner for the PhD scheduling workspace.
 //!
 //! This crate provides the tooling to run parameter-sweep experiments against
 //! the [`scheduler`] library crate.  It is deliberately decoupled from the
@@ -20,14 +20,14 @@
 //!
 //! # Usage
 //!
-//! The `phd-experiments` binary exposes a `clap`-based CLI with the following
+//! The `experiments` binary exposes a `clap`-based CLI with the following
 //! sub-commands:
 //!
 //! ```text
-//! phd-experiments run    --spec <experiment.json>
-//! phd-experiments run    --spec <experiment.json> --resume <existing_run_dir>
-//! phd-experiments run    --spec <experiment.json> --dry-run
-//! phd-experiments migrate <old_run_dir> [--output <new_dir>]
+//! experiments run    --spec <experiment.json>
+//! experiments run    --spec <experiment.json> --resume <existing_run_dir>
+//! experiments run    --spec <experiment.json> --dry-run
+//! experiments migrate <old_run_dir> [--output <new_dir>]
 //! ```
 //!
 //! It is also wired as the target of `phd matrix` and `phd sweep` in the

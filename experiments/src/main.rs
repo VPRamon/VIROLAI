@@ -1,4 +1,4 @@
-//! `phd-experiments` binary entry point.
+//! `experiments` binary entry point.
 //!
 //! Provides a `clap`-based CLI for running parameter-sweep experiments against
 //! the `scheduler` library.
@@ -8,10 +8,10 @@
 //! ## `run` (default)
 //!
 //! ```text
-//! phd-experiments run --spec <experiment.json>
-//!                     [--resume <existing_run_dir>]
-//!                     [--output-dir <dir>]
-//!                     [--dry-run]
+//! experiments run --spec <experiment.json>
+//!                 [--resume <existing_run_dir>]
+//!                 [--output-dir <dir>]
+//!                 [--dry-run]
 //! ```
 //!
 //! Loads an experiment spec, resolves the Cartesian product of cells, and
@@ -22,18 +22,18 @@
 //! ## `migrate`
 //!
 //! ```text
-//! phd-experiments migrate <old_run_dir> [--output <new_dir>]
+//! experiments migrate <old_run_dir> [--output <new_dir>]
 //! ```
 //!
 //! Ports a run directory produced by the deprecated `est_experiment` binary
 //! into the current layout.
 
 use clap::{Parser, Subcommand};
-use phd_experiments::cell::resolve_cells;
-use phd_experiments::migrate;
-use phd_experiments::output;
-use phd_experiments::runner;
-use phd_experiments::spec::ExperimentSpec;
+use experiments::cell::resolve_cells;
+use experiments::migrate;
+use experiments::output;
+use experiments::runner;
+use experiments::spec::ExperimentSpec;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -41,7 +41,7 @@ use std::process::ExitCode;
 
 #[derive(Parser, Debug)]
 #[command(
-    name = "phd-experiments",
+    name = "experiments",
     version,
     about = "Run parameter-sweep experiments against the PhD scheduling library"
 )]
@@ -60,7 +60,7 @@ enum Cmd {
 
 // ── `run` sub-command ─────────────────────────────────────────────────────────
 
-/// Arguments for `phd-experiments run`.
+/// Arguments for `experiments run`.
 #[derive(Parser, Debug)]
 struct RunArgs {
     /// Path to the experiment spec JSON.
@@ -84,7 +84,7 @@ struct RunArgs {
 
 // ── `migrate` sub-command ─────────────────────────────────────────────────────
 
-/// Arguments for `phd-experiments migrate`.
+/// Arguments for `experiments migrate`.
 #[derive(Parser, Debug)]
 struct MigrateArgs {
     /// Path to the legacy `est_experiment` run directory to migrate.
@@ -104,7 +104,7 @@ fn main() -> ExitCode {
     match dispatch(cli.cmd) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("phd-experiments: error: {e}");
+            eprintln!("experiments: error: {e}");
             ExitCode::FAILURE
         }
     }
@@ -152,7 +152,7 @@ fn run(args: RunArgs) -> Result<(), String> {
 
     let summary = runner::execute(&spec, &cells, &run_dir, resume)?;
     println!(
-        "phd-experiments run done: {} cells total, {} skipped (resume), {} completed, {} failed",
+        "experiments run done: {} cells total, {} skipped (resume), {} completed, {} failed",
         summary.total, summary.already_done, summary.completed, summary.failed
     );
     println!("artifacts -> {}", summary.run_dir.display());

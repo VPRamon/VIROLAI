@@ -683,6 +683,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "experiments"
+version = "0.1.0"
+dependencies = [
+ "PhD",
+ "chrono",
+ "clap",
+ "csv",
+ "env_logger",
+ "log",
+ "rayon",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "fastrand"
 version = "2.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1556,22 +1572,6 @@ dependencies = [
  "hashbrown 0.15.5",
  "indexmap",
  "serde",
-]
-
-[[package]]
-name = "phd-experiments"
-version = "0.1.0"
-dependencies = [
- "PhD",
- "chrono",
- "clap",
- "csv",
- "env_logger",
- "log",
- "rayon",
- "serde",
- "serde_json",
- "tempfile",
 ]
 
 [[package]]

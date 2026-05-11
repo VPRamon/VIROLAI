@@ -2,10 +2,10 @@
 //!
 //! Phase 1 (foundation) responsibilities:
 //! - `phd run` / `phd matrix` / `phd dataset adapt` — dispatch to the
-//!   existing sibling binaries (`scheduler`, `phd-experiments`,
+//!   existing sibling binaries (`scheduler`, `experiments`,
 //!   `ctao_adapter`) so users only need to remember one entry point.
 //! - `phd manifest create` — walk a `run-<ts>/` directory produced by
-//!   `phd-experiments` and emit per-cell `manifest.json` files plus a
+//!   `experiments` and emit per-cell `manifest.json` files plus a
 //!   batch index (`manifest-batch.json`) under
 //!   `<run-dir>/cells/<cell_id>/manifest.json`.
 //! - `phd manifest validate` — load a manifest and run the structural
@@ -58,14 +58,14 @@ enum Cmd {
         /// Forwarded as-is to the `scheduler` binary.
         args: Vec<String>,
     },
-    /// Run a sweep / matrix experiment (delegates to `phd-experiments`).
+    /// Run a sweep / matrix experiment (delegates to `experiments`).
     #[command(
         disable_help_flag = true,
         allow_hyphen_values = true,
         trailing_var_arg = true
     )]
     Matrix {
-        /// Forwarded as-is to the `phd-experiments` binary.
+        /// Forwarded as-is to the `experiments` binary.
         args: Vec<String>,
     },
     /// Run a sweep and collect flat results — a clean alternative to `phd matrix`.
@@ -114,7 +114,7 @@ enum DatasetCmd {
 
 #[derive(Subcommand, Debug)]
 enum ManifestCmd {
-    /// Build manifest(s) from a `phd-experiments` run directory or a single schedule JSON.
+    /// Build manifest(s) from a `experiments` run directory or a single schedule JSON.
     ///
     /// Use `--run <DIR>` to build manifests for all cells in an experiment run, or
     /// `--schedule <FILE>` to build a manifest from a single self-contained schedule JSON.
@@ -185,7 +185,7 @@ fn main() -> ExitCode {
 fn dispatch(cmd: Cmd) -> Result<ExitCode, String> {
     match cmd {
         Cmd::Run { args } => exec_sibling("scheduler", &args),
-        Cmd::Matrix { args } => exec_sibling("phd-experiments", &args),
+        Cmd::Matrix { args } => exec_sibling("experiments", &args),
         Cmd::Sweep {
             spec,
             out,
@@ -266,7 +266,7 @@ fn sweep(
         return Err(format!("spec file `{}` not found", spec_path.display()));
     }
 
-    // Build a temp output dir for the phd-experiments run.
+    // Build a temp output dir for the experiments run.
     let tmp = tempfile::TempDir::new().map_err(|e| format!("failed to create temp dir: {e}"))?;
     let tmp_out = tmp.path().join("sweep_run");
     fs::create_dir_all(&tmp_out).map_err(|e| format!("failed to create temp output dir: {e}"))?;
@@ -274,18 +274,18 @@ fn sweep(
     let spec_for_run: PathBuf =
         patch_spec_for_run(spec_path, tmp.path(), &tmp_out, parallel_override)?;
 
-    // Run phd-experiments.
-    let status = Command::new(locate_sibling("phd-experiments"))
+    // Run experiments.
+    let status = Command::new(locate_sibling("experiments"))
         .arg("run")
         .arg("--spec")
         .arg(&spec_for_run)
         .status()
-        .map_err(|e| format!("failed to spawn phd-experiments: {e}"))?;
+        .map_err(|e| format!("failed to spawn experiments: {e}"))?;
     if !status.success() {
-        return Err("phd-experiments run failed".to_string());
+        return Err("experiments run failed".to_string());
     }
 
-    // Find the single run-<ts> directory phd-experiments created.
+    // Find the single run-<ts> directory experiments created.
     let run_dir = find_single_run_dir(&tmp_out)
         .ok_or_else(|| format!("could not locate run dir under {}", tmp_out.display()))?;
 
@@ -429,7 +429,7 @@ fn resolve_relative(base: &Path, path: &Path) -> PathBuf {
 
 /// Find the single `run-<ts>/` directory inside `<out>/<exp_slug>/`.
 fn find_single_run_dir(tmp_out: &Path) -> Option<PathBuf> {
-    // phd-experiments creates <tmp_out>/<exp_slug>/run-<ts>/
+    // experiments creates <tmp_out>/<exp_slug>/run-<ts>/
     let exp_dirs: Vec<PathBuf> = fs::read_dir(tmp_out)
         .ok()?
         .flatten()

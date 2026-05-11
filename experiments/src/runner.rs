@@ -67,7 +67,7 @@ pub fn execute(
         .collect();
 
     eprintln!(
-        "phd-experiments: {} total cells, {} already completed, {} to run",
+        "experiments: {} total cells, {} already completed, {} to run",
         cells.len(),
         already_done.len(),
         pending.len()
