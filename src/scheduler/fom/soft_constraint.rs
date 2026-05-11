@@ -1,5 +1,5 @@
-use super::{ScheduleFom, ScoringContext};
-use crate::schedule::Schedule;
+use super::ScheduleFom;
+use crate::schedule::{Schedule, SchedulingProblem};
 use crate::time::MJD;
 
 /// FOM: sum of soft-constraint scores of all placed tasks (maximize).
@@ -11,11 +11,11 @@ pub struct SoftConstraintFom;
 
 impl ScheduleFom for SoftConstraintFom {
     /// Score by summing the soft-constraint score of every placed task.
-    fn evaluate(&self, schedule: &Schedule, ctx: &ScoringContext) -> f64 {
+    fn evaluate(&self, schedule: &Schedule, problem: &SchedulingProblem) -> f64 {
         schedule
             .placements()
             .map(|placement| {
-                let Some(task) = ctx.task(placement.task_id) else {
+                let Some(task) = problem.task(placement.task_id) else {
                     // Missing task metadata should not panic during ranking; it
                     // simply contributes no additional soft score.
                     return 0.0;

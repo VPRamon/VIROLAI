@@ -1,5 +1,5 @@
-use super::{ScheduleFom, ScoringContext};
-use crate::schedule::Schedule;
+use super::ScheduleFom;
+use crate::schedule::{Schedule, SchedulingProblem};
 
 /// FOM: lexicographic combination of two FOMs.
 ///
@@ -21,8 +21,8 @@ impl CompositeFom {
 
 impl ScheduleFom for CompositeFom {
     /// Score first by `primary`, then by `secondary` as a tie-breaker.
-    fn evaluate(&self, schedule: &Schedule, ctx: &ScoringContext) -> f64 {
-        self.primary.evaluate(schedule, ctx) * 1.0e9 + self.secondary.evaluate(schedule, ctx)
+    fn evaluate(&self, schedule: &Schedule, problem: &SchedulingProblem) -> f64 {
+        self.primary.evaluate(schedule, problem) * 1.0e9 + self.secondary.evaluate(schedule, problem)
     }
 
     fn label(&self) -> &'static str {

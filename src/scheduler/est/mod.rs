@@ -21,7 +21,7 @@ mod queue;
 mod schedule_state;
 
 pub use crate::scheduler::fom::{
-    CompositeFom, EstFomKind, ScheduleFom, ScoringContext, SoftConstraintFom,
+    CompositeFom, EstFomKind, ScheduleFom, SoftConstraintFom,
 };
 pub use algorithm::{EstScheduler, run_scheduler};
 pub use candidate::{Candidate, IntoTaskPlacement};

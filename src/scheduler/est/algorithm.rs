@@ -5,7 +5,7 @@ use super::queue::CandidateQueue;
 use crate::error::ScheduleError;
 use crate::prescheduler::TaskPeriodMap;
 use crate::schedule::{Schedule, SchedulingProblem};
-use crate::scheduler::fom::{ScheduleFom, ScoringContext, SoftConstraintFom};
+use crate::scheduler::fom::{ScheduleFom, SoftConstraintFom};
 use crate::scheduler::{SchedulingAlgorithm, filter_task_refs};
 use crate::scheduling_block::SchedulingBlock;
 use crate::task::Task;
@@ -104,12 +104,11 @@ impl<F: ScheduleFom> EstScheduler<F> {
             score: 0.0,
         };
 
-        let scoring_ctx = ScoringContext::new(problem);
         Ok(beam::run_search(
             self,
             initial_state,
             horizon,
-            &scoring_ctx,
+            problem,
             Some(&ProblemCtx { problem }),
         ))
     }

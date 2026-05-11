@@ -2,8 +2,8 @@ use super::ScheduleState;
 use super::algorithm::EstScheduler;
 use super::candidate::IntoTaskPlacement;
 use super::context::{ProblemCtx, check_block_dependencies};
-use crate::schedule::Schedule;
-use crate::scheduler::fom::{ScheduleFom, ScoringContext};
+use crate::schedule::{Schedule, SchedulingProblem};
+use crate::scheduler::fom::ScheduleFom;
 use crate::time::{MJD, Period};
 use std::cmp::Ordering;
 
@@ -20,7 +20,7 @@ pub(super) fn run_search<'a, F: ScheduleFom>(
     scheduler: &EstScheduler<F>,
     initial_state: ScheduleState<'a>,
     horizon: &Period<MJD>,
-    scoring_ctx: &ScoringContext<'_>,
+    problem: &SchedulingProblem,
     ctx: Option<&ProblemCtx<'_>>,
 ) -> Schedule {
     let mut live_beams: Vec<ScheduleState> = vec![initial_state];
@@ -36,7 +36,7 @@ pub(super) fn run_search<'a, F: ScheduleFom>(
         let mut next_beams: Vec<ScheduleState<'a>> = Vec::new();
 
         for state in live_beams.drain(..) {
-            match expand_beam(scheduler, state, horizon, round, b, scoring_ctx, ctx) {
+            match expand_beam(scheduler, state, horizon, round, b, problem, ctx) {
                 BeamExpansion::Terminal(state) => terminal_beams.push(state),
                 BeamExpansion::Children(children) => next_beams.extend(children),
             }
@@ -79,7 +79,7 @@ fn expand_beam<'a, F: ScheduleFom>(
     horizon: &Period<MJD>,
     round: u32,
     branching_factor: usize,
-    scoring_ctx: &ScoringContext<'_>,
+    problem: &SchedulingProblem,
     ctx: Option<&ProblemCtx<'_>>,
 ) -> BeamExpansion<'a> {
     // Recompute EST metadata from the beam cursor to the end of the global
@@ -116,7 +116,7 @@ fn expand_beam<'a, F: ScheduleFom>(
         }
         if let Some(child) = build_child_state(
             scheduler,
-            scoring_ctx,
+            problem,
             &state,
             horizon,
             round,
@@ -150,7 +150,7 @@ fn expand_beam<'a, F: ScheduleFom>(
 #[allow(clippy::too_many_arguments)]
 fn build_child_state<'a, F: ScheduleFom>(
     scheduler: &EstScheduler<F>,
-    scoring_ctx: &ScoringContext<'_>,
+    problem: &SchedulingProblem,
     state: &ScheduleState<'a>,
     horizon: &Period<MJD>,
     round: u32,
@@ -203,6 +203,6 @@ fn build_child_state<'a, F: ScheduleFom>(
 
     // FOM scoring is the pruning signal: higher-scoring child beams are more
     // likely to survive into the next round.
-    child.score = scheduler.fom.evaluate(&child.schedule, scoring_ctx);
+    child.score = scheduler.fom.evaluate(&child.schedule, problem);
     Some(child)
 }
