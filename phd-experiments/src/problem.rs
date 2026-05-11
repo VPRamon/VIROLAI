@@ -1,3 +1,13 @@
+//! Dataset loading and prescheduling.
+//!
+//! [`prepare_problem`] reads a scheduling-problem JSON from disk, optionally
+//! applies a horizon override, runs the prescheduler once, and bundles the
+//! results into a [`PreparedProblem`].
+//!
+//! The prescheduling step computes the set of feasible time windows per task
+//! and is independent of scheduler configuration, so it is performed once and
+//! shared across all runs that use the same dataset.
+
 use scheduler::prescheduler::{TaskPeriodMap, preschedule};
 use scheduler::schedule::SchedulingProblem;
 use scheduler::time::{MJD, Period, Time};
@@ -5,21 +15,36 @@ use serde_json::Value;
 use std::fs;
 use std::path::Path;
 
-use super::config::HorizonOverride;
+use crate::config::HorizonOverride;
 
-/// A scheduling problem loaded from disk and preprocessed, shared across all runs.
+// ── Prepared problem ──────────────────────────────────────────────────────────
+
+/// A scheduling problem loaded from disk and preprocessed.
 ///
-/// The prescheduling step (computing feasible windows per task) is expensive and
-/// independent of scheduler configuration, so it runs once and is reused.
+/// The prescheduling step (computing feasible windows per task) is expensive
+/// and independent of scheduler configuration, so it runs once and is shared
+/// across all runs against the same dataset.
 pub struct PreparedProblem {
-    /// Original JSON, preserved for embedding in schedule output files.
+    /// Original raw JSON, preserved for embedding in schedule output files.
     pub raw_json: Value,
+    /// Parsed scheduling problem.
     pub problem: SchedulingProblem,
+    /// Map of task ID → feasible time windows, produced by the prescheduler.
     pub possible_periods: TaskPeriodMap,
+    /// Observing horizon used for this run.
     pub horizon: Period<MJD>,
 }
 
-/// Loads `input_path`, runs the prescheduler, and returns a [`PreparedProblem`].
+// ── Public API ────────────────────────────────────────────────────────────────
+
+/// Loads `input_path`, optionally overrides the horizon, runs the prescheduler,
+/// and returns a [`PreparedProblem`] ready to be handed to any scheduler.
+///
+/// # Errors
+///
+/// Returns an error if the file cannot be read, the JSON is invalid, the
+/// problem contains no tasks, the telescope is missing from the input, the
+/// horizon is invalid, or the prescheduler fails.
 pub fn prepare_problem(
     input_path: &Path,
     horizon_override: Option<HorizonOverride>,
@@ -50,6 +75,12 @@ pub fn prepare_problem(
     })
 }
 
+// ── Internal helpers ──────────────────────────────────────────────────────────
+
+/// Resolves the observing horizon.
+///
+/// If `override_range` is supplied it takes precedence; otherwise the horizon
+/// detected from `schedule_time_window` in the JSON is used.
 fn build_horizon(
     detected: Option<Period<MJD>>,
     override_range: Option<HorizonOverride>,

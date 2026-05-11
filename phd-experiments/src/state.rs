@@ -1,4 +1,15 @@
 //! Append-only checkpoint stream (`state.jsonl`).
+//!
+//! Each cell execution appends two [`StateEvent`] records to `state.jsonl`:
+//! one with status [`CellStatus::Started`] at the beginning, and one with
+//! [`CellStatus::Completed`] or [`CellStatus::Failed`] at the end.
+//!
+//! The file is written through a [`StateWriter`] that holds a mutex-protected
+//! buffered handle, making it safe to call from multiple Rayon threads
+//! simultaneously.
+//!
+//! On resume, [`read_events`] replays the log and [`completed_cells`] extracts
+//! the set of cells whose *latest* event is `completed`.
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -7,39 +18,53 @@ use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
+// ── State event types ─────────────────────────────────────────────────────────
+
 /// One line in `state.jsonl`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StateEvent {
+    /// Identifier of the cell this event refers to.
     pub cell_id: String,
+    /// Current execution status.
     pub status: CellStatus,
+    /// Path to the schedule JSON, present when `status` is `completed`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub schedule_path: Option<String>,
+    /// Path to the metrics JSON, present when `status` is `completed`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metrics_path: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub trace_path: Option<String>,
+    /// Error message, present when `status` is `failed`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// RFC 3339 timestamp recorded when the cell started.
     pub started_at: String,
+    /// RFC 3339 timestamp recorded when the cell finished (absent for `started`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub finished_at: Option<String>,
 }
 
+/// Execution status of a single matrix cell.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CellStatus {
+    /// Cell has started but not yet finished.
     Started,
+    /// Cell completed successfully.
     Completed,
+    /// Cell terminated with an error.
     Failed,
 }
 
-/// Thread-safe append-only writer.
+// ── State writer ──────────────────────────────────────────────────────────────
+
+/// Thread-safe append-only writer for `state.jsonl`.
 pub struct StateWriter {
     inner: Mutex<BufWriter<File>>,
     path: PathBuf,
 }
 
 impl StateWriter {
+    /// Opens (or creates) the state file in append mode.
     pub fn open_append(path: &Path) -> Result<Self, String> {
         let file = OpenOptions::new()
             .create(true)
@@ -52,6 +77,7 @@ impl StateWriter {
         })
     }
 
+    /// Serialises `event` as a single JSON line and flushes the buffer.
     pub fn append(&self, event: &StateEvent) -> Result<(), String> {
         let line = serde_json::to_string(event)
             .map_err(|e| format!("failed to serialize state event: {e}"))?;
@@ -71,8 +97,11 @@ impl StateWriter {
     }
 }
 
-/// Read every event in `state.jsonl`. Tolerates blank lines and a missing
-/// file (returns an empty vector).
+// ── Reader helpers ────────────────────────────────────────────────────────────
+
+/// Reads every event from `state.jsonl`.
+///
+/// Tolerates blank lines; returns an empty vector if the file does not exist.
 pub fn read_events(path: &Path) -> Result<Vec<StateEvent>, String> {
     if !path.exists() {
         return Ok(Vec::new());
@@ -105,7 +134,7 @@ pub fn read_events(path: &Path) -> Result<Vec<StateEvent>, String> {
     Ok(events)
 }
 
-/// Returns the set of cell ids whose latest event is `completed`.
+/// Returns the set of cell IDs whose *latest* event has status `completed`.
 pub fn completed_cells(events: &[StateEvent]) -> std::collections::HashSet<String> {
     let mut latest: HashMap<String, CellStatus> = HashMap::new();
     for ev in events {
@@ -117,6 +146,8 @@ pub fn completed_cells(events: &[StateEvent]) -> std::collections::HashSet<Strin
         .map(|(k, _)| k)
         .collect()
 }
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
@@ -134,7 +165,6 @@ mod tests {
                 status: CellStatus::Started,
                 schedule_path: None,
                 metrics_path: None,
-                trace_path: None,
                 error: None,
                 started_at: "t0".into(),
                 finished_at: None,
@@ -146,7 +176,6 @@ mod tests {
                 status: CellStatus::Completed,
                 schedule_path: Some("schedules/a.json".into()),
                 metrics_path: Some("metrics/a.json".into()),
-                trace_path: None,
                 error: None,
                 started_at: "t0".into(),
                 finished_at: Some("t1".into()),
@@ -175,7 +204,6 @@ mod tests {
                 status: CellStatus::Completed,
                 schedule_path: None,
                 metrics_path: None,
-                trace_path: None,
                 error: None,
                 started_at: "t0".into(),
                 finished_at: Some("t1".into()),
@@ -185,7 +213,6 @@ mod tests {
                 status: CellStatus::Failed,
                 schedule_path: None,
                 metrics_path: None,
-                trace_path: None,
                 error: Some("boom".into()),
                 started_at: "t2".into(),
                 finished_at: Some("t3".into()),

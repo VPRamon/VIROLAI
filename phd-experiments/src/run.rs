@@ -1,21 +1,37 @@
+//! Single-cell scheduler execution.
+//!
+//! [`execute_run`] takes a [`RunConfig`] and a [`PreparedProblem`], runs the
+//! appropriate scheduler, serialises the resulting schedule to disk, and
+//! returns a [`RunOutcome`] containing the computed metrics.
+//!
+//! This module is used by both the legacy single-dataset sweep path and the
+//! matrix runner ([`crate::runner`]).
+
 use scheduler::metrics::{MetricsContext, ScheduleMetrics};
 use scheduler::schedule::{LocationMeta, PeriodMeta, ScheduleMetadata, ScheduleOutput};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use super::config::{HapSurvivorMode, RunConfig};
-use super::problem::PreparedProblem;
+use crate::config::{HapSurvivorMode, RunConfig};
+use crate::problem::PreparedProblem;
 
 /// The result of a single scheduler run.
 pub struct RunOutcome {
+    /// The configuration that was executed.
     pub config: RunConfig,
+    /// Path to the schedule JSON that was written.
     pub schedule_path: PathBuf,
+    /// Path to the trace JSONL file, if one was produced.
     pub trace_path: Option<PathBuf>,
+    /// Computed metrics for the produced schedule.
     pub metrics: ScheduleMetrics,
 }
 
-/// Runs the scheduler, writes the schedule JSON to `schedule_path`, and computes metrics.
+/// Runs the scheduler for `run`, writes the schedule JSON to `schedule_path`,
+/// and returns a [`RunOutcome`] with metrics.
 ///
+/// `trace_path` is accepted for future EST trace output but is currently
+/// unused.
 pub fn execute_run(
     run: &RunConfig,
     prepared: &PreparedProblem,
@@ -76,7 +92,8 @@ pub fn execute_run(
     })
 }
 
-fn build_schedule_metadata(run: &RunConfig, prepared: &PreparedProblem) -> ScheduleMetadata {
+/// Builds the [`ScheduleMetadata`] embedded in every output schedule JSON.
+pub fn build_schedule_metadata(run: &RunConfig, prepared: &PreparedProblem) -> ScheduleMetadata {
     let location = prepared
         .problem
         .telescope
@@ -127,5 +144,7 @@ fn build_schedule_metadata(run: &RunConfig, prepared: &PreparedProblem) -> Sched
         algorithm_config,
         location,
         period,
+        dataset_id: None,
+        dataset_label: None,
     }
 }

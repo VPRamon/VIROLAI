@@ -1,4 +1,3 @@
-use csv::Reader;
 use serde_json::Value;
 use std::collections::HashSet;
 use std::fs;
@@ -6,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use tempfile::TempDir;
 
-const BIN: &str = env!("CARGO_BIN_EXE_experiment_matrix");
+const BIN: &str = env!("CARGO_BIN_EXE_phd-experiments");
 
 fn write_input(dir: &Path) {
     let json = r#"{
@@ -78,7 +77,6 @@ fn write_spec(base: &Path) -> PathBuf {
   "algorithms": [
     { "kind": "est", "axes": { "endangered_thresholds": [1], "k_beams": [1], "branching_factors": [1] } }
   ],
-  "emit_trace": true,
   "max_parallel": 1,
   "output_dir": "out"
 }"#;
@@ -105,17 +103,16 @@ fn experiment_matrix_pipeline_writes_expected_artifacts() {
     let spec_path = write_spec(tmp.path());
 
     let status = Command::new(BIN)
-        .args(["--spec", spec_path.to_str().unwrap()])
+        .args(["run", "--spec", spec_path.to_str().unwrap()])
         .status()
         .expect("binary should run");
-    assert!(status.success(), "experiment_matrix exited with failure");
+    assert!(status.success(), "phd-experiments exited with failure");
 
     let run_dir = find_run_dir(&tmp.path().join("out"));
 
     // Every expected artefact exists.
     assert!(run_dir.join("experiment.json").is_file());
     assert!(run_dir.join("state.jsonl").is_file());
-    assert!(run_dir.join("summary.csv").is_file());
     let cell_id = "ds1__est__e1-k1-b1";
     assert!(
         run_dir
@@ -131,46 +128,14 @@ fn experiment_matrix_pipeline_writes_expected_artifacts() {
             .is_file(),
         "metrics json missing"
     );
-
-    // Summary CSV header + one row.
-    let mut reader = Reader::from_path(run_dir.join("summary.csv")).unwrap();
-    let headers: Vec<String> = reader
-        .headers()
-        .unwrap()
-        .iter()
-        .map(str::to_string)
-        .collect();
-    let expected_headers: Vec<&str> = vec![
-        "cell_id",
-        "dataset_id",
-        "algorithm",
-        "config_slug",
-        "scheduled_task_count",
-        "total_task_count",
-        "completion_ratio",
-        "priority_sum",
-        "priority_min",
-        "priority_max",
-        "priority_mean",
-        "priority_std",
-        "priority_p25",
-        "priority_p50",
-        "priority_p75",
-        "priority_p90",
-        "fragmentation_gap_count",
-        "fragmentation_gap_total_sec",
-        "fragmentation_largest_gap_sec",
-        "fragmentation_index",
-        "total_horizon_sec",
-        "available_time_sec",
-        "scheduled_time_sec",
-        "utilization",
-        "composite_rank_score",
-    ];
-    assert_eq!(headers, expected_headers);
-    let rows: Vec<_> = reader.records().map(|r| r.unwrap()).collect();
-    assert_eq!(rows.len(), 1, "summary.csv should have one data row");
-    assert_eq!(rows[0].get(0), Some(cell_id));
+    assert!(
+        !run_dir.join("summary.csv").exists(),
+        "summary.csv should not be written"
+    );
+    assert!(
+        !run_dir.join("traces").exists(),
+        "traces dir should not exist"
+    );
 
     // experiment.json round-trips and lists the cell.
     let manifest: Value =
@@ -199,7 +164,7 @@ fn experiment_matrix_resume_skips_completed_cells() {
 
     // First run: populate everything.
     let status = Command::new(BIN)
-        .args(["--spec", spec_path.to_str().unwrap()])
+        .args(["run", "--spec", spec_path.to_str().unwrap()])
         .status()
         .unwrap();
     assert!(status.success());
@@ -215,6 +180,7 @@ fn experiment_matrix_resume_skips_completed_cells() {
     // Resume into the same run dir; nothing should be re-scheduled.
     let status = Command::new(BIN)
         .args([
+            "run",
             "--spec",
             spec_path.to_str().unwrap(),
             "--resume",
@@ -256,14 +222,17 @@ fn experiment_matrix_dry_run_emits_manifest_only() {
     let spec_path = write_spec(tmp.path());
 
     let status = Command::new(BIN)
-        .args(["--spec", spec_path.to_str().unwrap(), "--dry-run"])
+        .args(["run", "--spec", spec_path.to_str().unwrap(), "--dry-run"])
         .status()
         .unwrap();
     assert!(status.success());
 
     let run_dir = find_run_dir(&tmp.path().join("out"));
     assert!(run_dir.join("experiment.json").is_file());
-    assert!(!run_dir.join("summary.csv").exists());
+    assert!(
+        !run_dir.join("state.jsonl").exists(),
+        "dry-run should not write state.jsonl"
+    );
     let schedules = run_dir.join("schedules");
     if schedules.exists() {
         assert_eq!(fs::read_dir(&schedules).unwrap().count(), 0);

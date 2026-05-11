@@ -10,7 +10,6 @@ use tsi_rust::http::{
     create_router_with_extensions,
 };
 
-mod experiments;
 mod phd_tsi_adapter;
 mod workspaces;
 
@@ -64,14 +63,6 @@ async fn main() -> anyhow::Result<()> {
     info!("Using import adapter: {}", import_adapter.name());
     let state = AppState::with_import_adapter(repository, import_adapter);
 
-    let experiments_state = experiments::state_from_env()
-        .map_err(|e| anyhow::anyhow!("failed to init experiments domain: {e}"))?;
-    info!(
-        "Experiments backend ready (root={})",
-        experiments_state.root.display()
-    );
-    let experiments_router = experiments::experiments_router(experiments_state);
-
     let workspaces_state = workspaces::state_from_env()
         .map_err(|e| anyhow::anyhow!("failed to init workspaces domain: {e}"))?;
     info!(
@@ -81,7 +72,6 @@ async fn main() -> anyhow::Result<()> {
     let workspaces_router = workspaces::workspaces_router(workspaces_state);
 
     let extensions = BackendExtensions::builder()
-        .with_routes(experiments_router)
         .with_routes(workspaces_router)
         .with_trace_validator(EstTraceValidator)
         .build();

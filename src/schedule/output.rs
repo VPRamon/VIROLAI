@@ -53,6 +53,12 @@ pub struct ScheduleMetadata {
     /// Scheduling horizon used for this run.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub period: Option<PeriodMeta>,
+    /// Dataset identifier (filesystem-safe slug used in experiment specs).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dataset_id: Option<String>,
+    /// Human-readable dataset label.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dataset_label: Option<String>,
 }
 
 // ── ScheduleOutput ────────────────────────────────────────────────────────────
@@ -67,10 +73,15 @@ pub struct ScheduleMetadata {
 ///
 /// When `metadata` is supplied it is serialized as a top-level
 /// `schedule_metadata` object.
+///
+/// When `metrics` is supplied it is serialized as a top-level
+/// `schedule_metrics` object, making the file self-contained for downstream
+/// tools that need KPIs without a separate metrics file.
 pub struct ScheduleOutput {
     raw_problem: Value,
     placements: HashMap<u64, (f64, f64)>,
     metadata: Option<ScheduleMetadata>,
+    metrics: Option<Value>,
 }
 
 impl ScheduleOutput {
@@ -96,7 +107,16 @@ impl ScheduleOutput {
             raw_problem,
             placements,
             metadata,
+            metrics: None,
         }
+    }
+
+    /// Attach pre-computed metrics that will be embedded as `schedule_metrics`
+    /// in the serialized output.  The value must be a JSON object; if it is
+    /// not, the field is silently omitted.
+    pub fn with_metrics(mut self, metrics: Value) -> Self {
+        self.metrics = Some(metrics);
+        self
     }
 }
 
@@ -104,11 +124,17 @@ impl Serialize for ScheduleOutput {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let mut augmented = self.raw_problem.clone();
         annotate_blocks(&mut augmented, &self.placements);
-        if let Some(ref metadata) = self.metadata
-            && let Some(obj) = augmented.as_object_mut()
-        {
-            let meta_value = serde_json::to_value(metadata).map_err(serde::ser::Error::custom)?;
-            obj.insert("schedule_metadata".to_string(), meta_value);
+        if let Some(obj) = augmented.as_object_mut() {
+            if let Some(ref metadata) = self.metadata {
+                let meta_value =
+                    serde_json::to_value(metadata).map_err(serde::ser::Error::custom)?;
+                obj.insert("schedule_metadata".to_string(), meta_value);
+            }
+            if let Some(ref metrics) = self.metrics
+                && metrics.is_object()
+            {
+                obj.insert("schedule_metrics".to_string(), metrics.clone());
+            }
         }
         augmented.serialize(serializer)
     }

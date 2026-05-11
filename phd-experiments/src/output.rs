@@ -1,7 +1,19 @@
-//! Output directory layout, summary CSV, and resolved-spec manifest.
+//! Output directory layout for experiment runs.
+//!
+//! An experiment run is stored under:
+//!
+//! ```text
+//! <output_dir>/<experiment_slug>/run-<timestamp>/
+//!   schedules/          — one schedule JSON per cell
+//!   metrics/            — one metrics JSON per cell
+//!   experiment.json     — resolved spec + full cell list
+//!   state.jsonl         — append-only checkpoint stream
+//! ```
+//!
+//! This module provides helpers to create that layout, compute per-cell file
+//! paths, and serialise / deserialise the `experiment.json` manifest.
 
 use chrono::Utc;
-use scheduler::metrics::ScheduleMetrics;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::ErrorKind;
@@ -10,14 +22,22 @@ use std::path::{Path, PathBuf};
 use crate::cell::MatrixCell;
 use crate::spec::ExperimentSpec;
 
+/// Subdirectory for schedule JSON files.
 pub const SCHEDULES_DIR: &str = "schedules";
+/// Subdirectory for per-cell metrics JSON files.
 pub const METRICS_DIR: &str = "metrics";
-pub const TRACES_DIR: &str = "traces";
+/// Append-only checkpoint stream filename.
 pub const STATE_FILE: &str = "state.jsonl";
-pub const SUMMARY_FILE: &str = "summary.csv";
+/// Resolved spec + cell-list manifest filename.
 pub const EXPERIMENT_FILE: &str = "experiment.json";
 
-/// Slugify the experiment name into a filesystem-safe directory component.
+// ── Directory creation ────────────────────────────────────────────────────────
+
+/// Converts an arbitrary experiment name into a filesystem-safe directory
+/// component by replacing non-alphanumeric (and non-`_`) characters with `-`
+/// and trimming leading/trailing dashes.
+///
+/// Falls back to `"experiment"` for strings that reduce to empty.
 pub fn experiment_slug(name: &str) -> String {
     let mut out = String::with_capacity(name.len());
     let mut prev_dash = false;
@@ -38,8 +58,11 @@ pub fn experiment_slug(name: &str) -> String {
     }
 }
 
-/// Create `<output_dir>/<experiment_slug>/run-<ts>/` plus `schedules/`,
-/// `metrics/`, and (always) `traces/` subdirectories.
+/// Creates `<output_dir>/<experiment_slug>/run-<ts>/` together with the
+/// standard `schedules/` and `metrics/` subdirectories.
+///
+/// Appends a numeric suffix if the timestamped name already exists (up to
+/// 100 attempts before returning an error).
 pub fn create_run_dir(output_dir: &Path, experiment_name: &str) -> Result<PathBuf, String> {
     let exp_dir = output_dir.join(experiment_slug(experiment_name));
     fs::create_dir_all(&exp_dir)
@@ -73,22 +96,28 @@ pub fn create_run_dir(output_dir: &Path, experiment_name: &str) -> Result<PathBu
     ))
 }
 
-/// Ensure the layout subdirectories exist inside an existing `run-*` dir.
+/// Ensures the `schedules/` and `metrics/` subdirectories exist inside an
+/// existing run directory.
 pub fn init_subdirs(run_dir: &Path) -> Result<(), String> {
-    for sub in [SCHEDULES_DIR, METRICS_DIR, TRACES_DIR] {
+    for sub in [SCHEDULES_DIR, METRICS_DIR] {
         let p = run_dir.join(sub);
         fs::create_dir_all(&p).map_err(|e| format!("failed to create {}: {e}", p.display()))?;
     }
     Ok(())
 }
 
-/// The serialized spec + cell list. Written to `experiment.json`.
+// ── Experiment manifest ───────────────────────────────────────────────────────
+
+/// The serialised spec and full cell list written to `experiment.json`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExperimentManifest {
+    /// Original experiment specification.
     pub spec: ExperimentSpec,
+    /// Fully resolved list of cells (Cartesian product of datasets × configs).
     pub cells: Vec<MatrixCell>,
 }
 
+/// Writes `experiment.json` to `run_dir`.
 pub fn write_manifest(
     run_dir: &Path,
     spec: &ExperimentSpec,
@@ -104,7 +133,7 @@ pub fn write_manifest(
     fs::write(&path, text).map_err(|e| format!("failed to write {}: {e}", path.display()))
 }
 
-/// Read an `experiment.json` produced by [`write_manifest`].
+/// Reads and deserialises `experiment.json` from `run_dir`.
 #[allow(dead_code)]
 pub fn read_manifest(run_dir: &Path) -> Result<ExperimentManifest, String> {
     let path = run_dir.join(EXPERIMENT_FILE);
@@ -113,95 +142,19 @@ pub fn read_manifest(run_dir: &Path) -> Result<ExperimentManifest, String> {
     serde_json::from_str(&text).map_err(|e| format!("failed to parse {}: {e}", path.display()))
 }
 
-/// Flat row of scalar metrics for `summary.csv`.
-#[derive(Debug, Clone, Serialize)]
-pub struct SummaryRow {
-    pub cell_id: String,
-    pub dataset_id: String,
-    pub algorithm: String,
-    pub config_slug: String,
-    pub scheduled_task_count: usize,
-    pub total_task_count: usize,
-    pub completion_ratio: f64,
-    pub priority_sum: f64,
-    pub priority_min: f64,
-    pub priority_max: f64,
-    pub priority_mean: f64,
-    pub priority_std: f64,
-    pub priority_p25: f64,
-    pub priority_p50: f64,
-    pub priority_p75: f64,
-    pub priority_p90: f64,
-    pub fragmentation_gap_count: usize,
-    pub fragmentation_gap_total_sec: f64,
-    pub fragmentation_largest_gap_sec: f64,
-    pub fragmentation_index: f64,
-    pub total_horizon_sec: f64,
-    pub available_time_sec: f64,
-    pub scheduled_time_sec: f64,
-    pub utilization: f64,
-    pub composite_rank_score: f64,
-}
+// ── Per-cell path helpers ─────────────────────────────────────────────────────
 
-impl SummaryRow {
-    pub fn from_metrics(cell: &MatrixCell, m: &ScheduleMetrics) -> Self {
-        Self {
-            cell_id: cell.cell_id.clone(),
-            dataset_id: cell.dataset_id.clone(),
-            algorithm: cell.algorithm.clone(),
-            config_slug: cell.run_config.slug(),
-            scheduled_task_count: m.scheduled_task_count,
-            total_task_count: m.total_task_count,
-            completion_ratio: m.completion_ratio,
-            priority_sum: m.priority.sum,
-            priority_min: m.priority.min,
-            priority_max: m.priority.max,
-            priority_mean: m.priority.mean,
-            priority_std: m.priority.std,
-            priority_p25: m.priority.p25,
-            priority_p50: m.priority.p50,
-            priority_p75: m.priority.p75,
-            priority_p90: m.priority.p90,
-            fragmentation_gap_count: m.fragmentation.gap_count,
-            fragmentation_gap_total_sec: m.fragmentation.gap_total_sec,
-            fragmentation_largest_gap_sec: m.fragmentation.largest_gap_sec,
-            fragmentation_index: m.fragmentation.fragmentation_index,
-            total_horizon_sec: m.total_horizon_sec,
-            available_time_sec: m.available_time_sec,
-            scheduled_time_sec: m.scheduled_time_sec,
-            utilization: m.utilization,
-            composite_rank_score: m.composite_rank_score,
-        }
-    }
-}
-
-/// Write `summary.csv` from a list of rows. Always overwrites.
-pub fn write_summary_csv(path: &Path, rows: &[SummaryRow]) -> Result<(), String> {
-    let mut writer = csv::Writer::from_path(path)
-        .map_err(|e| format!("failed to create {}: {e}", path.display()))?;
-    for row in rows {
-        writer
-            .serialize(row)
-            .map_err(|e| format!("failed to write summary row: {e}"))?;
-    }
-    writer
-        .flush()
-        .map_err(|e| format!("failed to flush {}: {e}", path.display()))
-}
-
-// Path helpers ---------------------------------------------------------------
-
+/// Returns the path for a cell's schedule JSON inside `run_dir`.
 pub fn schedule_path(run_dir: &Path, cell_id: &str) -> PathBuf {
     run_dir.join(SCHEDULES_DIR).join(format!("{cell_id}.json"))
 }
 
+/// Returns the path for a cell's metrics JSON inside `run_dir`.
 pub fn metrics_path(run_dir: &Path, cell_id: &str) -> PathBuf {
     run_dir.join(METRICS_DIR).join(format!("{cell_id}.json"))
 }
 
-pub fn trace_path(run_dir: &Path, cell_id: &str) -> PathBuf {
-    run_dir.join(TRACES_DIR).join(format!("{cell_id}.jsonl"))
-}
+// ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {

@@ -1,5 +1,20 @@
-//! `experiment_matrix migrate` — port a legacy `est_experiment` run
-//! directory into the new layout.
+//! Legacy run-directory migration.
+//!
+//! `phd-experiments migrate <old_run_dir>` ports a run directory produced by
+//! the deprecated `est_experiment` binary into the current
+//! `experiment_matrix`-compatible layout.
+//!
+//! # Layout differences
+//!
+//! The legacy format used a flat `schedules/` directory with a single
+//! `manifest.json` listing run slugs.  The new format organises output under
+//! `<experiment>/<run-timestamp>/` with per-cell `schedules/` and `metrics/`
+//! subdirectories plus `experiment.json` and `state.jsonl`.
+//!
+//! Migration reconstructs the [`MatrixCell`] list from the legacy manifest,
+//! copies schedule files, recomputes metrics where possible (falling back to
+//! zeroed metrics when the input dataset is unavailable), and writes the full
+//! modern layout.
 
 use scheduler::metrics::{MetricsContext, ScheduleMetrics};
 use scheduler::schedule::{Schedule, SchedulingProblem};
@@ -9,11 +24,14 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::cell::MatrixCell;
-use crate::est_experiment::config::{
-    EstRunConfig, HapRunConfig, HapSurvivorMode, HorizonOverride, RunConfig,
+use crate::config::{
+    EstRunConfig, EstSweepAxes, HapRunConfig, HapSurvivorMode, HapSweepAxes, HorizonOverride,
+    RunConfig,
 };
-use crate::output::{self, SummaryRow};
+use crate::output;
 use crate::spec::{AlgorithmSweep, DatasetEntry, ExperimentSpec};
+
+// ── Legacy manifest types (deserialization only) ──────────────────────────────
 
 #[derive(Debug, Deserialize)]
 struct LegacyManifest {
@@ -47,15 +65,25 @@ struct LegacyRunEntry {
     #[serde(default)]
     seed: Option<u64>,
     schedule_json: String,
-    #[serde(default)]
-    est_trace_jsonl: Option<String>,
 }
 
+// ── Public API ────────────────────────────────────────────────────────────────
+
+/// Summary returned by [`migrate`].
 pub struct MigrateSummary {
+    /// Number of cells successfully migrated.
     pub cells_migrated: usize,
+    /// Path to the newly created run directory.
     pub run_dir: PathBuf,
 }
 
+/// Migrates a legacy `est_experiment` run directory at `old_run_dir` into a
+/// new run directory under `output` (or `<old_run_dir>/migrated` when `None`).
+///
+/// # Errors
+///
+/// Returns an error if the legacy `manifest.json` is missing, malformed, or
+/// references an unknown algorithm.
 pub fn migrate(old_run_dir: &Path, output: Option<&Path>) -> Result<MigrateSummary, String> {
     let manifest_path = old_run_dir.join("manifest.json");
     let manifest_text = fs::read_to_string(&manifest_path)
@@ -66,7 +94,7 @@ pub fn migrate(old_run_dir: &Path, output: Option<&Path>) -> Result<MigrateSumma
     let dataset_path = PathBuf::from(&legacy.input_json);
     let dataset_id = dataset_id_from_path(&dataset_path);
 
-    // Reconstruct cells.
+    // Reconstruct cells from legacy run entries.
     let mut cells = Vec::with_capacity(legacy.runs.len());
     for run in &legacy.runs {
         let run_config = legacy_run_to_config(run)?;
@@ -92,7 +120,6 @@ pub fn migrate(old_run_dir: &Path, output: Option<&Path>) -> Result<MigrateSumma
         algorithms.push(AlgorithmSweep::Hap { axes: a });
     }
 
-    // Output dir
     let out_root = output
         .map(Path::to_path_buf)
         .unwrap_or_else(|| old_run_dir.join("migrated"));
@@ -113,9 +140,6 @@ pub fn migrate(old_run_dir: &Path, output: Option<&Path>) -> Result<MigrateSumma
         }],
         algorithms,
         ranking: None,
-        emit_trace: cells
-            .iter()
-            .any(|c| matches!(c.run_config, RunConfig::Est(_))),
         max_parallel: None,
         output_dir: out_root.clone(),
     };
@@ -124,8 +148,7 @@ pub fn migrate(old_run_dir: &Path, output: Option<&Path>) -> Result<MigrateSumma
     output::init_subdirs(&new_run_dir)?;
     output::write_manifest(&new_run_dir, &spec, &cells)?;
 
-    // Try to load each schedule and recompute full metrics; fall back to
-    // zeroed metrics when the schedule JSON is unavailable.
+    // Load the dataset for metrics recomputation (best-effort).
     let problem_text = fs::read_to_string(&dataset_path).ok();
     let problem: Option<SchedulingProblem> = problem_text
         .as_ref()
@@ -141,7 +164,7 @@ pub fn migrate(old_run_dir: &Path, output: Option<&Path>) -> Result<MigrateSumma
         }
     });
 
-    let mut summary_rows: Vec<SummaryRow> = Vec::new();
+    let mut cells_migrated = 0usize;
     for (cell, run) in cells.iter().zip(legacy.runs.iter()) {
         let legacy_schedule_path = old_run_dir.join(&run.schedule_json);
         let new_schedule_path = output::schedule_path(&new_run_dir, &cell.cell_id);
@@ -154,13 +177,6 @@ pub fn migrate(old_run_dir: &Path, output: Option<&Path>) -> Result<MigrateSumma
                 )
             })?;
         }
-        if let Some(trace_rel) = run.est_trace_jsonl.as_ref() {
-            let src = old_run_dir.join(trace_rel);
-            if src.exists() {
-                let dst = output::trace_path(&new_run_dir, &cell.cell_id);
-                let _ = fs::copy(&src, &dst);
-            }
-        }
 
         let metrics = recompute_metrics(&new_schedule_path, problem.as_ref(), horizon.as_ref())
             .unwrap_or_else(zero_metrics);
@@ -168,17 +184,18 @@ pub fn migrate(old_run_dir: &Path, output: Option<&Path>) -> Result<MigrateSumma
             .map_err(|e| format!("failed to serialize metrics for {}: {e}", cell.cell_id))?;
         fs::write(output::metrics_path(&new_run_dir, &cell.cell_id), m_text)
             .map_err(|e| format!("failed to write metrics: {e}"))?;
-        summary_rows.push(SummaryRow::from_metrics(cell, &metrics));
+        cells_migrated += 1;
     }
 
-    output::write_summary_csv(&new_run_dir.join(output::SUMMARY_FILE), &summary_rows)?;
-
     Ok(MigrateSummary {
-        cells_migrated: cells.len(),
+        cells_migrated,
         run_dir: new_run_dir,
     })
 }
 
+// ── Internal helpers ──────────────────────────────────────────────────────────
+
+/// Derives a filesystem-safe dataset slug from a file path stem.
 fn dataset_id_from_path(path: &Path) -> String {
     let stem = path
         .file_stem()
@@ -199,6 +216,7 @@ fn dataset_id_from_path(path: &Path) -> String {
     }
 }
 
+/// Reconstructs a [`RunConfig`] from a legacy manifest run entry.
 fn legacy_run_to_config(run: &LegacyRunEntry) -> Result<RunConfig, String> {
     match run.algorithm.as_str() {
         "est" => {
@@ -228,7 +246,7 @@ fn legacy_run_to_config(run: &LegacyRunEntry) -> Result<RunConfig, String> {
     }
 }
 
-fn collect_est_axes(cells: &[MatrixCell]) -> Option<crate::est_experiment::config::EstSweepAxes> {
+fn collect_est_axes(cells: &[MatrixCell]) -> Option<EstSweepAxes> {
     let mut e = std::collections::BTreeSet::new();
     let mut k = std::collections::BTreeSet::new();
     let mut b = std::collections::BTreeSet::new();
@@ -244,14 +262,14 @@ fn collect_est_axes(cells: &[MatrixCell]) -> Option<crate::est_experiment::confi
     if !any {
         return None;
     }
-    Some(crate::est_experiment::config::EstSweepAxes {
+    Some(EstSweepAxes {
         endangered_thresholds: e.into_iter().collect(),
         k_beams: k.into_iter().collect(),
         branching_factors: b.into_iter().collect(),
     })
 }
 
-fn collect_hap_axes(cells: &[MatrixCell]) -> Option<crate::est_experiment::config::HapSweepAxes> {
+fn collect_hap_axes(cells: &[MatrixCell]) -> Option<HapSweepAxes> {
     let mut iotas = std::collections::BTreeSet::new();
     let mut rhos = std::collections::BTreeSet::new();
     let mut pops = std::collections::BTreeSet::new();
@@ -273,7 +291,7 @@ fn collect_hap_axes(cells: &[MatrixCell]) -> Option<crate::est_experiment::confi
     if !any {
         return None;
     }
-    Some(crate::est_experiment::config::HapSweepAxes {
+    Some(HapSweepAxes {
         iota_max_values: iotas.into_iter().collect(),
         rho_values: rhos.into_iter().collect(),
         population_sizes: pops.into_iter().collect(),
@@ -283,6 +301,10 @@ fn collect_hap_axes(cells: &[MatrixCell]) -> Option<crate::est_experiment::confi
     })
 }
 
+/// Attempts to recompute metrics from a written schedule JSON.
+///
+/// Returns `None` if the file doesn't exist, the problem is unavailable, or
+/// the horizon cannot be determined.
 fn recompute_metrics(
     schedule_path: &Path,
     problem: Option<&SchedulingProblem>,
@@ -294,7 +316,8 @@ fn recompute_metrics(
     let value: serde_json::Value = serde_json::from_str(&text).ok()?;
 
     let mut schedule = Schedule::new();
-    // 1. ScheduleOutput shape: tasks annotated inside scheduling_blocks.
+
+    // ScheduleOutput shape: tasks annotated inside scheduling_blocks.
     let blocks = value
         .get("scheduling_blocks")
         .and_then(serde_json::Value::as_array)
@@ -328,8 +351,8 @@ fn recompute_metrics(
             }
         }
     }
-    // 2. Fallback: explicit `schedule.placements` array — built manually
-    // since `TaskPlacement` doesn't currently implement Deserialize.
+
+    // Fallback: explicit `schedule.placements` array.
     if schedule.is_empty()
         && let Some(arr) = value
             .get("schedule")
@@ -358,6 +381,8 @@ fn recompute_metrics(
     ))
 }
 
+/// Returns a zeroed [`ScheduleMetrics`] used as a fallback when recomputation
+/// is not possible.
 fn zero_metrics() -> ScheduleMetrics {
     use scheduler::metrics::{FragmentationStats, PriorityStats, RankingWeights, ResourceMetrics};
     ScheduleMetrics {
@@ -377,8 +402,7 @@ fn zero_metrics() -> ScheduleMetrics {
     }
 }
 
-#[allow(dead_code)]
-fn _unused_anchor() {}
+// ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
@@ -422,7 +446,6 @@ mod tests {
             serde_json::to_string_pretty(&manifest).unwrap(),
         )
         .unwrap();
-        // Tiny dummy schedule files so copy() succeeds.
         let dummy = serde_json::json!({"schedule": {"placements": []}, "metadata": null});
         fs::write(
             run_dir.join("schedules/e1-k1-b1.json"),
@@ -445,7 +468,6 @@ mod tests {
         let summary = migrate(&legacy, Some(&out)).expect("migrate ok");
         assert_eq!(summary.cells_migrated, 2);
         assert!(summary.run_dir.join("experiment.json").exists());
-        assert!(summary.run_dir.join("summary.csv").exists());
         let metrics_dir = summary.run_dir.join("metrics");
         let count = fs::read_dir(&metrics_dir).unwrap().count();
         assert_eq!(count, 2);

@@ -1,64 +1,94 @@
-//! Experiment-matrix specification types.
+//! Experiment specification for the matrix runner.
 //!
-//! An [`ExperimentSpec`] is a JSON document declaring a matrix of
+//! An [`ExperimentSpec`] is a JSON document that declares a matrix of
 //! `(dataset × algorithm × per-algorithm sweep)` cells. The runner takes the
-//! cartesian product and produces one [`crate::cell::MatrixCell`] per
+//! Cartesian product and produces one [`crate::cell::MatrixCell`] per
 //! combination.
+//!
+//! # Spec format
+//!
+//! ```json
+//! {
+//!   "name": "paper-sweep",
+//!   "datasets": [
+//!     { "id": "ctao_n", "path": "data/ctao_n.json" },
+//!     { "id": "ctao_s", "path": "data/ctao_s.json",
+//!       "horizon_override": { "start_mjd": 60000.0, "end_mjd": 60001.0 } }
+//!   ],
+//!   "algorithms": [
+//!     { "kind": "est", "axes": { "k_beams": [1, 4], "branching_factors": [1, 2] } },
+//!     { "kind": "hap", "axes": { "iota_max_values": [64, 128], "seeds": [0, 1] } }
+//!   ],
+//!   "ranking": { "completion": 2.0, "priority": 1.0 },
+//!   "max_parallel": 4,
+//!   "output_dir": "out/paper"
+//! }
+//! ```
 
 use scheduler::metrics::RankingWeights;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-use crate::est_experiment::config::{EstSweepAxes, HapSweepAxes, HorizonOverride};
+use crate::config::{EstSweepAxes, HapSweepAxes, HorizonOverride};
 
 /// Top-level experiment specification, typically loaded from a JSON file.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExperimentSpec {
+    /// Human-readable experiment name; used as a directory component under
+    /// `output_dir` (slugified).
     pub name: String,
+    /// Ordered list of input datasets to sweep over.
     pub datasets: Vec<DatasetEntry>,
+    /// Per-algorithm sweep blocks.
     pub algorithms: Vec<AlgorithmSweep>,
+    /// Optional composite-score ranking weights for metrics output.
     #[serde(default)]
     pub ranking: Option<RankingWeightsSpec>,
-    #[serde(default = "default_emit_trace")]
-    pub emit_trace: bool,
+    /// Maximum number of cells to execute concurrently.
+    /// Defaults to the number of logical CPU cores when absent.
     #[serde(default)]
     pub max_parallel: Option<usize>,
+    /// Root directory for all output artifacts.
     pub output_dir: PathBuf,
 }
 
-fn default_emit_trace() -> bool {
-    true
-}
-
-/// A single input dataset to sweep over.
+/// A single input dataset entry in an experiment spec.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DatasetEntry {
-    /// Filesystem-safe slug, used as a component of `cell_id`.
+    /// Filesystem-safe slug used as the first component of `cell_id`.
+    /// Must consist only of ASCII alphanumeric characters, `_`, or `-`.
     pub id: String,
-    /// Path to the scheduling-problem JSON. May be absolute or relative to
-    /// the spec file.
+    /// Path to the scheduling-problem JSON.
+    /// May be absolute or relative to the spec file.
     pub path: PathBuf,
+    /// Optional human-readable label embedded in schedule metadata.
     #[serde(default)]
     pub label: Option<String>,
+    /// Optional horizon override for this dataset.
     #[serde(default)]
     pub horizon_override: Option<HorizonOverride>,
 }
 
-/// Per-algorithm sweep block.
+/// Per-algorithm sweep block, tagged by `kind`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum AlgorithmSweep {
+    /// EST sweep block.
     Est {
+        /// Parameter axes to expand.
         #[serde(default)]
         axes: EstSweepAxes,
     },
+    /// HAP sweep block.
     Hap {
+        /// Parameter axes to expand.
         #[serde(default)]
         axes: HapSweepAxes,
     },
 }
 
 impl AlgorithmSweep {
+    /// Returns `"est"` or `"hap"`.
     pub const fn algorithm(&self) -> &'static str {
         match self {
             Self::Est { .. } => "est",
@@ -67,19 +97,23 @@ impl AlgorithmSweep {
     }
 }
 
-/// Serializable mirror of [`scheduler::metrics::RankingWeights`].
+/// Serialisable mirror of [`scheduler::metrics::RankingWeights`].
 ///
-/// Re-declared here so the spec can use `#[serde(default)]` on fields and
-/// remain forward-compatible with new ranking terms added to the metrics
+/// Redeclared here so the spec can use `#[serde(default)]` on each field and
+/// remain forward-compatible when new ranking terms are added to the metrics
 /// crate.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct RankingWeightsSpec {
+    /// Weight for the task-completion ratio term (default: 1.0).
     #[serde(default = "one")]
     pub completion: f64,
+    /// Weight for the priority satisfaction term (default: 1.0).
     #[serde(default = "one")]
     pub priority: f64,
+    /// Weight for the time-utilisation term (default: 1.0).
     #[serde(default = "one")]
     pub utilization: f64,
+    /// Weight for the fragmentation penalty term (default: 1.0).
     #[serde(default = "one")]
     pub fragmentation: f64,
 }
@@ -110,6 +144,8 @@ impl From<RankingWeights> for RankingWeightsSpec {
     }
 }
 
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -127,7 +163,6 @@ mod tests {
                 { "kind": "hap", "axes": { "iota_max_values": [64], "rho_values": [2] } }
             ],
             "ranking": { "completion": 2.0, "priority": 1.0, "utilization": 1.0, "fragmentation": 0.5 },
-            "emit_trace": false,
             "max_parallel": 4,
             "output_dir": "out/demo"
         }"#
@@ -144,7 +179,6 @@ mod tests {
         assert_eq!(spec.algorithms[1].algorithm(), "hap");
         let weights: RankingWeights = spec.ranking.unwrap().into();
         assert_eq!(weights.completion, 2.0);
-        assert!(!spec.emit_trace);
         assert_eq!(spec.max_parallel, Some(4));
     }
 
@@ -160,10 +194,7 @@ mod tests {
 
     #[test]
     fn ranking_defaults_to_ones_when_field_missing() {
-        let json = r#"{
-            "completion": 2.0,
-            "priority": 0.0
-        }"#;
+        let json = r#"{ "completion": 2.0, "priority": 0.0 }"#;
         let r: RankingWeightsSpec = serde_json::from_str(json).expect("parse");
         assert_eq!(r.completion, 2.0);
         assert_eq!(r.priority, 0.0);

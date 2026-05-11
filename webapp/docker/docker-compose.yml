@@ -57,6 +57,7 @@ services:
       # without doubling the memory footprint.
       BULK_IMPORT_CONCURRENCY: ${BULK_IMPORT_CONCURRENCY:-1}
       PHD_EXPERIMENTS_DIR: /data/experiments
+      PHD_WORKSPACES_DIR: /data/workspaces
     ports:
       - "${BACKEND_PORT:-8080}:8080"
     # Bulk-import scratch memory is dominated by the parsed schedule_json
@@ -66,6 +67,7 @@ services:
     # (exit code 137) that abort an entire upload batch.
     volumes:
       - experiments_data:/data/experiments
+      - workspaces_data:/data/workspaces
     mem_limit: 4g
     mem_reservation: 512m
     cpus: 2
@@ -94,3 +96,4 @@ services:
 volumes:
   postgres_data:
   experiments_data:
+  workspaces_data:

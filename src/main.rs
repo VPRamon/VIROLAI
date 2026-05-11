@@ -596,6 +596,8 @@ fn build_schedule_metadata(
         algorithm_config,
         location: Some(location),
         period: Some(period),
+        dataset_id: None,
+        dataset_label: None,
     }
 }
 

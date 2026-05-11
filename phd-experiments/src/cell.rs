@@ -1,42 +1,73 @@
-//! Cell expansion: turn an [`ExperimentSpec`] into a flat `Vec<MatrixCell>`.
+//! Matrix cell expansion.
+//!
+//! [`resolve_cells`] takes an [`ExperimentSpec`] and returns the flat list of
+//! [`MatrixCell`] values that represent the full Cartesian product of
+//! `(dataset × algorithm × configuration)`.
+//!
+//! # Deduplication and ordering
+//!
+//! Within an algorithm's sweep, configurations are collected into a
+//! [`BTreeSet`](std::collections::BTreeSet) so duplicates are silently dropped
+//! and the order is deterministic across runs. Across algorithms the order
+//! follows the spec's `algorithms` list. The outermost dimension is the
+//! spec's `datasets` list order.
+//!
+//! # Cell ID format
+//!
+//! ```text
+//! <dataset_id>__<algorithm>__<config_slug>
+//! ```
+//!
+//! e.g. `ctao_n__est__e1-k4-b2` or `ctao_s__hap__hap-i128-r3-p4-elitist4-s0`.
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
-use crate::est_experiment::config::{
+use crate::config::{
     EstRunConfig, EstSweepAxes, HapRunConfig, HapSweepAxes, HorizonOverride, RunConfig,
 };
 use crate::spec::{AlgorithmSweep, DatasetEntry, ExperimentSpec};
 
-/// One fully-resolved unit of work.
+/// One fully-resolved unit of work in the experiment matrix.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MatrixCell {
-    /// Deterministic, filesystem-safe slug uniquely identifying the cell.
+    /// Deterministic, filesystem-safe slug that uniquely identifies this cell.
     pub cell_id: String,
+    /// Dataset slug (matches `DatasetEntry::id`).
     pub dataset_id: String,
+    /// Path to the scheduling-problem JSON for this cell.
     pub dataset_path: PathBuf,
+    /// Optional human-readable dataset label embedded in schedule metadata.
     #[serde(default)]
     pub dataset_label: Option<String>,
+    /// Optional horizon override inherited from the dataset entry.
     #[serde(default)]
     pub horizon_override: Option<HorizonOverride>,
+    /// Algorithm name (`"est"` or `"hap"`).
     pub algorithm: String,
+    /// Fully resolved scheduler configuration for this cell.
     pub run_config: RunConfig,
 }
 
 impl MatrixCell {
+    /// Returns the configuration slug portion of the cell ID.
     #[allow(dead_code)]
     pub fn config_slug(&self) -> String {
         self.run_config.slug()
     }
 }
 
-/// Resolve the full cartesian product of (dataset × algorithm × config).
+// ── Public API ────────────────────────────────────────────────────────────────
+
+/// Resolves the full Cartesian product of `(dataset × algorithm × config)`.
 ///
-/// Empty axes fall back to that algorithm's default singleton, mirroring
-/// the `est_experiment` semantics. Within an algorithm, configs are
-/// deduplicated and sorted; across algorithms they appear in the order the
-/// spec listed them; the outermost dimension is dataset order.
+/// Returns an error if:
+/// - `spec.datasets` is empty
+/// - `spec.algorithms` is empty
+/// - A dataset ID is invalid (not alphanumeric / `_` / `-`)
+/// - An algorithm sweep produces zero configurations
+/// - Two different cells would map to the same `cell_id`
 pub fn resolve_cells(spec: &ExperimentSpec) -> Result<Vec<MatrixCell>, String> {
     if spec.datasets.is_empty() {
         return Err("experiment spec must declare at least one dataset".to_string());
@@ -65,6 +96,7 @@ pub fn resolve_cells(spec: &ExperimentSpec) -> Result<Vec<MatrixCell>, String> {
         }
     }
 
+    // Detect cell ID collisions (should only occur on pathological specs).
     let mut seen = std::collections::HashSet::new();
     for cell in &cells {
         if !seen.insert(cell.cell_id.clone()) {
@@ -77,6 +109,8 @@ pub fn resolve_cells(spec: &ExperimentSpec) -> Result<Vec<MatrixCell>, String> {
 
     Ok(cells)
 }
+
+// ── Internal helpers ──────────────────────────────────────────────────────────
 
 fn validate_dataset(d: &DatasetEntry) -> Result<(), String> {
     if d.id.is_empty() {
@@ -165,6 +199,8 @@ fn insert_hap_configs(axes: &HapSweepAxes, set: &mut BTreeSet<RunConfig>) {
     }
 }
 
+/// Returns `values` when non-empty, otherwise a single-element vec containing
+/// `default`.
 fn pick_or_default<T: Copy>(values: &[T], default: T) -> Vec<T> {
     if values.is_empty() {
         vec![default]
@@ -180,10 +216,12 @@ fn validate_config(cfg: RunConfig) -> Result<(), String> {
     }
 }
 
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::est_experiment::config::HapSurvivorMode;
+    use crate::config::HapSurvivorMode;
     use crate::spec::ExperimentSpec;
     use std::path::PathBuf;
 
@@ -224,7 +262,6 @@ mod tests {
                 },
             ],
             ranking: None,
-            emit_trace: true,
             max_parallel: None,
             output_dir: PathBuf::from("out"),
         }

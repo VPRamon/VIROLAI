@@ -2,10 +2,10 @@
 //!
 //! Phase 1 (foundation) responsibilities:
 //! - `phd run` / `phd matrix` / `phd dataset adapt` — dispatch to the
-//!   existing sibling binaries (`scheduler`, `experiment_matrix`,
+//!   existing sibling binaries (`scheduler`, `phd-experiments`,
 //!   `ctao_adapter`) so users only need to remember one entry point.
 //! - `phd manifest create` — walk a `run-<ts>/` directory produced by
-//!   `experiment_matrix` and emit per-cell `manifest.json` files plus a
+//!   `phd-experiments` and emit per-cell `manifest.json` files plus a
 //!   batch index (`manifest-batch.json`) under
 //!   `<run-dir>/cells/<cell_id>/manifest.json`.
 //! - `phd manifest validate` — load a manifest and run the structural
@@ -27,6 +27,7 @@ use scheduler::metrics::ScheduleMetrics;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
@@ -57,15 +58,34 @@ enum Cmd {
         /// Forwarded as-is to the `scheduler` binary.
         args: Vec<String>,
     },
-    /// Run a sweep / matrix experiment (delegates to `experiment_matrix`).
+    /// Run a sweep / matrix experiment (delegates to `phd-experiments`).
     #[command(
         disable_help_flag = true,
         allow_hyphen_values = true,
         trailing_var_arg = true
     )]
     Matrix {
-        /// Forwarded as-is to the `experiment_matrix` binary.
+        /// Forwarded as-is to the `phd-experiments` binary.
         args: Vec<String>,
+    },
+    /// Run a sweep and collect flat results — a clean alternative to `phd matrix`.
+    ///
+    /// Executes the experiment defined in SPEC, writes one self-contained
+    /// schedule JSON per cell to OUT (flat, no subdirectories), and optionally
+    /// emits a companion `<cell_id>.manifest.json` next to each schedule.
+    Sweep {
+        /// Path to the experiment spec JSON (same format as `phd matrix --spec`).
+        #[arg(long, value_name = "FILE")]
+        spec: PathBuf,
+        /// Output directory (created if absent). Schedule files land here flat.
+        #[arg(long, value_name = "DIR")]
+        out: PathBuf,
+        /// Also write `<cell_id>.manifest.json` next to each schedule.
+        #[arg(long)]
+        manifest: bool,
+        /// Override parallelism (threads). Defaults to spec's `max_parallel`.
+        #[arg(long, value_name = "N")]
+        parallel: Option<usize>,
     },
     /// Dataset utilities.
     Dataset {
@@ -94,15 +114,25 @@ enum DatasetCmd {
 
 #[derive(Subcommand, Debug)]
 enum ManifestCmd {
-    /// Build per-cell manifests from an `experiment_matrix` run directory.
+    /// Build manifest(s) from a `phd-experiments` run directory or a single schedule JSON.
+    ///
+    /// Use `--run <DIR>` to build manifests for all cells in an experiment run, or
+    /// `--schedule <FILE>` to build a manifest from a single self-contained schedule JSON.
     Create {
-        /// Path to the `run-<ts>/` directory produced by `phd matrix`.
-        #[arg(long, value_name = "DIR")]
-        run: PathBuf,
-        /// Optional output directory (defaults to `<run>/cells`).
-        #[arg(long, value_name = "DIR")]
+        /// Path to the `run-<ts>/` directory produced by `phd matrix` or `phd sweep`.
+        /// Conflicts with `--schedule`.
+        #[arg(long, value_name = "DIR", conflicts_with = "schedule")]
+        run: Option<PathBuf>,
+        /// Path to a single schedule JSON (must contain embedded `schedule_metadata` and
+        /// `schedule_metrics`). Conflicts with `--run`.
+        #[arg(long, value_name = "FILE", conflicts_with = "run")]
+        schedule: Option<PathBuf>,
+        /// Optional output path.
+        ///  - With `--run`:      output directory (defaults to `<run>/cells`).
+        ///  - With `--schedule`: output file (defaults to stdout).
+        #[arg(long, value_name = "PATH")]
         out: Option<PathBuf>,
-        /// Skip cells whose manifest already exists.
+        /// Skip cells whose manifest already exists (only applies with `--run`).
         #[arg(long)]
         skip_existing: bool,
     },
@@ -155,7 +185,13 @@ fn main() -> ExitCode {
 fn dispatch(cmd: Cmd) -> Result<ExitCode, String> {
     match cmd {
         Cmd::Run { args } => exec_sibling("scheduler", &args),
-        Cmd::Matrix { args } => exec_sibling("experiment_matrix", &args),
+        Cmd::Matrix { args } => exec_sibling("phd-experiments", &args),
+        Cmd::Sweep {
+            spec,
+            out,
+            manifest,
+            parallel,
+        } => sweep(&spec, &out, manifest, parallel),
         Cmd::Dataset {
             cmd: DatasetCmd::Adapt { args },
         } => exec_sibling("ctao_adapter", &args),
@@ -163,10 +199,15 @@ fn dispatch(cmd: Cmd) -> Result<ExitCode, String> {
             cmd:
                 ManifestCmd::Create {
                     run,
+                    schedule,
                     out,
                     skip_existing,
                 },
-        } => manifest_create(&run, out.as_deref(), skip_existing),
+        } => match (run, schedule) {
+            (Some(run_dir), None) => manifest_create(&run_dir, out.as_deref(), skip_existing),
+            (None, Some(sched_file)) => manifest_create_from_schedule(&sched_file, out.as_deref()),
+            _ => Err("phd manifest create: specify exactly one of --run or --schedule".to_string()),
+        },
         Cmd::Manifest {
             cmd: ManifestCmd::Validate { path },
         } => manifest_validate(&path),
@@ -209,6 +250,204 @@ fn locate_sibling(name: &str) -> PathBuf {
         }
     }
     PathBuf::from(name)
+}
+
+// ---------------------------------------------------------------------------
+// `phd sweep`
+// ---------------------------------------------------------------------------
+
+fn sweep(
+    spec_path: &Path,
+    out_dir: &Path,
+    emit_manifest: bool,
+    parallel_override: Option<usize>,
+) -> Result<ExitCode, String> {
+    if !spec_path.is_file() {
+        return Err(format!("spec file `{}` not found", spec_path.display()));
+    }
+
+    // Build a temp output dir for the phd-experiments run.
+    let tmp = tempfile::TempDir::new().map_err(|e| format!("failed to create temp dir: {e}"))?;
+    let tmp_out = tmp.path().join("sweep_run");
+    fs::create_dir_all(&tmp_out).map_err(|e| format!("failed to create temp output dir: {e}"))?;
+
+    let spec_for_run: PathBuf =
+        patch_spec_for_run(spec_path, tmp.path(), &tmp_out, parallel_override)?;
+
+    // Run phd-experiments.
+    let status = Command::new(locate_sibling("phd-experiments"))
+        .arg("run")
+        .arg("--spec")
+        .arg(&spec_for_run)
+        .status()
+        .map_err(|e| format!("failed to spawn phd-experiments: {e}"))?;
+    if !status.success() {
+        return Err("phd-experiments run failed".to_string());
+    }
+
+    // Find the single run-<ts> directory phd-experiments created.
+    let run_dir = find_single_run_dir(&tmp_out)
+        .ok_or_else(|| format!("could not locate run dir under {}", tmp_out.display()))?;
+
+    // Ensure the flat output directory exists.
+    fs::create_dir_all(out_dir)
+        .map_err(|e| format!("failed to create output dir {}: {e}", out_dir.display()))?;
+
+    // Read the experiment manifest for manifest generation.
+    let exp_path = run_dir.join("experiment.json");
+    let exp_text = fs::read_to_string(&exp_path)
+        .map_err(|e| format!("failed to read experiment.json: {e}"))?;
+    let exp: ExperimentManifestFile = serde_json::from_str(&exp_text)
+        .map_err(|e| format!("failed to parse experiment.json: {e}"))?;
+    let dataset_lookup: std::collections::HashMap<&str, &DatasetSpecLite> = exp
+        .spec
+        .datasets
+        .iter()
+        .map(|d| (d.id.as_str(), d))
+        .collect();
+    let now = current_rfc3339();
+    let run_id = run_dir
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("run")
+        .to_string();
+
+    // Flatten: copy schedules to out_dir, optionally write manifests.
+    let schedules_dir = run_dir.join("schedules");
+    let mut copied = 0usize;
+    let mut manifests_written = 0usize;
+
+    for cell in &exp.cells {
+        let src = schedules_dir.join(format!("{}.json", cell.cell_id));
+        if !src.exists() {
+            eprintln!("phd sweep: warning: missing schedule for {}", cell.cell_id);
+            continue;
+        }
+        let dst = out_dir.join(format!("{}.json", cell.cell_id));
+        fs::copy(&src, &dst)
+            .map_err(|e| format!("failed to copy {} -> {}: {e}", src.display(), dst.display()))?;
+        copied += 1;
+
+        if emit_manifest {
+            match build_cell_manifest(
+                &run_dir,
+                &exp.spec.name,
+                &run_id,
+                &now,
+                &dataset_lookup,
+                cell,
+            ) {
+                Ok(m) => {
+                    let manifest_path = out_dir.join(format!("{}.manifest.json", cell.cell_id));
+                    let text = serde_json::to_string_pretty(&m)
+                        .map_err(|e| format!("failed to serialize manifest: {e}"))?;
+                    fs::write(&manifest_path, &text)
+                        .map_err(|e| format!("failed to write {}: {e}", manifest_path.display()))?;
+                    manifests_written += 1;
+                }
+                Err(e) => {
+                    eprintln!(
+                        "phd sweep: warning: manifest for `{}` failed: {e}",
+                        cell.cell_id
+                    );
+                }
+            }
+        }
+    }
+
+    println!(
+        "phd sweep: {} schedule(s) written to {}{}",
+        copied,
+        out_dir.display(),
+        if emit_manifest {
+            format!(" + {manifests_written} manifest(s)")
+        } else {
+            String::new()
+        }
+    );
+    Ok(ExitCode::SUCCESS)
+}
+
+fn patch_spec_for_run(
+    spec_path: &Path,
+    tmp_dir: &Path,
+    tmp_out: &Path,
+    parallel_override: Option<usize>,
+) -> Result<PathBuf, String> {
+    let text = fs::read_to_string(spec_path).map_err(|e| format!("failed to read spec: {e}"))?;
+    let mut v: serde_json::Value =
+        serde_json::from_str(&text).map_err(|e| format!("failed to parse spec: {e}"))?;
+    if let Some(obj) = v.as_object_mut() {
+        if let Some(n) = parallel_override {
+            obj.insert("max_parallel".to_string(), serde_json::json!(n));
+        }
+        obj.insert("output_dir".to_string(), serde_json::json!(tmp_out));
+        let base = spec_path.parent().unwrap_or_else(|| Path::new("."));
+        resolve_dataset_paths(obj, base);
+    }
+
+    let patched_path = tmp_dir.join("spec_patched.json");
+    let mut f = fs::File::create(&patched_path)
+        .map_err(|e| format!("failed to write patched spec: {e}"))?;
+    let patched = serde_json::to_string_pretty(&v)
+        .map_err(|e| format!("failed to serialize patched spec: {e}"))?;
+    f.write_all(patched.as_bytes())
+        .map_err(|e| format!("failed to write patched spec: {e}"))?;
+    Ok(patched_path)
+}
+
+fn resolve_dataset_paths(obj: &mut serde_json::Map<String, serde_json::Value>, base: &Path) {
+    if let Some(serde_json::Value::Array(datasets)) = obj.get_mut("datasets") {
+        for dataset in datasets.iter_mut() {
+            if let Some(dataset_obj) = dataset.as_object_mut()
+                && let Some(serde_json::Value::String(path_str)) = dataset_obj.get_mut("path")
+            {
+                let path = Path::new(path_str);
+                if path.is_absolute() {
+                    continue;
+                }
+                let resolved = resolve_relative(base, path);
+                *path_str = resolved.to_string_lossy().into_owned();
+            }
+        }
+    }
+}
+
+fn resolve_relative(base: &Path, path: &Path) -> PathBuf {
+    if path.is_absolute() {
+        return path.to_path_buf();
+    }
+    let candidate = base.join(path);
+    if candidate.exists() {
+        return candidate;
+    }
+    if path.exists() {
+        return path.to_path_buf();
+    }
+    candidate
+}
+
+/// Find the single `run-<ts>/` directory inside `<out>/<exp_slug>/`.
+fn find_single_run_dir(tmp_out: &Path) -> Option<PathBuf> {
+    // phd-experiments creates <tmp_out>/<exp_slug>/run-<ts>/
+    let exp_dirs: Vec<PathBuf> = fs::read_dir(tmp_out)
+        .ok()?
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.is_dir())
+        .collect();
+    for exp_dir in &exp_dirs {
+        let run_dirs: Vec<PathBuf> = fs::read_dir(exp_dir)
+            .ok()?
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.is_dir())
+            .collect();
+        if let Some(run_dir) = run_dirs.into_iter().next() {
+            return Some(run_dir);
+        }
+    }
+    None
 }
 
 // ---------------------------------------------------------------------------
@@ -355,6 +594,144 @@ fn manifest_create(
     } else {
         Ok(ExitCode::SUCCESS)
     }
+}
+
+// ---------------------------------------------------------------------------
+// `phd manifest create --schedule`
+// ---------------------------------------------------------------------------
+
+fn manifest_create_from_schedule(
+    schedule_path: &Path,
+    out: Option<&Path>,
+) -> Result<ExitCode, String> {
+    let text = fs::read_to_string(schedule_path)
+        .map_err(|e| format!("failed to read {}: {e}", schedule_path.display()))?;
+    let doc: serde_json::Value = serde_json::from_str(&text)
+        .map_err(|e| format!("failed to parse {}: {e}", schedule_path.display()))?;
+
+    // Extract schedule_metadata.
+    let meta = doc
+        .get("schedule_metadata")
+        .ok_or_else(|| "schedule JSON has no `schedule_metadata` field — run with `phd sweep --manifest` or `phd matrix` first".to_string())?;
+
+    let algorithm = meta
+        .get("algorithm")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown")
+        .to_string();
+    let algorithm_config = meta
+        .get("algorithm_config")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    let dataset_id = meta
+        .get("dataset_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown")
+        .to_string();
+    let dataset_label = meta
+        .get("dataset_label")
+        .and_then(|v| v.as_str())
+        .unwrap_or(&dataset_id)
+        .to_string();
+
+    let (start_mjd, end_mjd) = if let Some(period) = meta.get("period") {
+        let s = period
+            .get("start_mjd_utc")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0);
+        let e = period
+            .get("end_mjd_utc")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0);
+        (s, e)
+    } else {
+        (0.0, 0.0)
+    };
+
+    // Extract schedule_metrics.
+    let metrics: ScheduleMetrics = if let Some(m) = doc.get("schedule_metrics") {
+        serde_json::from_value(m.clone())
+            .map_err(|e| format!("failed to parse `schedule_metrics`: {e}"))?
+    } else {
+        return Err("schedule JSON has no `schedule_metrics` field — rebuild schedule with `phd sweep` or `phd matrix` (recent version)".to_string());
+    };
+
+    let now = current_rfc3339();
+    let schedule_sha = sha256_of(schedule_path).unwrap_or_else(|_| "0".repeat(64));
+    let schedule_size = fs::metadata(schedule_path).map(|m| m.len()).unwrap_or(0);
+
+    let manifest = Manifest {
+        manifest_schema_version: scheduler::manifest::MANIFEST_SCHEMA_VERSION.to_string(),
+        manifest_id: uuid::Uuid::new_v4().to_string(),
+        created_at: now.clone(),
+        producer: Producer {
+            name: "phd".to_string(),
+            version: PHD_VERSION.to_string(),
+            git_sha: GIT_SHA.map(str::to_string),
+            host: hostname(),
+        },
+        dataset: DatasetRef {
+            id: dataset_id,
+            name: dataset_label,
+            source_path: String::new(),
+            sha256: String::new(),
+            schema_version: "scheduling_problem/1".to_string(),
+        },
+        algorithm: AlgorithmRef {
+            id: algorithm.clone(),
+            label: algorithm.to_uppercase(),
+            version: PHD_VERSION.to_string(),
+            config: algorithm_config,
+        },
+        run: RunInfo {
+            run_id: "standalone".to_string(),
+            kind: RunKind::MatrixCell,
+            started_at: now.clone(),
+            finished_at: now.clone(),
+            status: RunStatus::Completed,
+            exit_code: 0,
+        },
+        horizon: Horizon {
+            start_mjd_utc: start_mjd,
+            end_mjd_utc: end_mjd,
+        },
+        metrics,
+        artifacts: scheduler::manifest::Artifacts {
+            schedule: Some(ArtifactRef {
+                uri: file_uri(schedule_path),
+                size_bytes: schedule_size,
+                sha256: schedule_sha,
+                media_type: "application/json".to_string(),
+            }),
+            trace: None,
+            problem: None,
+        },
+        links: scheduler::manifest::Links::default(),
+        provenance: Provenance {
+            matrix_run_id: None,
+            cell_id: None,
+            parent_manifest: None,
+            repo_root: None,
+            cli_args: std::env::args().collect(),
+        },
+        validation: ValidationReport {
+            status: ValidationStatus::Valid,
+            issues: Vec::new(),
+        },
+        extensions: serde_json::Value::Null,
+    };
+
+    let serialized = serde_json::to_string_pretty(&manifest)
+        .map_err(|e| format!("failed to serialize manifest: {e}"))?;
+
+    if let Some(out_path) = out {
+        fs::write(out_path, &serialized)
+            .map_err(|e| format!("failed to write {}: {e}", out_path.display()))?;
+        println!("phd manifest create: → {}", out_path.display());
+    } else {
+        println!("{serialized}");
+    }
+    Ok(ExitCode::SUCCESS)
 }
 
 fn build_cell_manifest(

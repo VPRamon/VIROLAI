@@ -1,14 +1,13 @@
 //! Performance regression tests for scheduling algorithms.
 //!
-//! These tests run the `experiment_matrix` binary against the archived local
+//! These tests run the `phd-experiments` binary against the archived local
 //! datasets and compare `ScheduleMetrics` values against committed golden
 //! baselines. A regression failure means a key metric moved outside the
 //! recorded tolerance band.
 //!
 //! # Fast vs slow tests
 //!
-//! All tests use a **10-day horizon override** (configured in
-//! `tests/perf_fixtures/perf_matrix.spec.json`) so each EST cell finishes
+//! All tests use a **10-day horizon override** so each EST cell finishes
 //! in well under a second. HAP cells are more expensive (~20-60 s each) and
 //! are therefore annotated with `#[ignore]`; run them explicitly with:
 //!
@@ -41,16 +40,27 @@ use std::process::Command;
 use std::sync::OnceLock;
 use tempfile::TempDir;
 
-const BIN: &str = env!("CARGO_BIN_EXE_experiment_matrix");
+const BIN: &str = env!("CARGO_BIN_EXE_phd-experiments");
 
-// ─── Spec paths ────────────────────────────────────────────────────────────
+// ─── Path helpers ──────────────────────────────────────────────────────────
 
+/// Root of the PhD repository.
+///
+/// `CARGO_MANIFEST_DIR` is `phd-experiments/`, so the repository root is one
+/// level up.
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("phd-experiments must be inside the repo root")
+        .to_path_buf()
 }
 
+/// Location of the golden baselines and spec fixtures bundled with this test
+/// crate.
 fn fixtures_dir() -> PathBuf {
-    repo_root().join("tests").join("perf_fixtures")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("perf_fixtures")
 }
 
 fn golden_dir() -> PathBuf {
@@ -187,15 +197,15 @@ fn run_spec(spec_template: &str) -> RunResult {
     std::fs::write(&spec_path, &spec_json).expect("failed to write spec");
 
     let output = Command::new(BIN)
-        .args(["--spec", spec_path.to_str().unwrap()])
+        .args(["run", "--spec", spec_path.to_str().unwrap()])
         .env("RUST_LOG", "error")
         .output()
-        .expect("failed to spawn experiment_matrix");
+        .expect("failed to spawn phd-experiments");
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         panic!(
-            "experiment_matrix failed (exit {:?}):\n{stderr}",
+            "phd-experiments failed (exit {:?}):\n{stderr}",
             output.status.code()
         );
     }
@@ -263,54 +273,6 @@ fn dataset_present(dataset_id: &str) -> bool {
 }
 
 /// Assert that `actual` is within the golden tolerance of `expected`.
-fn check_metric_rel(label: &str, expected: f64, actual: f64, rel: f64, failures: &mut Vec<String>) {
-    if expected == 0.0 {
-        if actual.abs() > 1e-9 {
-            failures.push(format!("  {label}: expected 0.0, got {actual:.6}"));
-        }
-        return;
-    }
-    let deviation = ((actual - expected) / expected).abs();
-    if deviation > rel {
-        failures.push(format!(
-            "  {label}: expected {expected:.6}, got {actual:.6} (deviation {:.1}%, tolerance {:.1}%)",
-            deviation * 100.0,
-            rel * 100.0,
-        ));
-    }
-}
-
-fn check_metric_abs(label: &str, expected: i64, actual: i64, abs: i64, failures: &mut Vec<String>) {
-    let deviation = (actual - expected).unsigned_abs() as i64;
-    if deviation > abs {
-        failures.push(format!(
-            "  {label}: expected {expected}, got {actual} (|deviation| {deviation}, tolerance {abs})"
-        ));
-    }
-}
-
-fn get_f64(v: &Value, path: &[&str]) -> f64 {
-    let mut cur = v;
-    for &key in path {
-        cur = &cur[key];
-    }
-    cur.as_f64()
-        .unwrap_or_else(|| panic!("missing f64 at {path:?}"))
-}
-
-fn get_i64(v: &Value, path: &[&str]) -> i64 {
-    let mut cur = v;
-    for &key in path {
-        cur = &cur[key];
-    }
-    cur.as_i64()
-        .unwrap_or_else(|| panic!("missing i64 at {path:?}"))
-}
-
-/// Compare `actual` metrics JSON against the golden file for `cell_id`.
-///
-/// When `UPDATE_PERF_BASELINES=1` is set the golden file is overwritten
-/// instead of checking.
 fn assert_within_golden(cell_id: &str, actual: &Value) {
     let golden_path = golden_dir().join(format!("{cell_id}.json"));
 
@@ -409,7 +371,53 @@ fn assert_within_golden(cell_id: &str, actual: &Value) {
     }
 }
 
-// ─── Helpers ───────────────────────────────────────────────────────────────
+// ─── Metric helpers ────────────────────────────────────────────────────────
+
+fn check_metric_rel(label: &str, expected: f64, actual: f64, rel: f64, failures: &mut Vec<String>) {
+    if expected == 0.0 {
+        if actual.abs() > 1e-9 {
+            failures.push(format!("  {label}: expected 0.0, got {actual:.6}"));
+        }
+        return;
+    }
+    let deviation = ((actual - expected) / expected).abs();
+    if deviation > rel {
+        failures.push(format!(
+            "  {label}: expected {expected:.6}, got {actual:.6} (deviation {:.1}%, tolerance {:.1}%)",
+            deviation * 100.0,
+            rel * 100.0,
+        ));
+    }
+}
+
+fn check_metric_abs(label: &str, expected: i64, actual: i64, abs: i64, failures: &mut Vec<String>) {
+    let deviation = (actual - expected).unsigned_abs() as i64;
+    if deviation > abs {
+        failures.push(format!(
+            "  {label}: expected {expected}, got {actual} (|deviation| {deviation}, tolerance {abs})"
+        ));
+    }
+}
+
+fn get_f64(v: &Value, path: &[&str]) -> f64 {
+    let mut cur = v;
+    for &key in path {
+        cur = &cur[key];
+    }
+    cur.as_f64()
+        .unwrap_or_else(|| panic!("missing f64 at {path:?}"))
+}
+
+fn get_i64(v: &Value, path: &[&str]) -> i64 {
+    let mut cur = v;
+    for &key in path {
+        cur = &cur[key];
+    }
+    cur.as_i64()
+        .unwrap_or_else(|| panic!("missing i64 at {path:?}"))
+}
+
+// ─── Cell check helpers ────────────────────────────────────────────────────
 
 /// Check a single fast (EST) cell.
 fn check_fast_cell(cell_id: &str, dataset_id: &str) {

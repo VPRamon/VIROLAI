@@ -1,3 +1,17 @@
+//! Run-configuration types for the experiment runner.
+//!
+//! This module provides the fully-resolved, immutable configuration records
+//! for a single scheduler run ([`EstRunConfig`], [`HapRunConfig`], [`RunConfig`])
+//! as well as the sweep-axis descriptors ([`EstSweepAxes`], [`HapSweepAxes`])
+//! used to expand a JSON experiment spec into a list of concrete runs.
+//!
+//! # Design
+//! Every configuration type implements [`Copy`] and derives `Ord` so that a
+//! [`BTreeSet`](std::collections::BTreeSet) naturally deduplicates and sorts the
+//! expanded product.  [`RunConfig::slug`] produces a short, filesystem-safe
+//! string that uniquely identifies each configuration — used as the stem of
+//! schedule output files and as the last component of `cell_id` strings.
+
 use scheduler::scheduler::est::{Configuration as EstConfiguration, EstFomKind, EstScheduler};
 use scheduler::scheduler::fom::ScheduleFom;
 use scheduler::scheduler::hap::{
@@ -7,36 +21,53 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-/// An explicit observing window to substitute for the one detected in the input JSON.
+// ── Horizon override ─────────────────────────────────────────────────────────
+
+/// An explicit observing window (in MJD) that overrides the one detected in
+/// the input JSON's `schedule_time_window`.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct HorizonOverride {
+    /// Start of the observing window (Modified Julian Date, UTC).
     pub start_mjd: f64,
+    /// End of the observing window (Modified Julian Date, UTC).
     pub end_mjd: f64,
 }
 
-/// EST parameter axes to sweep; used by JSON specs and EST CLI flags.
+// ── EST sweep axes ───────────────────────────────────────────────────────────
+
+/// EST parameter axes to sweep.
 ///
-/// Empty axes fall back to EST defaults when building the run list.
+/// Every field is a list of values; the runner takes the Cartesian product.
+/// Empty axes fall back to the single-element default for that parameter.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct EstSweepAxes {
+    /// Values of `endangered_threshold` (ε) to sweep.
     #[serde(default)]
     pub endangered_thresholds: Vec<u32>,
+    /// Values of beam count (k) to sweep.
     #[serde(default)]
     pub k_beams: Vec<usize>,
+    /// Values of branching factor (b) to sweep.
     #[serde(default)]
     pub branching_factors: Vec<usize>,
 }
 
-/// HAP survivor-selection mode used by experiment specs.
+// ── HAP sweep axes ───────────────────────────────────────────────────────────
+
+/// HAP survivor-selection mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HapSurvivorMode {
+    /// Keep the single best individual.
     GreedyOne,
+    /// Elitist top-k: keep the *k* best individuals by composite rank.
     ElitistTopK,
+    /// Pareto front: keep the non-dominated front up to `cap` individuals.
     ParetoFront,
 }
 
 impl HapSurvivorMode {
+    /// Returns the canonical snake-case string representation.
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::GreedyOne => "greedy_one",
@@ -45,6 +76,8 @@ impl HapSurvivorMode {
         }
     }
 
+    /// Converts this mode (with a capacity) into the scheduler's
+    /// [`HapSurvivorSelector`].
     pub fn into_selector(self, cap: usize) -> HapSurvivorSelector {
         match self {
             Self::GreedyOne => HapSurvivorSelector::GreedyOne,
@@ -62,22 +95,31 @@ impl std::fmt::Display for HapSurvivorMode {
 
 /// HAP parameter axes to sweep.
 ///
-/// Empty axes fall back to [`HapRunConfig`] defaults.
+/// Every field is a list of values; the runner takes the Cartesian product.
+/// Empty axes fall back to the single-element default for that parameter.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct HapSweepAxes {
+    /// CRU task-scheduling iteration cap (ι_max).
     #[serde(default)]
     pub iota_max_values: Vec<usize>,
+    /// CRU-S stochastic candidate range (ρ).
     #[serde(default)]
     pub rho_values: Vec<usize>,
+    /// HAP multi-start population size per block.
     #[serde(default)]
     pub population_sizes: Vec<usize>,
+    /// Survivor-selection strategies to test.
     #[serde(default)]
     pub survivor_modes: Vec<HapSurvivorMode>,
+    /// Capacity caps for the selected survivor mode.
     #[serde(default)]
     pub survivor_caps: Vec<usize>,
+    /// Deterministic master RNG seeds.
     #[serde(default)]
     pub seeds: Vec<u64>,
 }
+
+// ── Algorithm sweep block ────────────────────────────────────────────────────
 
 /// Algorithm sweep block from an experiment specification.
 ///
@@ -94,29 +136,37 @@ pub struct HapSweepAxes {
 /// ```
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ExperimentSweep {
+    /// Flattened legacy EST axes (for backward compatibility).
     #[serde(flatten)]
     pub legacy_est: EstSweepAxes,
+    /// New-style per-algorithm EST sweep block.
     #[serde(default)]
     pub est: Option<EstSweepAxes>,
+    /// New-style per-algorithm HAP sweep block.
     #[serde(default)]
     pub hap: Option<HapSweepAxes>,
 }
 
-/// Top-level experiment specification, typically loaded from a JSON file.
+// ── Top-level experiment spec (legacy single-dataset format) ─────────────────
+
+/// Top-level experiment specification for the legacy single-dataset sweep
+/// format (used by the deprecated `est_experiment` binary).
+///
+/// The matrix runner uses [`crate::spec::ExperimentSpec`] instead.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExperimentSpec {
     /// Path to the scheduling-problem JSON (absolute, or relative to the spec file).
     pub input_json: PathBuf,
     /// Directory where all output artifacts will be written.
     pub output_dir: PathBuf,
+    /// Optional horizon override; falls back to the value in the input JSON.
     #[serde(default)]
     pub horizon_override: Option<HorizonOverride>,
-    /// Parameter axes to sweep; defaults to one EST run when omitted.
+    /// Parameter axes to sweep; defaults to a single EST run when omitted.
     #[serde(default)]
     pub sweep: ExperimentSweep,
-    /// When true (default), each EST run also writes
-    /// `<schedule_stem>.est_trace.jsonl` next to the schedule JSON. HAP runs do
-    /// not currently emit trace files.
+    /// When `true` (default), each EST run also writes an `est_trace.jsonl`
+    /// file next to the schedule JSON.
     #[serde(default = "default_emit_trace")]
     pub emit_trace: bool,
 }
@@ -125,12 +175,18 @@ fn default_emit_trace() -> bool {
     true
 }
 
+// ── EST run configuration ────────────────────────────────────────────────────
+
 /// Fully resolved, immutable configuration for a single EST scheduler run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct EstRunConfig {
+    /// Figure-of-merit variant used to rank candidate placements.
     pub fom: EstFomKind,
+    /// Minimum number of competing tasks required to trigger beam splitting.
     pub endangered_threshold: u32,
+    /// Number of parallel beams maintained during the search.
     pub k_beams: usize,
+    /// Maximum branching factor applied at each decision point.
     pub branching_factor: usize,
 }
 
@@ -146,6 +202,7 @@ impl Default for EstRunConfig {
 }
 
 impl EstRunConfig {
+    /// Returns the [`EstConfiguration`] struct expected by the scheduler.
     pub const fn est_config(self) -> EstConfiguration {
         EstConfiguration {
             k_beams: self.k_beams,
@@ -154,12 +211,14 @@ impl EstRunConfig {
         }
     }
 
+    /// Instantiates an [`EstScheduler`] for this configuration.
     pub fn build_scheduler(self) -> Result<EstScheduler<Arc<dyn ScheduleFom>>, String> {
         EstScheduler::with_fom(self.est_config(), self.fom.into_fom())
             .map_err(|e| format!("invalid EST configuration for {}: {e}", self.slug()))
     }
 
-    /// A filesystem-safe string that uniquely encodes all EST configuration axes.
+    /// Returns a short, filesystem-safe string that uniquely encodes all EST
+    /// configuration axes (e.g. `"e2-k5-b3"`).
     pub fn slug(self) -> String {
         format!(
             "e{}-k{}-b{}",
@@ -168,14 +227,22 @@ impl EstRunConfig {
     }
 }
 
+// ── HAP run configuration ────────────────────────────────────────────────────
+
 /// Fully resolved, immutable configuration for one HAP scheduler run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct HapRunConfig {
+    /// CRU task-scheduling iteration cap (ι_max).
     pub iota_max: usize,
+    /// CRU-S stochastic candidate range (ρ).
     pub rho: usize,
+    /// HAP multi-start population size per block.
     pub population_size: usize,
+    /// Survivor-selection strategy.
     pub survivor_mode: HapSurvivorMode,
+    /// Capacity cap for the survivor mode.
     pub survivor_cap: usize,
+    /// Deterministic master RNG seed.
     pub seed: u64,
 }
 
@@ -193,6 +260,8 @@ impl Default for HapRunConfig {
 }
 
 impl HapRunConfig {
+    /// Converts this configuration into the [`PlannerConfig`] expected by the
+    /// HAP scheduler.
     pub fn planner_config(self) -> PlannerConfig {
         PlannerConfig::hap(
             self.iota_max,
@@ -203,6 +272,10 @@ impl HapRunConfig {
         )
     }
 
+    /// Instantiates a [`HapScheduler`] for this configuration.
+    ///
+    /// Returns an error if any parameter is zero (e.g. `iota_max`, `rho`,
+    /// `population_size`, or `survivor_cap`).
     pub fn build_scheduler(self) -> Result<HapScheduler, String> {
         if self.iota_max == 0 {
             return Err(format!(
@@ -231,7 +304,8 @@ impl HapRunConfig {
         Ok(HapScheduler::new(self.planner_config()))
     }
 
-    /// A filesystem-safe string that uniquely encodes all HAP configuration axes.
+    /// Returns a short, filesystem-safe string that uniquely encodes all HAP
+    /// configuration axes (e.g. `"hap-i64-r2-p8-pareto5-s42"`).
     pub fn slug(self) -> String {
         let survivor = match self.survivor_mode {
             HapSurvivorMode::GreedyOne => "greedy1".to_string(),
@@ -245,11 +319,15 @@ impl HapRunConfig {
     }
 }
 
-/// Fully resolved configuration for one scheduler run.
+// ── Unified run configuration ────────────────────────────────────────────────
+
+/// Fully resolved configuration for one scheduler run (EST or HAP).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(tag = "algorithm", rename_all = "snake_case")]
 pub enum RunConfig {
+    /// An EST (Early Start Time beam-search) run.
     Est(EstRunConfig),
+    /// A HAP (Heuristic Assignment Protocol) run.
     Hap(HapRunConfig),
 }
 
@@ -260,6 +338,7 @@ impl Default for RunConfig {
 }
 
 impl RunConfig {
+    /// Returns `"est"` or `"hap"`.
     pub const fn algorithm(self) -> &'static str {
         match self {
             Self::Est(_) => "est",
@@ -267,6 +346,8 @@ impl RunConfig {
         }
     }
 
+    /// Returns the unique configuration slug (see [`EstRunConfig::slug`] and
+    /// [`HapRunConfig::slug`]).
     pub fn slug(self) -> String {
         match self {
             Self::Est(config) => config.slug(),
@@ -274,11 +355,13 @@ impl RunConfig {
         }
     }
 
-    /// Compact filename stem for schedule outputs.
+    /// Returns the compact filename stem used for schedule output files.
     pub fn schedule_file_stem(self) -> String {
         self.slug()
     }
 }
+
+// ── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {

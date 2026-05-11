@@ -71,11 +71,11 @@ export const extensions: TsiExtensions = {
     // <Routes> for tabs and the cell-detail subroute.
     { path: 'experiments/:slug/:runId/*', element: lazyRoute(<ExperimentDetailPage />) },
     { path: 'workspaces', element: lazyRoute(<WorkspacesListPage />) },
-    { path: 'workspaces/:id', element: lazyRoute(<WorkspaceDetailPage />) },
+    // Trailing `/*` lets the detail page mount its own nested <Routes> for tabs.
+    { path: 'workspaces/:id/*', element: lazyRoute(<WorkspaceDetailPage />) },
   ],
   navItems: [
     { path: '/workspaces', label: 'Workspaces', scope: 'global' },
-    { path: '/experiments', label: 'Experiments', scope: 'global' },
   ],
   algorithms: [
     {

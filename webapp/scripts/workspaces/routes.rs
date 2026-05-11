@@ -14,6 +14,7 @@
 //! GET    /v1/workspaces/{id}/manifests/{mid}  full manifest payload
 //! DELETE /v1/workspaces/{id}/manifests/{mid}  remove (?delete_artifact=1 to drop the file)
 //! GET    /v1/workspaces/{id}/comparison       lightweight summary across all manifests (no schedules)
+//! POST   /v1/workspaces/{id}/schedules        ingest schedule JSON → auto-build manifest
 //! ```
 
 use axum::extract::{Extension, Path, Query};
@@ -21,6 +22,11 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use scheduler::manifest::{
+    AlgorithmRef, Artifacts, DatasetRef, Horizon, Links, MANIFEST_SCHEMA_VERSION, Manifest,
+    Producer, Provenance, RunInfo, RunKind, RunStatus,
+};
+use scheduler::metrics::ScheduleMetrics;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -58,6 +64,7 @@ where
             get(get_manifest).delete(remove_manifest),
         )
         .route("/workspaces/{id}/comparison", get(comparison_summary))
+        .route("/workspaces/{id}/schedules", post(ingest_schedule))
         .layer(Extension(state))
 }
 
@@ -279,4 +286,136 @@ async fn comparison_summary(
 ) -> WorkspaceResult<Json<Value>> {
     let summaries: Vec<ManifestSummary> = state.store.comparison_summary(&id)?;
     Ok(Json(json!({ "summaries": summaries })))
+}
+
+// ── schedule ingestion ────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+struct IngestScheduleBody {
+    schedule: Value,
+    #[serde(default)]
+    idempotency_key: Option<String>,
+}
+
+/// Build a [`Manifest`] from a self-contained schedule JSON (one that
+/// carries embedded `schedule_metadata` and `schedule_metrics` fields,
+/// as produced by `phd sweep`).
+fn manifest_from_schedule(schedule: &Value) -> Result<Manifest, String> {
+    let meta = schedule
+        .get("schedule_metadata")
+        .ok_or("schedule JSON missing `schedule_metadata`")?;
+
+    let algorithm = meta
+        .get("algorithm")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown")
+        .to_string();
+    let algorithm_config = meta.get("algorithm_config").cloned().unwrap_or(Value::Null);
+    let dataset_id = meta
+        .get("dataset_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown")
+        .to_string();
+    let dataset_label = meta
+        .get("dataset_label")
+        .and_then(|v| v.as_str())
+        .unwrap_or(dataset_id.as_str())
+        .to_string();
+
+    let (start_mjd, end_mjd) = if let Some(period) = meta.get("period") {
+        let s = period
+            .get("start_mjd_utc")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0);
+        let e = period
+            .get("end_mjd_utc")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0);
+        (s, e)
+    } else {
+        (0.0, 0.0)
+    };
+
+    let metrics: ScheduleMetrics = if let Some(m) = schedule.get("schedule_metrics") {
+        serde_json::from_value(m.clone())
+            .map_err(|e| format!("failed to parse `schedule_metrics`: {e}"))?
+    } else {
+        return Err(
+            "schedule JSON missing `schedule_metrics` — rebuild with `phd sweep` (recent version)"
+                .to_string(),
+        );
+    };
+
+    let now = chrono::Utc::now().to_rfc3339();
+    let manifest_id = uuid::Uuid::new_v4().to_string();
+
+    Ok(Manifest {
+        manifest_schema_version: MANIFEST_SCHEMA_VERSION.to_string(),
+        manifest_id,
+        created_at: now.clone(),
+        producer: Producer {
+            name: "phd-tsi-server".to_string(),
+            version: env!("CARGO_PKG_VERSION").to_string(),
+            git_sha: None,
+            host: None,
+        },
+        dataset: DatasetRef {
+            id: dataset_id,
+            name: dataset_label,
+            source_path: String::new(),
+            sha256: String::new(),
+            schema_version: "scheduling_problem/1".to_string(),
+        },
+        algorithm: AlgorithmRef {
+            id: algorithm.clone(),
+            label: algorithm.to_uppercase(),
+            version: String::new(),
+            config: algorithm_config,
+        },
+        run: RunInfo {
+            run_id: "webapp-ingest".to_string(),
+            kind: RunKind::MatrixCell,
+            started_at: now.clone(),
+            finished_at: now.clone(),
+            status: RunStatus::Completed,
+            exit_code: 0,
+        },
+        horizon: Horizon {
+            start_mjd_utc: start_mjd,
+            end_mjd_utc: end_mjd,
+        },
+        metrics,
+        artifacts: Artifacts::default(),
+        links: Links::default(),
+        provenance: Provenance::default(),
+        validation: Default::default(),
+        extensions: Value::Null,
+    })
+}
+
+async fn ingest_schedule(
+    Extension(state): Extension<Arc<WorkspacesState>>,
+    Path(id): Path<String>,
+    Json(body): Json<IngestScheduleBody>,
+) -> WorkspaceResult<(StatusCode, Json<Value>)> {
+    let manifest = manifest_from_schedule(&body.schedule).map_err(WorkspaceError::BadRequest)?;
+    let (entry, created) = state
+        .store
+        .add_manifest(&id, &manifest, body.idempotency_key)?;
+    tracing::info!(
+        target: "phd.workspaces",
+        workspace = %id,
+        manifest = %entry.manifest_id,
+        created,
+        "schedule.ingested"
+    );
+    let status = if created {
+        StatusCode::CREATED
+    } else {
+        StatusCode::OK
+    };
+    Ok((
+        status,
+        Json(json!({ "manifest": entry, "created": created })),
+    ))
 }

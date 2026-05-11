@@ -8,6 +8,7 @@ import axios, { type AxiosInstance, AxiosError } from 'axios';
 import type {
   ComparisonResponse,
   ListWorkspacesResponse,
+  ManifestBody,
   ManifestEntry,
   ScheduledPriorityStair,
   WorkspaceDetailResponse,
@@ -135,6 +136,30 @@ export function getManifest(
     getWorkspacesClient().get(
       `${WORKSPACES_BASE}/${encodeURIComponent(id)}/manifests/${encodeURIComponent(manifestId)}`,
     ),
+  );
+}
+
+export function getFullManifestBody(
+  id: string,
+  manifestId: string,
+): Promise<{ manifest: ManifestBody }> {
+  return unwrap(
+    getWorkspacesClient().get(
+      `${WORKSPACES_BASE}/${encodeURIComponent(id)}/manifests/${encodeURIComponent(manifestId)}`,
+    ),
+  );
+}
+
+export function ingestSchedule(
+  id: string,
+  schedule: unknown,
+  idempotencyKey?: string,
+): Promise<{ manifest: ManifestEntry; created: boolean }> {
+  return unwrap(
+    getWorkspacesClient().post(`${WORKSPACES_BASE}/${encodeURIComponent(id)}/schedules`, {
+      schedule,
+      idempotency_key: idempotencyKey,
+    }),
   );
 }
 
