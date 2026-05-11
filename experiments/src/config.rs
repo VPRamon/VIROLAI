@@ -12,7 +12,7 @@
 //! string that uniquely identifies each configuration — used as the stem of
 //! schedule output files and as the last component of `cell_id` strings.
 
-use scheduler::scheduler::est::{Configuration as EstConfiguration, EstFomKind, EstScheduler};
+use scheduler::scheduler::est::{Configuration as EstConfiguration, FomKind, EstScheduler};
 use scheduler::scheduler::fom::ScheduleFom;
 use scheduler::scheduler::hap::{
     HapScheduler, PlannerConfig, SurvivorSelector as HapSurvivorSelector,
@@ -181,7 +181,7 @@ fn default_emit_trace() -> bool {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct EstRunConfig {
     /// Figure-of-merit variant used to rank candidate placements.
-    pub fom: EstFomKind,
+    pub fom: FomKind,
     /// Minimum number of competing tasks required to trigger beam splitting.
     pub endangered_threshold: u32,
     /// Number of parallel beams maintained during the search.
@@ -193,7 +193,7 @@ pub struct EstRunConfig {
 impl Default for EstRunConfig {
     fn default() -> Self {
         Self {
-            fom: EstFomKind::SoftConstraint,
+            fom: FomKind::SoftConstraint,
             endangered_threshold: 1,
             k_beams: 1,
             branching_factor: 1,
@@ -370,7 +370,7 @@ mod tests {
     #[test]
     fn est_slug_encodes_all_configuration_axes() {
         let run = RunConfig::Est(EstRunConfig {
-            fom: EstFomKind::SoftConstraint,
+            fom: FomKind::SoftConstraint,
             endangered_threshold: 2,
             k_beams: 5,
             branching_factor: 3,

@@ -32,7 +32,7 @@ struct CliArgs {
     horizon_override: Option<(f64, f64)>,
     algorithm: Algorithm,
     est_config: est::Configuration,
-    est_fom: est::EstFomKind,
+    est_fom: est::FomKind,
     hap_config: HapCliConfig,
 }
 
@@ -189,7 +189,7 @@ fn parse_cli_args(program: &str, args: &[String]) -> Result<CliArgs, String> {
     let mut output_path: Option<PathBuf> = None;
     let mut algorithm = Algorithm::Est;
     let mut est_config = est::Configuration::default();
-    let mut est_fom = est::EstFomKind::default();
+    let mut est_fom = est::FomKind::default();
     let mut hap_config = HapCliConfig::default();
 
     // Track which algorithm-specific flags were explicitly set
@@ -228,7 +228,7 @@ fn parse_cli_args(program: &str, args: &[String]) -> Result<CliArgs, String> {
                     ));
                 };
                 est_fom = value
-                    .parse::<est::EstFomKind>()
+                    .parse::<est::FomKind>()
                     .map_err(|e| format!("invalid {flag} value '{value}': {e}"))?;
                 est_flags_set.push("--est-fom");
                 i += 2;

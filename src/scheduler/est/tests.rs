@@ -6,7 +6,7 @@ use crate::constraints::{ConstraintExpr, PrioritySoftConstraint, SoftConstraintE
 use crate::error::ScheduleError;
 use crate::prescheduler::TaskPeriodMap;
 use crate::schedule::SchedulingProblem;
-use crate::scheduler::fom::{EstFomKind, SoftConstraintFom};
+use crate::scheduler::fom::{FomKind, SoftConstraintFom};
 use crate::scheduling_block::{Dependency, SchedulingBlock};
 use crate::task::{IcrsTarget, Task};
 use crate::time::{MJD, Period, SchedulingBlockId, TaskId, Time};
@@ -548,7 +548,7 @@ fn default_config_is_valid() {
 fn with_fom_builds_soft_constraint_scheduler() {
     let scheduler = EstScheduler::with_fom(
         Configuration::default(),
-        EstFomKind::SoftConstraint.into_fom(),
+        FomKind::SoftConstraint.into_fom(),
     )
     .expect("config should be valid");
 
