@@ -546,11 +546,9 @@ fn default_config_is_valid() {
 
 #[test]
 fn with_fom_builds_soft_constraint_scheduler() {
-    let scheduler = EstScheduler::with_fom(
-        Configuration::default(),
-        FomKind::SoftConstraint.into_fom(),
-    )
-    .expect("config should be valid");
+    let scheduler =
+        EstScheduler::with_fom(Configuration::default(), FomKind::SoftConstraint.into_fom())
+            .expect("config should be valid");
 
     assert!(format!("{:?}", scheduler.fom).contains("SoftConstraintFom"));
 }

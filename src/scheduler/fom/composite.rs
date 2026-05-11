@@ -22,7 +22,8 @@ impl CompositeFom {
 impl ScheduleFom for CompositeFom {
     /// Score first by `primary`, then by `secondary` as a tie-breaker.
     fn evaluate(&self, schedule: &Schedule, problem: &SchedulingProblem) -> f64 {
-        self.primary.evaluate(schedule, problem) * 1.0e9 + self.secondary.evaluate(schedule, problem)
+        self.primary.evaluate(schedule, problem) * 1.0e9
+            + self.secondary.evaluate(schedule, problem)
     }
 
     fn label(&self) -> &'static str {

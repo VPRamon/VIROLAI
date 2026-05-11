@@ -7,12 +7,15 @@
  *
  * Tabs: Overview · Comparison · Pareto · Per-dataset · Per-algorithm · Stairs
  */
-import { Suspense, createContext, lazy, useCallback, useContext, useEffect, useState } from 'react';
+import { Suspense, createContext, lazy, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { Link, NavLink, Route, Routes, useParams } from 'react-router-dom';
 import {
   WorkspacesApiError,
+  addManifest,
+  addManifestBatch,
   getComparison,
   getWorkspace,
+  ingestSchedule,
 } from '../../lib/workspaces/api';
 import type {
   ComparisonResponse,
@@ -151,7 +154,7 @@ export default function WorkspaceDetailPage() {
         {error && <ErrorState error={error} onRetry={reload} />}
 
         {/* Stats strip */}
-        <Card className="mb-6">
+        <Card className="mb-4">
           <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
             <StatCell label="Manifests" value={summaries.length} />
             <StatCell
@@ -169,6 +172,13 @@ export default function WorkspaceDetailPage() {
           </div>
         </Card>
 
+        {/* Upload panel — always accessible, expanded by default when empty */}
+        <UploadPanel
+          workspaceId={id}
+          isEmpty={summaries.length === 0}
+          onUploaded={reload}
+        />
+
         <TabBar />
 
         <div className="mt-4">
@@ -184,6 +194,150 @@ export default function WorkspaceDetailPage() {
         </div>
       </div>
     </WorkspaceCtx.Provider>
+  );
+}
+
+// ── Upload panel ──────────────────────────────────────────────────────────
+
+function UploadPanel({
+  workspaceId,
+  isEmpty,
+  onUploaded,
+}: {
+  workspaceId: string;
+  isEmpty: boolean;
+  onUploaded: () => void;
+}) {
+  const [open, setOpen] = useState(isEmpty);
+  const [uploading, setUploading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const manifestRef = useRef<HTMLInputElement>(null);
+  const scheduleRef = useRef<HTMLInputElement>(null);
+
+  // Auto-expand when workspace becomes empty (e.g. after removing last manifest)
+  useEffect(() => {
+    if (isEmpty) setOpen(true);
+  }, [isEmpty]);
+
+  async function onManifestUpload(files: FileList | null) {
+    if (!files || files.length === 0) return;
+    setError(null);
+    setUploading(true);
+    try {
+      if (files.length === 1) {
+        const text = await files[0].text();
+        await addManifest(workspaceId, JSON.parse(text));
+      } else {
+        const items: { manifest: unknown }[] = [];
+        for (const f of Array.from(files)) {
+          items.push({ manifest: JSON.parse(await f.text()) });
+        }
+        await addManifestBatch(workspaceId, items);
+      }
+      if (manifestRef.current) manifestRef.current.value = '';
+      onUploaded();
+    } catch (e) {
+      setError(e instanceof WorkspacesApiError ? e.message : String(e));
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  async function onScheduleUpload(files: FileList | null) {
+    if (!files || files.length === 0) return;
+    setError(null);
+    setUploading(true);
+    try {
+      for (const f of Array.from(files)) {
+        await ingestSchedule(workspaceId, JSON.parse(await f.text()));
+      }
+      if (scheduleRef.current) scheduleRef.current.value = '';
+      onUploaded();
+    } catch (e) {
+      setError(e instanceof WorkspacesApiError ? e.message : String(e));
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  return (
+    <div className="mb-4">
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className="flex w-full items-center justify-between rounded-lg border border-slate-700 bg-slate-800/60 px-4 py-2.5 text-left text-sm font-medium text-slate-300 hover:bg-slate-700/60 transition-colors"
+      >
+        <span className="flex items-center gap-2">
+          <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a2 2 0 002 2h12a2 2 0 002-2v-1M12 12V4m0 0l-3 3m3-3l3 3" />
+          </svg>
+          Add data to this workspace
+        </span>
+        <svg
+          xmlns="http://www.w3.org/2000/svg"
+          className={`h-4 w-4 transition-transform ${open ? 'rotate-180' : ''}`}
+          fill="none"
+          viewBox="0 0 24 24"
+          stroke="currentColor"
+          strokeWidth={2}
+        >
+          <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+        </svg>
+      </button>
+
+      {open && (
+        <Card className="rounded-t-none border-t-0 !mt-0">
+          <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
+            {/* Manifest upload */}
+            <div>
+              <div className="mb-1 text-sm font-medium text-slate-200">Upload manifests</div>
+              <p className="mb-3 text-xs text-slate-500">
+                JSON files produced by{' '}
+                <code className="text-slate-300">phd manifest create</code>. Select one or
+                multiple files at once.
+              </p>
+              <input
+                ref={manifestRef}
+                type="file"
+                multiple
+                accept="application/json,.json"
+                disabled={uploading}
+                onChange={(e) => onManifestUpload(e.target.files)}
+                className="block w-full text-sm text-slate-300 file:mr-3 file:cursor-pointer file:rounded-lg file:border file:border-slate-600 file:bg-slate-700 file:px-3 file:py-1.5 file:text-xs file:font-medium file:text-slate-200 hover:file:bg-slate-600 disabled:opacity-50"
+              />
+            </div>
+
+            {/* Schedule upload */}
+            <div>
+              <div className="mb-1 text-sm font-medium text-slate-200">Upload schedules</div>
+              <p className="mb-3 text-xs text-slate-500">
+                Full schedule JSON files (with embedded{' '}
+                <code className="text-slate-300">schedule_metrics</code>). A manifest is
+                auto-derived and only metrics are stored.
+              </p>
+              <input
+                ref={scheduleRef}
+                type="file"
+                multiple
+                accept="application/json,.json"
+                disabled={uploading}
+                onChange={(e) => onScheduleUpload(e.target.files)}
+                className="block w-full text-sm text-slate-300 file:mr-3 file:cursor-pointer file:rounded-lg file:border file:border-slate-600 file:bg-slate-700 file:px-3 file:py-1.5 file:text-xs file:font-medium file:text-slate-200 hover:file:bg-slate-600 disabled:opacity-50"
+              />
+            </div>
+          </div>
+
+          {uploading && <p className="mt-3 text-xs text-amber-300">Uploading…</p>}
+          {error && <p className="mt-3 text-xs text-rose-400">{error}</p>}
+
+          <p className="mt-4 text-xs text-slate-500">
+            Or publish from the terminal:{' '}
+            <code className="text-slate-300">
+              phd publish --workspace {workspaceId} --manifest-dir out/&lt;run&gt;
+            </code>
+          </p>
+        </Card>
+      )}
+    </div>
   );
 }
 
