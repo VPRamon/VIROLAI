@@ -30,9 +30,6 @@ pub struct StateEvent {
     /// Path to the schedule JSON, present when `status` is `completed`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub schedule_path: Option<String>,
-    /// Path to the metrics JSON, present when `status` is `completed`.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub metrics_path: Option<String>,
     /// Error message, present when `status` is `failed`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
@@ -164,7 +161,6 @@ mod tests {
                 cell_id: "a".into(),
                 status: CellStatus::Started,
                 schedule_path: None,
-                metrics_path: None,
                 error: None,
                 started_at: "t0".into(),
                 finished_at: None,
@@ -175,7 +171,6 @@ mod tests {
                 cell_id: "a".into(),
                 status: CellStatus::Completed,
                 schedule_path: Some("schedules/a.json".into()),
-                metrics_path: Some("metrics/a.json".into()),
                 error: None,
                 started_at: "t0".into(),
                 finished_at: Some("t1".into()),
@@ -203,7 +198,6 @@ mod tests {
                 cell_id: "x".into(),
                 status: CellStatus::Completed,
                 schedule_path: None,
-                metrics_path: None,
                 error: None,
                 started_at: "t0".into(),
                 finished_at: Some("t1".into()),
@@ -212,7 +206,6 @@ mod tests {
                 cell_id: "x".into(),
                 status: CellStatus::Failed,
                 schedule_path: None,
-                metrics_path: None,
                 error: Some("boom".into()),
                 started_at: "t2".into(),
                 finished_at: Some("t3".into()),

@@ -8,17 +8,12 @@
 //!
 //! The legacy format used a flat `schedules/` directory with a single
 //! `manifest.json` listing run slugs.  The new format organises output under
-//! `<experiment>/<run-timestamp>/` with per-cell `schedules/` and `metrics/`
-//! subdirectories plus `experiment.json` and `state.jsonl`.
+//! `<experiment>/<run-timestamp>/` with per-cell `schedules/` and
+//! `experiment.json` and `state.jsonl`.
 //!
 //! Migration reconstructs the [`MatrixCell`] list from the legacy manifest,
-//! copies schedule files, recomputes metrics where possible (falling back to
-//! zeroed metrics when the input dataset is unavailable), and writes the full
-//! modern layout.
+//! copies schedule files, and writes the full modern layout.
 
-use scheduler::metrics::{MetricsContext, ScheduleMetrics};
-use scheduler::schedule::{Schedule, SchedulingProblem};
-use scheduler::time::{MJD, Period, Time};
 use serde::Deserialize;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -148,22 +143,6 @@ pub fn migrate(old_run_dir: &Path, output: Option<&Path>) -> Result<MigrateSumma
     output::init_subdirs(&new_run_dir)?;
     output::write_manifest(&new_run_dir, &spec, &cells)?;
 
-    // Load the dataset for metrics recomputation (best-effort).
-    let problem_text = fs::read_to_string(&dataset_path).ok();
-    let problem: Option<SchedulingProblem> = problem_text
-        .as_ref()
-        .and_then(|t| serde_json::from_str(t).ok());
-    let horizon = legacy.horizon_override.and_then(|h| {
-        if h.start_mjd.is_finite() && h.end_mjd.is_finite() && h.start_mjd < h.end_mjd {
-            Some(Period::new(
-                Time::<MJD>::new(h.start_mjd),
-                Time::<MJD>::new(h.end_mjd),
-            ))
-        } else {
-            None
-        }
-    });
-
     let mut cells_migrated = 0usize;
     for (cell, run) in cells.iter().zip(legacy.runs.iter()) {
         let legacy_schedule_path = old_run_dir.join(&run.schedule_json);
@@ -178,12 +157,6 @@ pub fn migrate(old_run_dir: &Path, output: Option<&Path>) -> Result<MigrateSumma
             })?;
         }
 
-        let metrics = recompute_metrics(&new_schedule_path, problem.as_ref(), horizon.as_ref())
-            .unwrap_or_else(zero_metrics);
-        let m_text = serde_json::to_string_pretty(&metrics)
-            .map_err(|e| format!("failed to serialize metrics for {}: {e}", cell.cell_id))?;
-        fs::write(output::metrics_path(&new_run_dir, &cell.cell_id), m_text)
-            .map_err(|e| format!("failed to write metrics: {e}"))?;
         cells_migrated += 1;
     }
 
@@ -302,107 +275,6 @@ fn collect_hap_axes(cells: &[MatrixCell]) -> Option<HapSweepAxes> {
     })
 }
 
-/// Attempts to recompute metrics from a written schedule JSON.
-///
-/// Returns `None` if the file doesn't exist, the problem is unavailable, or
-/// the horizon cannot be determined.
-fn recompute_metrics(
-    schedule_path: &Path,
-    problem: Option<&SchedulingProblem>,
-    horizon: Option<&Period<MJD>>,
-) -> Option<ScheduleMetrics> {
-    let problem = problem?;
-    let horizon = horizon.cloned().or(problem.detected_horizon)?;
-    let text = fs::read_to_string(schedule_path).ok()?;
-    let value: serde_json::Value = serde_json::from_str(&text).ok()?;
-
-    let mut schedule = Schedule::new();
-
-    // ScheduleOutput shape: tasks annotated inside scheduling_blocks.
-    let blocks = value
-        .get("scheduling_blocks")
-        .and_then(serde_json::Value::as_array)
-        .cloned()
-        .or_else(|| value.as_array().cloned())
-        .unwrap_or_default();
-    for block in &blocks {
-        if let Some(tasks) = block.get("tasks").and_then(serde_json::Value::as_array) {
-            for task in tasks {
-                let scheduled = task
-                    .get("scheduled")
-                    .and_then(serde_json::Value::as_bool)
-                    .unwrap_or(false);
-                if !scheduled {
-                    continue;
-                }
-                let id = task.get("id").and_then(serde_json::Value::as_u64);
-                let start = task
-                    .get("scheduled_start_mjd_utc")
-                    .and_then(serde_json::Value::as_f64);
-                let end = task
-                    .get("scheduled_end_mjd_utc")
-                    .and_then(serde_json::Value::as_f64);
-                if let (Some(id), Some(s), Some(e)) = (id, start, end) {
-                    schedule.insert_placement(scheduler::schedule::TaskPlacement {
-                        task_id: scheduler::time::TaskId(id),
-                        start: Time::<MJD>::new(s),
-                        end: Time::<MJD>::new(e),
-                    });
-                }
-            }
-        }
-    }
-
-    // Fallback: explicit `schedule.placements` array.
-    if schedule.is_empty()
-        && let Some(arr) = value
-            .get("schedule")
-            .and_then(|s| s.get("placements"))
-            .and_then(serde_json::Value::as_array)
-    {
-        for p in arr {
-            let id = p.get("task_id").and_then(serde_json::Value::as_u64);
-            let start = p.get("start").and_then(serde_json::Value::as_f64);
-            let end = p.get("end").and_then(serde_json::Value::as_f64);
-            if let (Some(id), Some(s), Some(e)) = (id, start, end) {
-                schedule.insert_placement(scheduler::schedule::TaskPlacement {
-                    task_id: scheduler::time::TaskId(id),
-                    start: Time::<MJD>::new(s),
-                    end: Time::<MJD>::new(e),
-                });
-            }
-        }
-    }
-
-    Some(ScheduleMetrics::compute(
-        &schedule,
-        problem,
-        &horizon,
-        &MetricsContext::default(),
-    ))
-}
-
-/// Returns a zeroed [`ScheduleMetrics`] used as a fallback when recomputation
-/// is not possible.
-fn zero_metrics() -> ScheduleMetrics {
-    use scheduler::metrics::{FragmentationStats, PriorityStats, RankingWeights, ResourceMetrics};
-    ScheduleMetrics {
-        scheduled_task_count: 0,
-        total_task_count: 0,
-        completion_ratio: 0.0,
-        priority: PriorityStats::default(),
-        fragmentation: FragmentationStats::default(),
-        total_horizon_sec: 0.0,
-        available_time_sec: 0.0,
-        scheduled_time_sec: 0.0,
-        utilization: 0.0,
-        per_resource: Vec::<ResourceMetrics>::new(),
-        composite_rank_score: 0.0,
-        ranking_weights: RankingWeights::default(),
-        scheduled_priority_stair: scheduler::metrics::ScheduledPriorityStair::default(),
-    }
-}
-
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -469,9 +341,8 @@ mod tests {
         let summary = migrate(&legacy, Some(&out)).expect("migrate ok");
         assert_eq!(summary.cells_migrated, 2);
         assert!(summary.run_dir.join("experiment.json").exists());
-        let metrics_dir = summary.run_dir.join("metrics");
-        let count = fs::read_dir(&metrics_dir).unwrap().count();
-        assert_eq!(count, 2);
+        // metrics/ is no longer written; metrics are embedded in schedule JSONs.
+        assert!(!summary.run_dir.join("metrics").exists());
         let schedules_dir = summary.run_dir.join("schedules");
         let s_count = fs::read_dir(&schedules_dir).unwrap().count();
         assert_eq!(s_count, 2);

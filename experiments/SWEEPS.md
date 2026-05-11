@@ -1,23 +1,59 @@
 # Scheduler experiment sweeps
 
-The experiment runner is the `experiments` binary (in this crate). It
-preschedules the input once, runs every configured scheduler variant, and
-writes a timestamped output directory containing:
-
-- `experiment.json`
-- `schedules/*.json`
-- `state.jsonl` — per-cell completion log
-- `schedules/*.est_trace.jsonl` for EST runs when traces are enabled
-
-Run commands from the repository root.
-
-## EST sweep
+The canonical way to run a sweep is via `phd sweep`. It handles temp directory
+management, flat output, and per-cell terminal progress automatically.
 
 ```bash
-cargo run --manifest-path experiments/Cargo.toml -- run --spec experiments/est_sweep.json
-# or via the phd dispatcher:
-phd matrix run --spec experiments/est_sweep.json
+# Minimal — schedules land in ./out/
+phd sweep --spec experiments/est_sweep.json
+
+# Custom output directory
+phd sweep --spec experiments/est_sweep.json --out results/my-run
+
+# Also emit companion manifest JSONs (for phd publish)
+phd sweep --spec experiments/est_sweep.json --manifest
 ```
+
+`phd sweep` runs the `experiments` binary internally with `--no-state`, so no
+`state.jsonl` is produced and per-cell `▶/✓/✗` progress lines are printed to
+stderr.
+
+Each output schedule JSON is self-contained and carries an embedded
+`schedule_metrics` field — no separate `metrics/` directory.
+
+---
+
+## Direct `experiments` binary usage
+
+The `experiments` binary is available for advanced use (custom output dirs,
+resume, programmatic access):
+
+```bash
+# Run and write output under the directory declared in the spec
+cargo run --manifest-path experiments/Cargo.toml -- run --spec experiments/est_sweep.json
+
+# No state file — same behaviour as phd sweep
+cargo run --manifest-path experiments/Cargo.toml -- run --spec experiments/est_sweep.json --no-state
+
+# Resume a previous run (requires state.jsonl — incompatible with --no-state)
+cargo run --manifest-path experiments/Cargo.toml -- run \
+  --spec experiments/est_sweep.json \
+  --resume out/my-sweep/run-<ts>
+```
+
+Output directory layout produced by `experiments run`:
+
+```
+<output_dir>/<run-timestamp>/
+├── experiment.json          # spec + resolved cell list
+├── state.jsonl              # per-cell completion log (omitted with --no-state)
+└── schedules/
+    └── <cell_id>.json       # one self-contained schedule JSON per cell
+```
+
+---
+
+## EST sweep
 
 `est_sweep.json` sweeps:
 
@@ -26,10 +62,6 @@ phd matrix run --spec experiments/est_sweep.json
 - `branching_factors`
 
 ## HAP sweep
-
-```bash
-cargo run --manifest-path experiments/Cargo.toml -- run --spec experiments/hap_sweep.json
-```
 
 `hap_sweep.json` sweeps the HAP planner configuration:
 
@@ -43,10 +75,8 @@ cargo run --manifest-path experiments/Cargo.toml -- run --spec experiments/hap_s
 ## Combined paper sweep
 
 ```bash
-cargo run --manifest-path experiments/Cargo.toml -- run --spec experiments/paper_sweep.json
+phd sweep --spec experiments/paper_sweep.json --manifest
 ```
-
-This runs both the EST and HAP sweeps and writes the combined output under `out/`.
 
 ## Spec shape
 

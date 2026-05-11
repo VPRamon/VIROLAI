@@ -24,8 +24,6 @@ use crate::spec::ExperimentSpec;
 
 /// Subdirectory for schedule JSON files.
 pub const SCHEDULES_DIR: &str = "schedules";
-/// Subdirectory for per-cell metrics JSON files.
-pub const METRICS_DIR: &str = "metrics";
 /// Append-only checkpoint stream filename.
 pub const STATE_FILE: &str = "state.jsonl";
 /// Resolved spec + cell-list manifest filename.
@@ -96,13 +94,10 @@ pub fn create_run_dir(output_dir: &Path, experiment_name: &str) -> Result<PathBu
     ))
 }
 
-/// Ensures the `schedules/` and `metrics/` subdirectories exist inside an
-/// existing run directory.
+/// Ensures the `schedules/` subdirectory exists inside an existing run directory.
 pub fn init_subdirs(run_dir: &Path) -> Result<(), String> {
-    for sub in [SCHEDULES_DIR, METRICS_DIR] {
-        let p = run_dir.join(sub);
-        fs::create_dir_all(&p).map_err(|e| format!("failed to create {}: {e}", p.display()))?;
-    }
+    let p = run_dir.join(SCHEDULES_DIR);
+    fs::create_dir_all(&p).map_err(|e| format!("failed to create {}: {e}", p.display()))?;
     Ok(())
 }
 
@@ -147,11 +142,6 @@ pub fn read_manifest(run_dir: &Path) -> Result<ExperimentManifest, String> {
 /// Returns the path for a cell's schedule JSON inside `run_dir`.
 pub fn schedule_path(run_dir: &Path, cell_id: &str) -> PathBuf {
     run_dir.join(SCHEDULES_DIR).join(format!("{cell_id}.json"))
-}
-
-/// Returns the path for a cell's metrics JSON inside `run_dir`.
-pub fn metrics_path(run_dir: &Path, cell_id: &str) -> PathBuf {
-    run_dir.join(METRICS_DIR).join(format!("{cell_id}.json"))
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

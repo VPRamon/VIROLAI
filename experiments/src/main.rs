@@ -80,6 +80,11 @@ struct RunArgs {
     /// scheduler runs.
     #[arg(long)]
     dry_run: bool,
+
+    /// Skip writing `state.jsonl` entirely; print per-cell progress to stderr
+    /// instead.  Incompatible with `--resume`.
+    #[arg(long)]
+    no_state: bool,
 }
 
 // ── `migrate` sub-command ─────────────────────────────────────────────────────
@@ -120,6 +125,10 @@ fn dispatch(cmd: Cmd) -> Result<(), String> {
 // ── `run` implementation ──────────────────────────────────────────────────────
 
 fn run(args: RunArgs) -> Result<(), String> {
+    if args.no_state && args.resume.is_some() {
+        return Err("--no-state and --resume are mutually exclusive".to_string());
+    }
+
     let spec = load_spec(&args.spec)?;
     let cells = resolve_cells(&spec)?;
 
@@ -150,13 +159,16 @@ fn run(args: RunArgs) -> Result<(), String> {
         (dir, false)
     };
 
-    let summary = runner::execute(&spec, &cells, &run_dir, resume)?;
+    let summary = runner::execute(&spec, &cells, &run_dir, resume, args.no_state)?;
     println!(
         "experiments run done: {} cells total, {} skipped (resume), {} completed, {} failed",
         summary.total, summary.already_done, summary.completed, summary.failed
     );
     println!("artifacts -> {}", summary.run_dir.display());
     if summary.failed > 0 {
+        if args.no_state {
+            return Err(format!("{} cell(s) failed", summary.failed));
+        }
         return Err(format!(
             "{} cell(s) failed; see {}",
             summary.failed,

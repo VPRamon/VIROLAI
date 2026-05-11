@@ -5,8 +5,9 @@
 //! 1. Prepares each unique dataset once (loading JSON + running the prescheduler).
 //! 2. Skips cells already marked `completed` in `state.jsonl` (resume mode).
 //! 3. Dispatches pending cells to a bounded Rayon thread pool.
-//! 4. Appends `started` / `completed` / `failed` events to `state.jsonl` as
-//!    each cell executes.
+//! 4. When `no_state_log` is false, appends `started` / `completed` / `failed`
+//!    events to `state.jsonl` as each cell executes.
+//!    When `no_state_log` is true, prints per-cell progress to stderr instead.
 //! 5. Returns a [`RunSummary`] with counts of total / skipped / completed /
 //!    failed cells.
 
@@ -47,11 +48,16 @@ pub struct RunSummary {
 /// When `resume` is `true`, cells already marked `completed` in `state.jsonl`
 /// are skipped.  All other cells are dispatched to a Rayon thread pool sized
 /// by `spec.max_parallel` (defaulting to the number of logical CPU cores).
+///
+/// When `no_state_log` is `true`, no `state.jsonl` is written; per-cell
+/// progress is printed to `stderr` instead.  `resume` must be `false` when
+/// `no_state_log` is `true`.
 pub fn execute(
     spec: &ExperimentSpec,
     cells: &[MatrixCell],
     run_dir: &Path,
     resume: bool,
+    no_state_log: bool,
 ) -> Result<RunSummary, String> {
     output::init_subdirs(run_dir)?;
 
@@ -98,7 +104,13 @@ pub fn execute(
         .build()
         .map_err(|e| format!("failed to build rayon pool: {e}"))?;
 
-    let state_writer = Arc::new(StateWriter::open_append(&run_dir.join(output::STATE_FILE))?);
+    let state_writer: Option<Arc<StateWriter>> = if no_state_log {
+        None
+    } else {
+        Some(Arc::new(StateWriter::open_append(
+            &run_dir.join(output::STATE_FILE),
+        )?))
+    };
     let ranking: Option<RankingWeights> = spec.ranking.map(Into::into);
     let run_dir_owned = run_dir.to_path_buf();
 
@@ -110,7 +122,13 @@ pub fn execute(
                     .get(&cell.dataset_id)
                     .expect("prepared dataset must exist")
                     .clone();
-                run_one_cell(cell, &prepared, &run_dir_owned, ranking, &state_writer)
+                run_one_cell(
+                    cell,
+                    &prepared,
+                    &run_dir_owned,
+                    ranking,
+                    state_writer.as_deref(),
+                )
             })
             .collect()
     });
@@ -148,44 +166,53 @@ fn run_one_cell(
     prepared: &PreparedProblem,
     run_dir: &Path,
     ranking: Option<RankingWeights>,
-    state_writer: &StateWriter,
+    state_writer: Option<&StateWriter>,
 ) -> CellOutcome {
     let started_at = Utc::now().to_rfc3339();
-    let _ = state_writer.append(&StateEvent {
-        cell_id: cell.cell_id.clone(),
-        status: CellStatus::Started,
-        schedule_path: None,
-        metrics_path: None,
-        error: None,
-        started_at: started_at.clone(),
-        finished_at: None,
-    });
+    if let Some(w) = state_writer {
+        let _ = w.append(&StateEvent {
+            cell_id: cell.cell_id.clone(),
+            status: CellStatus::Started,
+            schedule_path: None,
+            error: None,
+            started_at: started_at.clone(),
+            finished_at: None,
+        });
+    } else {
+        eprintln!("▶ {}", cell.cell_id);
+    }
 
     match run_cell_inner(cell, prepared, run_dir, ranking) {
         Ok(paths) => {
-            let _ = state_writer.append(&StateEvent {
-                cell_id: cell.cell_id.clone(),
-                status: CellStatus::Completed,
-                schedule_path: Some(paths.schedule_path.display().to_string()),
-                metrics_path: Some(paths.metrics_path.display().to_string()),
-                error: None,
-                started_at,
-                finished_at: Some(Utc::now().to_rfc3339()),
-            });
+            if let Some(w) = state_writer {
+                let _ = w.append(&StateEvent {
+                    cell_id: cell.cell_id.clone(),
+                    status: CellStatus::Completed,
+                    schedule_path: Some(paths.schedule_path.display().to_string()),
+                    error: None,
+                    started_at,
+                    finished_at: Some(Utc::now().to_rfc3339()),
+                });
+            } else {
+                eprintln!("✓ {}", cell.cell_id);
+            }
             CellOutcome::Done {
                 cell_id: cell.cell_id.clone(),
             }
         }
         Err(error) => {
-            let _ = state_writer.append(&StateEvent {
-                cell_id: cell.cell_id.clone(),
-                status: CellStatus::Failed,
-                schedule_path: None,
-                metrics_path: None,
-                error: Some(error.clone()),
-                started_at,
-                finished_at: Some(Utc::now().to_rfc3339()),
-            });
+            if let Some(w) = state_writer {
+                let _ = w.append(&StateEvent {
+                    cell_id: cell.cell_id.clone(),
+                    status: CellStatus::Failed,
+                    schedule_path: None,
+                    error: Some(error.clone()),
+                    started_at,
+                    finished_at: Some(Utc::now().to_rfc3339()),
+                });
+            } else {
+                eprintln!("✗ {}: {error}", cell.cell_id);
+            }
             CellOutcome::Failed {
                 cell_id: cell.cell_id.clone(),
                 error,
@@ -196,7 +223,6 @@ fn run_one_cell(
 
 struct CellPaths {
     schedule_path: PathBuf,
-    metrics_path: PathBuf,
 }
 
 fn run_cell_inner(
@@ -206,7 +232,6 @@ fn run_cell_inner(
     ranking: Option<RankingWeights>,
 ) -> Result<CellPaths, String> {
     let schedule_path = output::schedule_path(run_dir, &cell.cell_id);
-    let metrics_path = output::metrics_path(run_dir, &cell.cell_id);
 
     let (schedule,) = match cell.run_config {
         RunConfig::Est(config) => {
@@ -249,15 +274,7 @@ fn run_cell_inner(
     fs::write(&schedule_path, text)
         .map_err(|e| format!("failed to write {}: {e}", schedule_path.display()))?;
 
-    let m_text = serde_json::to_string_pretty(&metrics)
-        .map_err(|e| format!("failed to serialize metrics {}: {e}", cell.cell_id))?;
-    fs::write(&metrics_path, m_text)
-        .map_err(|e| format!("failed to write {}: {e}", metrics_path.display()))?;
-
-    Ok(CellPaths {
-        schedule_path,
-        metrics_path,
-    })
+    Ok(CellPaths { schedule_path })
 }
 
 fn build_schedule_metadata(

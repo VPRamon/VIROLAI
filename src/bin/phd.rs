@@ -68,17 +68,20 @@ enum Cmd {
         /// Forwarded as-is to the `experiments` binary.
         args: Vec<String>,
     },
-    /// Run a sweep and collect flat results — a clean alternative to `phd matrix`.
+    /// Run a sweep and collect flat results — the canonical way to run experiments.
     ///
     /// Executes the experiment defined in SPEC, writes one self-contained
     /// schedule JSON per cell to OUT (flat, no subdirectories), and optionally
     /// emits a companion `<cell_id>.manifest.json` next to each schedule.
+    ///
+    /// Use this command in preference to `phd matrix` for all routine sweeps.
     Sweep {
         /// Path to the experiment spec JSON (same format as `phd matrix --spec`).
         #[arg(long, value_name = "FILE")]
         spec: PathBuf,
         /// Output directory (created if absent). Schedule files land here flat.
-        #[arg(long, value_name = "DIR")]
+        /// Defaults to `./out`.
+        #[arg(long, value_name = "DIR", default_value = "out")]
         out: PathBuf,
         /// Also write `<cell_id>.manifest.json` next to each schedule.
         #[arg(long)]
@@ -274,11 +277,12 @@ fn sweep(
     let spec_for_run: PathBuf =
         patch_spec_for_run(spec_path, tmp.path(), &tmp_out, parallel_override)?;
 
-    // Run experiments.
+    // Run experiments without state.jsonl — progress goes to stderr.
     let status = Command::new(locate_sibling("experiments"))
         .arg("run")
         .arg("--spec")
         .arg(&spec_for_run)
+        .arg("--no-state")
         .status()
         .map_err(|e| format!("failed to spawn experiments: {e}"))?;
     if !status.success() {
@@ -742,17 +746,31 @@ fn build_cell_manifest(
     dataset_lookup: &std::collections::HashMap<&str, &DatasetSpecLite>,
     cell: &MatrixCellLite,
 ) -> Result<Manifest, String> {
-    let metrics_path = run_dir
-        .join("metrics")
-        .join(format!("{}.json", cell.cell_id));
     let schedule_path = run_dir
         .join("schedules")
         .join(format!("{}.json", cell.cell_id));
 
-    let metrics_text = fs::read_to_string(&metrics_path)
-        .map_err(|e| format!("missing metrics ({}): {e}", metrics_path.display()))?;
-    let metrics: ScheduleMetrics = serde_json::from_str(&metrics_text)
-        .map_err(|e| format!("invalid metrics in {}: {e}", metrics_path.display()))?;
+    let schedule_text = fs::read_to_string(&schedule_path)
+        .map_err(|e| format!("missing schedule ({}): {e}", schedule_path.display()))?;
+    let schedule_doc: serde_json::Value = serde_json::from_str(&schedule_text)
+        .map_err(|e| format!("invalid schedule JSON in {}: {e}", schedule_path.display()))?;
+
+    let metrics: ScheduleMetrics = schedule_doc
+        .get("schedule_metrics")
+        .ok_or_else(|| {
+            format!(
+                "schedule `{}` has no `schedule_metrics` field",
+                schedule_path.display()
+            )
+        })
+        .and_then(|v| {
+            serde_json::from_value(v.clone()).map_err(|e| {
+                format!(
+                    "invalid `schedule_metrics` in {}: {e}",
+                    schedule_path.display()
+                )
+            })
+        })?;
 
     let dataset_meta = dataset_lookup.get(cell.dataset_id.as_str());
     let dataset_path: PathBuf = dataset_meta
@@ -935,11 +953,11 @@ fn publish(args: PublishArgs) -> Result<ExitCode, String> {
     if manifests.is_empty() {
         return Err("no manifest files found".into());
     }
+    let total = manifests.len();
 
-    let mut created = 0usize;
-    let mut deduped = 0usize;
-    let mut failed = 0usize;
-    for path in &manifests {
+    // Single-manifest path: use single endpoint (unchanged UX for the simple case).
+    if let Some(single) = &args.manifest {
+        let path = single.as_path();
         match publish_one(
             &agent,
             &base,
@@ -948,20 +966,50 @@ fn publish(args: PublishArgs) -> Result<ExitCode, String> {
             path,
             args.retries,
         ) {
-            Ok(true) => {
-                created += 1;
-                println!("  + {}  (created)", path.display());
-            }
-            Ok(false) => {
-                deduped += 1;
-                println!("  = {}  (already present)", path.display());
-            }
+            Ok(true) => println!("  + {}  (created)", path.display()),
+            Ok(false) => println!("  = {}  (already present)", path.display()),
             Err(e) => {
-                failed += 1;
                 eprintln!("  ! {}: {e}", path.display());
+                return Ok(ExitCode::FAILURE);
             }
         }
+        println!(
+            "phd publish: 1 manifest → {} (workspace `{}`)",
+            base, args.workspace
+        );
+        return Ok(ExitCode::SUCCESS);
     }
+
+    // Directory path: chunked batch upload.
+    const CHUNK_SIZE: usize = 100;
+    let mut created = 0usize;
+    let mut deduped = 0usize;
+    let mut failed = 0usize;
+    let mut done = 0usize;
+
+    for chunk in manifests.chunks(CHUNK_SIZE) {
+        match publish_batch_chunk(
+            &agent,
+            &base,
+            token.as_deref(),
+            &args.workspace,
+            chunk,
+            args.retries,
+        ) {
+            Ok((c, d, f)) => {
+                created += c;
+                deduped += d;
+                failed += f;
+            }
+            Err(e) => {
+                eprintln!("  ! batch failed: {e}");
+                failed += chunk.len();
+            }
+        }
+        done += chunk.len();
+        eprintln!("[{done}/{total}] manifests uploaded");
+    }
+
     println!(
         "phd publish: {} created, {} deduplicated, {} failed → {} (workspace `{}`)",
         created, deduped, failed, base, args.workspace
@@ -1016,7 +1064,9 @@ fn walk_manifests(dir: &Path, out: &mut Vec<PathBuf>) {
         let p = entry.path();
         if p.is_dir() {
             walk_manifests(&p, out);
-        } else if p.file_name().and_then(|s| s.to_str()) == Some("manifest.json") {
+        } else if let Some(name) = p.file_name().and_then(|s| s.to_str())
+            && (name == "manifest.json" || name.ends_with(".manifest.json"))
+        {
             out.push(p);
         }
     }
@@ -1090,6 +1140,80 @@ fn publish_one(
                     .unwrap_or(false);
                 let _ = status;
                 return Ok(created);
+            }
+            Err(ureq::Error::Status(code, resp)) => {
+                let body = resp.into_string().unwrap_or_default();
+                if (500..600).contains(&code) && attempt < retries {
+                    attempt += 1;
+                    std::thread::sleep(backoff(attempt));
+                    continue;
+                }
+                return Err(PublishError::Http(code, body));
+            }
+            Err(e) => {
+                if attempt < retries {
+                    attempt += 1;
+                    std::thread::sleep(backoff(attempt));
+                    continue;
+                }
+                return Err(PublishError::Transport(e.to_string()));
+            }
+        }
+    }
+}
+
+/// Upload a batch of manifests to the `/v1/workspaces/{workspace}/manifests/batch`
+/// endpoint. Returns `(created, deduped, failed)` counts.
+fn publish_batch_chunk(
+    agent: &ureq::Agent,
+    base: &str,
+    token: Option<&str>,
+    workspace: &str,
+    paths: &[PathBuf],
+    retries: u32,
+) -> Result<(usize, usize, usize), PublishError> {
+    let mut items: Vec<serde_json::Value> = Vec::with_capacity(paths.len());
+    for path in paths {
+        let bytes = fs::read(path).map_err(|e| PublishError::Body(e.to_string()))?;
+        let manifest: serde_json::Value =
+            serde_json::from_slice(&bytes).map_err(|e| PublishError::Body(e.to_string()))?;
+        let key = manifest
+            .get("manifest_id")
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+            .unwrap_or_else(|| sha256_short(&bytes));
+        items.push(serde_json::json!({
+            "manifest": manifest,
+            "idempotency_key": key,
+        }));
+    }
+
+    let payload = serde_json::json!({ "items": items });
+    let url = format!("{base}/v1/workspaces/{workspace}/manifests/batch");
+
+    let mut attempt = 0u32;
+    loop {
+        let mut req = agent.post(&url);
+        if let Some(t) = token {
+            req = req.set("Authorization", &format!("Bearer {t}"));
+        }
+        match req.send_json(payload.clone()) {
+            Ok(resp) => {
+                let body: serde_json::Value = resp
+                    .into_json()
+                    .map_err(|e| PublishError::Body(e.to_string()))?;
+                let results = body
+                    .get("results")
+                    .and_then(|v| v.as_array())
+                    .cloned()
+                    .unwrap_or_default();
+                let created = results
+                    .iter()
+                    .filter(|r| r.get("created").and_then(|v| v.as_bool()).unwrap_or(false))
+                    .count();
+                let failed = results.iter().filter(|r| r.get("error").is_some()).count();
+                let deduped = results.len().saturating_sub(created + failed);
+                return Ok((created, deduped, failed));
             }
             Err(ureq::Error::Status(code, resp)) => {
                 let body = resp.into_string().unwrap_or_default();

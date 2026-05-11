@@ -121,12 +121,10 @@ fn experiment_matrix_pipeline_writes_expected_artifacts() {
             .is_file(),
         "schedule json missing"
     );
+    // Metrics are embedded in the schedule JSON; no separate metrics/ dir.
     assert!(
-        run_dir
-            .join("metrics")
-            .join(format!("{cell_id}.json"))
-            .is_file(),
-        "metrics json missing"
+        !run_dir.join("metrics").exists(),
+        "metrics dir should not exist"
     );
     assert!(
         !run_dir.join("summary.csv").exists(),
@@ -135,6 +133,21 @@ fn experiment_matrix_pipeline_writes_expected_artifacts() {
     assert!(
         !run_dir.join("traces").exists(),
         "traces dir should not exist"
+    );
+
+    // The schedule JSON carries embedded schedule_metrics.
+    let schedule_val: Value = serde_json::from_str(
+        &fs::read_to_string(
+            run_dir
+                .join("schedules")
+                .join(format!("{cell_id}.json")),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert!(
+        schedule_val.get("schedule_metrics").is_some(),
+        "schedule JSON must carry embedded schedule_metrics"
     );
 
     // experiment.json round-trips and lists the cell.
@@ -237,4 +250,74 @@ fn experiment_matrix_dry_run_emits_manifest_only() {
     if schedules.exists() {
         assert_eq!(fs::read_dir(&schedules).unwrap().count(), 0);
     }
+}
+
+#[test]
+fn experiment_matrix_no_state_skips_state_file_and_emits_progress() {
+    let tmp = TempDir::new().unwrap();
+    write_input(tmp.path());
+    let spec_path = write_spec(tmp.path());
+
+    let output = Command::new(BIN)
+        .args(["run", "--spec", spec_path.to_str().unwrap(), "--no-state"])
+        .output()
+        .expect("binary should run");
+    assert!(output.status.success(), "experiments exited with failure");
+
+    let run_dir = find_run_dir(&tmp.path().join("out"));
+
+    // With --no-state no state.jsonl is written.
+    assert!(
+        !run_dir.join("state.jsonl").exists(),
+        "state.jsonl must not be written when --no-state is set"
+    );
+
+    // Schedules are still produced.
+    let cell_id = "ds1__est__e1-k1-b1";
+    assert!(
+        run_dir
+            .join("schedules")
+            .join(format!("{cell_id}.json"))
+            .is_file(),
+        "schedule json missing under --no-state"
+    );
+
+    // Progress lines appear on stderr.
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains('✓') || stderr.contains("✗") || stderr.contains('▶'),
+        "expected progress characters on stderr; got: {stderr}"
+    );
+}
+
+#[test]
+fn experiment_matrix_no_state_and_resume_is_an_error() {
+    let tmp = TempDir::new().unwrap();
+    write_input(tmp.path());
+    let spec_path = write_spec(tmp.path());
+
+    // First run to create a run_dir.
+    let status = Command::new(BIN)
+        .args(["run", "--spec", spec_path.to_str().unwrap()])
+        .status()
+        .unwrap();
+    assert!(status.success());
+    let run_dir = find_run_dir(&tmp.path().join("out"));
+
+    // --no-state + --resume must fail.
+    let status = Command::new(BIN)
+        .args([
+            "run",
+            "--spec",
+            spec_path.to_str().unwrap(),
+            "--resume",
+            run_dir.to_str().unwrap(),
+            "--no-state",
+        ])
+        .status()
+        .unwrap();
+    assert!(
+        !status.success(),
+        "--no-state and --resume together should exit non-zero"
+    );
 }
