@@ -29,7 +29,8 @@
 //! lock for the relatively small surface here.
 
 use chrono::{DateTime, Utc};
-use scheduler::manifest::{ArtifactRef, Manifest, ValidationStatus};
+use scheduler::manifest::{ArtifactRef, Manifest, ValidationStatus, WorkspaceContext};
+use scheduler::metrics::ScheduledPriorityStair;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -37,9 +38,14 @@ use std::collections::HashMap;
 use std::fs;
 use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use crate::workspaces::errors::{WorkspaceError, WorkspaceResult};
+use crate::workspaces::preschedule_cache::PrescheduleCache;
+
+/// Maximum size of a `file://` schedule artifact accepted by drill-down.
+const MAX_FILE_SCHEDULE_BYTES: u64 = 256 * 1024 * 1024;
+const PRESCHEDULE_CACHE_DIR: &str = ".preschedule-cache";
 
 /// Lifecycle state of a workspace.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -76,6 +82,12 @@ pub struct ManifestEntry {
     pub added_at: DateTime<Utc>,
     /// `idempotency_key` set by the publisher (defaults to `manifest_id`).
     pub idempotency_key: String,
+    /// Stable cohort grouping key derived from
+    /// `(dataset_id, observatory_id, period, block_pool_hash)`. Empty for
+    /// older entries persisted before cohorts existed; readers should
+    /// recompute from the manifest when blank.
+    #[serde(default)]
+    pub cohort_key: String,
 }
 
 /// Lightweight metric summary returned by the comparison endpoint. All
@@ -98,6 +110,60 @@ pub struct ManifestSummary {
     pub validation_status: ValidationStatus,
     pub has_full_schedule: bool,
     pub tsi_schedule_id: Option<i64>,
+    pub cohort_key: String,
+    /// Algorithm-specific configuration captured for reproducibility.
+    pub algorithm_config: Value,
+    /// Run-length encoding of scheduled-task priorities.
+    pub scheduled_priority_stair: ScheduledPriorityStair,
+    /// Number of blocks that have been fully placed by the scheduler.
+    /// `None` when neither the schedule nor the dataset are resolvable.
+    pub completed_block_count: Option<u64>,
+    /// Number of blocks the prescheduler considers schedulable.
+    pub schedulable_block_count: Option<u64>,
+    /// Total block count derived from the input scheduling problem.
+    pub total_block_count: Option<u64>,
+    /// `completed / total` when `total > 0`.
+    pub block_completion_ratio: Option<f64>,
+    /// `completed / schedulable` when `schedulable > 0`.
+    pub schedulable_block_completion_ratio: Option<f64>,
+}
+
+/// Aggregate description of a cohort within a workspace. Cohorts group
+/// manifests that share `(dataset_id, observatory_id, period, block_pool_hash)`
+/// — i.e. comparable runs of different algorithms over the same input.
+#[derive(Debug, Clone, Serialize)]
+pub struct CohortSummary {
+    pub cohort_key: String,
+    pub dataset_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub observatory_id: Option<String>,
+    pub period: scheduler::manifest::Horizon,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub block_pool_hash: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub block_count: Option<u64>,
+    pub manifest_count: usize,
+    pub schedule_count: usize,
+}
+
+/// One row of the per-block breakdown table for a cohort. Only blocks
+/// that appear in at least one persisted schedule are listed.
+#[derive(Debug, Clone, Serialize)]
+pub struct CohortBlockRow {
+    pub block_id: String,
+    pub priority: f64,
+    pub duration_sec: f64,
+    /// One placement per schedule that scheduled this block. Sorted by
+    /// `(algorithm, manifest_id)` for stable column rendering.
+    pub schedules: Vec<CohortBlockSchedulePlacement>,
+}
+
+/// Placement of a single block inside one schedule belonging to a cohort.
+#[derive(Debug, Clone, Serialize)]
+pub struct CohortBlockSchedulePlacement {
+    pub manifest_id: String,
+    pub algorithm: String,
+    pub start_mjd_utc: f64,
 }
 
 /// In-memory cache + filesystem persistence for workspaces.
@@ -105,6 +171,8 @@ pub struct WorkspaceStore {
     root: PathBuf,
     /// `workspace_id` → record (mirrors `index.json`).
     workspaces: Mutex<HashMap<String, WorkspaceRecord>>,
+    /// Persistent prescheduler cache shared across handlers.
+    preschedule_cache: Arc<PrescheduleCache>,
 }
 
 const TOP_INDEX_FILE: &str = "index.json";
@@ -161,6 +229,7 @@ impl WorkspaceStore {
             HashMap::new()
         };
         Ok(Self {
+            preschedule_cache: Arc::new(PrescheduleCache::new(root.join(PRESCHEDULE_CACHE_DIR))),
             root,
             workspaces: Mutex::new(map),
         })
@@ -325,6 +394,7 @@ impl WorkspaceStore {
             dataset_id: manifest.dataset.id.clone(),
             added_at: Utc::now(),
             idempotency_key: key,
+            cohort_key: cohort_key(manifest),
         };
         idx.entries.push(entry.clone());
         // Cross-reference into the schedule registry, if applicable.
@@ -510,23 +580,84 @@ impl WorkspaceStore {
     }
 
     /// Convenience: return the schedule referenced by a manifest's
-    /// `artifacts.schedule.uri`, when it points into this workspace.
+    /// `artifacts.schedule.uri`. Resolves both workspace-stored URIs
+    /// (`ws:///schedules/<sha>.json`) and `file://` artifacts written by
+    /// `phd sweep`.
     pub fn get_schedule_for_manifest(
         &self,
         workspace_id: &str,
         manifest_id: &str,
     ) -> WorkspaceResult<Value> {
         let manifest = self.get_manifest(workspace_id, manifest_id)?;
-        let sha = workspace_schedule_sha(&manifest).ok_or_else(|| {
-            WorkspaceError::NotFound(format!(
-                "manifest `{manifest_id}` has no workspace-stored schedule"
-            ))
-        })?;
-        self.get_schedule(workspace_id, &sha)
+        self.resolve_schedule_for_manifest(workspace_id, &manifest)
+    }
+
+    /// Resolve a schedule body for an already-loaded manifest. Tries the
+    /// workspace-stored sha first, then falls back to a `file://`
+    /// artifact on the local filesystem.
+    pub fn resolve_schedule_for_manifest(
+        &self,
+        workspace_id: &str,
+        manifest: &Manifest,
+    ) -> WorkspaceResult<Value> {
+        if let Some(sha) = workspace_schedule_sha(manifest) {
+            let path = self
+                .workspace_dir(workspace_id)
+                .join(SCHEDULES_DIR)
+                .join(format!("{sha}.json"));
+            if path.exists() {
+                return self.get_schedule(workspace_id, &sha);
+            }
+        }
+        if let Some(path) = manifest_file_schedule_path(manifest) {
+            let meta = fs::metadata(&path).map_err(|e| {
+                if e.kind() == ErrorKind::NotFound {
+                    WorkspaceError::NotFound(format!("schedule file `{}`", path.display()))
+                } else {
+                    WorkspaceError::Io(e)
+                }
+            })?;
+            if meta.len() > MAX_FILE_SCHEDULE_BYTES {
+                return Err(WorkspaceError::BadRequest(format!(
+                    "schedule file `{}` exceeds 256 MiB cap",
+                    path.display()
+                )));
+            }
+            let bytes = fs::read(&path).map_err(WorkspaceError::Io)?;
+            return serde_json::from_slice(&bytes)
+                .map_err(|e| WorkspaceError::InvalidManifest(e.to_string()));
+        }
+        Err(WorkspaceError::NotFound(format!(
+            "manifest `{}` has no resolvable schedule",
+            manifest.manifest_id
+        )))
+    }
+
+    /// Mirror of [`Self::resolve_schedule_for_manifest`] that only checks
+    /// whether the schedule body would be readable (no IO of the body).
+    pub fn manifest_has_resolvable_schedule(
+        &self,
+        workspace_id: &str,
+        manifest: &Manifest,
+    ) -> bool {
+        if let Some(sha) = workspace_schedule_sha(manifest) {
+            let path = self
+                .workspace_dir(workspace_id)
+                .join(SCHEDULES_DIR)
+                .join(format!("{sha}.json"));
+            if path.exists() {
+                return true;
+            }
+        }
+        if let Some(path) = manifest_file_schedule_path(manifest) {
+            return path.exists();
+        }
+        false
     }
 
     /// List schedule artifacts registered in the workspace. Cheap: only
     /// reads the index file.
+    #[allow(dead_code)]
     pub fn list_schedules(&self, workspace_id: &str) -> WorkspaceResult<Vec<ScheduleArtifact>> {
         self.ensure_workspace_exists(workspace_id)?;
         let idx: WsIndex = read_or_default(&self.workspace_dir(workspace_id).join(WS_INDEX_FILE))?;
@@ -537,18 +668,42 @@ impl WorkspaceStore {
     /// not load the referenced full schedules.**
     pub fn comparison_summary(&self, workspace_id: &str) -> WorkspaceResult<Vec<ManifestSummary>> {
         let entries = self.list_manifests(workspace_id)?;
-        let stored_shas: std::collections::HashSet<String> = self
-            .list_schedules(workspace_id)?
-            .into_iter()
-            .map(|s| s.sha256)
-            .collect();
         let mut out = Vec::with_capacity(entries.len());
         for e in entries {
             let m = self.get_manifest(workspace_id, &e.manifest_id)?;
-            let has_full_schedule = m.artifacts.schedule.is_some()
-                || workspace_schedule_sha(&m)
-                    .map(|sha| stored_shas.contains(&sha))
-                    .unwrap_or(false);
+            let has_full_schedule = self.manifest_has_resolvable_schedule(workspace_id, &m);
+            let ck = if e.cohort_key.is_empty() {
+                cohort_key(&m)
+            } else {
+                e.cohort_key.clone()
+            };
+            let block_ratios = match self.block_ratios_for_manifest(workspace_id, &m) {
+                Ok(v) => v,
+                Err(err) => {
+                    tracing::warn!(
+                        target: "phd.workspaces",
+                        workspace = %workspace_id,
+                        manifest = %m.manifest_id,
+                        error = %err,
+                        "block ratio computation failed",
+                    );
+                    None
+                }
+            };
+            let (total_block_count, schedulable_block_count, completed_block_count) =
+                match block_ratios {
+                    Some((t, s, c)) => (Some(t), Some(s), Some(c)),
+                    None => (None, None, None),
+                };
+            let block_completion_ratio = match (completed_block_count, total_block_count) {
+                (Some(c), Some(t)) if t > 0 => Some(c as f64 / t as f64),
+                _ => None,
+            };
+            let schedulable_block_completion_ratio =
+                match (completed_block_count, schedulable_block_count) {
+                    (Some(c), Some(s)) if s > 0 => Some(c as f64 / s as f64),
+                    _ => None,
+                };
             out.push(ManifestSummary {
                 manifest_id: m.manifest_id.clone(),
                 display_name: e.display_name,
@@ -565,6 +720,103 @@ impl WorkspaceStore {
                 validation_status: m.validation.status,
                 has_full_schedule,
                 tsi_schedule_id: m.links.tsi_schedule_id,
+                cohort_key: ck,
+                algorithm_config: m.algorithm.config.clone(),
+                scheduled_priority_stair: m.metrics.scheduled_priority_stair.clone(),
+                completed_block_count,
+                schedulable_block_count,
+                total_block_count,
+                block_completion_ratio,
+                schedulable_block_completion_ratio,
+            });
+        }
+        Ok(out)
+    }
+
+    /// List every cohort represented in this workspace. Cheap: only
+    /// loads manifests, never schedules.
+    pub fn list_cohorts(&self, workspace_id: &str) -> WorkspaceResult<Vec<CohortSummary>> {
+        let entries = self.list_manifests(workspace_id)?;
+        let mut grouped: HashMap<String, CohortSummary> = HashMap::new();
+        for e in entries {
+            let m = self.get_manifest(workspace_id, &e.manifest_id)?;
+            let key = if e.cohort_key.is_empty() {
+                cohort_key(&m)
+            } else {
+                e.cohort_key.clone()
+            };
+            let ctx = m.workspace_context().unwrap_or_default();
+            let period = ctx.period.unwrap_or(m.horizon);
+            let block_pool_hash = ctx.block_pool_hash;
+            let block_count = ctx.block_count;
+            let observatory_id = ctx.observatory_id;
+            let has_schedule = self.manifest_has_resolvable_schedule(workspace_id, &m);
+            let summary = grouped.entry(key.clone()).or_insert_with(|| CohortSummary {
+                cohort_key: key,
+                dataset_id: m.dataset.id.clone(),
+                observatory_id: observatory_id.clone(),
+                period,
+                block_pool_hash: block_pool_hash.clone(),
+                block_count,
+                manifest_count: 0,
+                schedule_count: 0,
+            });
+            summary.manifest_count += 1;
+            if has_schedule {
+                summary.schedule_count += 1;
+            }
+        }
+        let mut out: Vec<CohortSummary> = grouped.into_values().collect();
+        out.sort_by(|a, b| {
+            a.dataset_id
+                .cmp(&b.dataset_id)
+                .then(a.cohort_key.cmp(&b.cohort_key))
+        });
+        Ok(out)
+    }
+
+    /// Build the per-block breakdown table for a single cohort. Reads
+    /// only the schedules that are persisted in the workspace and that
+    /// belong to manifests in the cohort.
+    pub fn cohort_blocks(
+        &self,
+        workspace_id: &str,
+        cohort_key_q: &str,
+    ) -> WorkspaceResult<Vec<CohortBlockRow>> {
+        let entries = self.list_manifests(workspace_id)?;
+        let mut rows: HashMap<String, CohortBlockRow> = HashMap::new();
+        for e in entries {
+            let m = self.get_manifest(workspace_id, &e.manifest_id)?;
+            let key = if e.cohort_key.is_empty() {
+                cohort_key(&m)
+            } else {
+                e.cohort_key.clone()
+            };
+            if key != cohort_key_q {
+                continue;
+            }
+            if !self.manifest_has_resolvable_schedule(workspace_id, &m) {
+                continue;
+            }
+            let schedule = match self.resolve_schedule_for_manifest(workspace_id, &m) {
+                Ok(v) => v,
+                Err(WorkspaceError::NotFound(_)) => continue,
+                Err(other) => return Err(other),
+            };
+            harvest_block_rows(
+                &schedule,
+                &m.manifest_id,
+                m.algorithm.id.as_str(),
+                &mut rows,
+            );
+        }
+        let mut out: Vec<CohortBlockRow> = rows.into_values().collect();
+        out.sort_by(|a, b| a.block_id.cmp(&b.block_id));
+        for row in out.iter_mut() {
+            row.schedules.sort_by(|a, b| {
+                a.algorithm
+                    .cmp(&b.algorithm)
+                    .then(a.manifest_id.cmp(&b.manifest_id))
             });
         }
         Ok(out)
@@ -645,6 +897,168 @@ fn read_or_default<T: for<'de> Deserialize<'de> + Default>(path: &Path) -> Works
         .map_err(|e| WorkspaceError::Internal(format!("corrupt {}: {e}", path.display())))
 }
 
+/// Compute the canonical cohort key for a manifest. Stable across runs
+/// and across processes.
+///
+/// Key inputs (in order): `dataset_id`, `observatory_id|""`,
+/// `period.start_mjd_utc` (4-decimal-rounded), `period.end_mjd_utc`
+/// (4-decimal-rounded), `block_pool_hash|""`. When the manifest has no
+/// `extensions.workspace_context`, falls back to the manifest's
+/// `dataset.id` + `horizon` + empty observatory + empty pool hash so all
+/// pre-cohort manifests of the same dataset/horizon collapse into a
+/// single deterministic fallback bucket.
+pub fn cohort_key(manifest: &Manifest) -> String {
+    let ctx = manifest.workspace_context().unwrap_or_default();
+    let observatory = ctx.observatory_id.unwrap_or_default();
+    let period = ctx.period.unwrap_or(manifest.horizon);
+    let pool = ctx.block_pool_hash.unwrap_or_default();
+    let key = serde_json::json!([
+        manifest.dataset.id,
+        observatory,
+        round4(period.start_mjd_utc),
+        round4(period.end_mjd_utc),
+        pool,
+    ]);
+    let mut hasher = Sha256::new();
+    hasher.update(key.to_string().as_bytes());
+    format!("{:x}", hasher.finalize())
+}
+
+fn round4(x: f64) -> f64 {
+    (x * 10_000.0).round() / 10_000.0
+}
+
+/// Walk a self-contained schedule JSON and append per-block placement
+/// rows into `rows`, keyed by block id. Tolerates missing fields by
+/// skipping the affected block.
+///
+/// Walks `scheduling_blocks` first (current schedule shape) and falls
+/// back to the legacy `blocks` array when present.
+fn harvest_block_rows(
+    schedule: &Value,
+    manifest_id: &str,
+    algorithm: &str,
+    rows: &mut HashMap<String, CohortBlockRow>,
+) {
+    if let Some(blocks) = schedule.get("scheduling_blocks").and_then(|v| v.as_array()) {
+        for block in blocks {
+            harvest_scheduling_block(block, manifest_id, algorithm, rows);
+        }
+        return;
+    }
+    let Some(blocks) = schedule.get("blocks").and_then(|v| v.as_array()) else {
+        return;
+    };
+    for block in blocks {
+        harvest_legacy_block(block, manifest_id, algorithm, rows);
+    }
+}
+
+fn harvest_scheduling_block(
+    block: &Value,
+    manifest_id: &str,
+    algorithm: &str,
+    rows: &mut HashMap<String, CohortBlockRow>,
+) {
+    let Some(id) = block.get("id").and_then(json_id_to_string) else {
+        return;
+    };
+    let priority = block
+        .get("priority")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0);
+
+    // Sum per-task durations; ignore tasks lacking a numeric duration.
+    let mut duration_sec = 0.0_f64;
+    let mut min_start: Option<f64> = None;
+    let mut any_scheduled = false;
+    if let Some(tasks) = block.get("tasks").and_then(|v| v.as_array()) {
+        for task in tasks {
+            if let Some(d) = task
+                .get("duration")
+                .or_else(|| task.get("requested_duration_sec"))
+                .or_else(|| task.get("duration_sec"))
+                .and_then(|v| v.as_f64())
+            {
+                duration_sec += d;
+            }
+            let scheduled = task
+                .get("scheduled")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            if scheduled {
+                any_scheduled = true;
+                if let Some(start) = task.get("scheduled_start_mjd_utc").and_then(|v| v.as_f64()) {
+                    min_start = Some(min_start.map_or(start, |cur| cur.min(start)));
+                }
+            }
+        }
+    }
+
+    let row = rows.entry(id.clone()).or_insert(CohortBlockRow {
+        block_id: id.clone(),
+        priority,
+        duration_sec,
+        schedules: Vec::new(),
+    });
+    row.priority = priority;
+    row.duration_sec = duration_sec;
+    if any_scheduled && let Some(start) = min_start {
+        row.schedules.push(CohortBlockSchedulePlacement {
+            manifest_id: manifest_id.to_string(),
+            algorithm: algorithm.to_string(),
+            start_mjd_utc: start,
+        });
+    }
+}
+
+fn harvest_legacy_block(
+    block: &Value,
+    manifest_id: &str,
+    algorithm: &str,
+    rows: &mut HashMap<String, CohortBlockRow>,
+) {
+    let Some(id) = block.get("id").and_then(json_id_to_string) else {
+        return;
+    };
+    let priority = block
+        .get("priority")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0);
+    let duration_sec = block
+        .get("duration_sec")
+        .or_else(|| block.get("duration"))
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0);
+    let row = rows.entry(id.clone()).or_insert(CohortBlockRow {
+        block_id: id.clone(),
+        priority,
+        duration_sec,
+        schedules: Vec::new(),
+    });
+    row.priority = priority;
+    row.duration_sec = duration_sec;
+    if let Some(start) = block
+        .get("start_mjd_utc")
+        .or_else(|| block.get("start"))
+        .and_then(|v| v.as_f64())
+    {
+        row.schedules.push(CohortBlockSchedulePlacement {
+            manifest_id: manifest_id.to_string(),
+            algorithm: algorithm.to_string(),
+            start_mjd_utc: start,
+        });
+    }
+}
+
+fn json_id_to_string(v: &Value) -> Option<String> {
+    match v {
+        Value::String(s) => Some(s.clone()),
+        Value::Number(n) => Some(n.to_string()),
+        _ => None,
+    }
+}
+
 /// Slugify a workspace name into a stable, filesystem-safe id.
 fn slugify(name: &str) -> String {
     let mut out = String::with_capacity(name.len());
@@ -680,6 +1094,212 @@ fn workspace_schedule_sha(manifest: &Manifest) -> Option<String> {
     } else {
         None
     }
+}
+
+/// If the manifest's schedule artifact is a `file://` URI, return the
+/// resulting filesystem path.
+fn manifest_file_schedule_path(manifest: &Manifest) -> Option<PathBuf> {
+    let art = manifest.artifacts.schedule.as_ref()?;
+    let path = art.uri.strip_prefix("file://")?;
+    Some(PathBuf::from(path))
+}
+
+/// Stable hash over the (sorted) block ids in a scheduling problem JSON,
+/// matching the algorithm `phd sweep` uses.
+fn block_pool_hash_from_ids(ids: &[String]) -> String {
+    let mut sorted: Vec<&String> = ids.iter().collect();
+    sorted.sort();
+    let mut hasher = Sha256::new();
+    for id in sorted {
+        hasher.update(id.as_bytes());
+        hasher.update([0u8]);
+    }
+    format!("{:x}", hasher.finalize())
+}
+
+/// Inspect a self-contained schedule JSON and derive a [`WorkspaceContext`].
+fn derive_workspace_context_from_schedule(schedule: &Value) -> WorkspaceContext {
+    let mut ctx = WorkspaceContext::default();
+    if let Some(period) = schedule
+        .get("schedule_metadata")
+        .and_then(|m| m.get("period"))
+    {
+        let s = period.get("start_mjd_utc").and_then(|v| v.as_f64());
+        let e = period.get("end_mjd_utc").and_then(|v| v.as_f64());
+        if let (Some(start_mjd_utc), Some(end_mjd_utc)) = (s, e) {
+            ctx.period = Some(scheduler::manifest::Horizon {
+                start_mjd_utc,
+                end_mjd_utc,
+            });
+        }
+    }
+    if let Some(name) = schedule
+        .get("schedule_metadata")
+        .and_then(|m| m.get("location"))
+        .and_then(|l| l.get("name"))
+        .and_then(|v| v.as_str())
+    {
+        ctx.observatory_id = Some(name.to_string());
+    }
+    let block_ids: Vec<String> = schedule
+        .get("scheduling_blocks")
+        .or_else(|| schedule.get("blocks"))
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|b| b.get("id").and_then(json_id_to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+    if !block_ids.is_empty() {
+        ctx.block_count = Some(block_ids.len() as u64);
+        ctx.block_pool_hash = Some(block_pool_hash_from_ids(&block_ids));
+    }
+    ctx
+}
+
+/// Public re-export so route layer (`ingest_schedule`) can populate the
+/// extension subkey on the derived manifest.
+pub(crate) fn workspace_context_from_schedule(schedule: &Value) -> WorkspaceContext {
+    derive_workspace_context_from_schedule(schedule)
+}
+
+impl WorkspaceStore {
+    /// Compute `(total_block_count, schedulable_block_count, completed_block_count)`
+    /// for a manifest. Returns `None` when the input scheduling problem
+    /// can not be resolved.
+    ///
+    /// `completed_block_count` is `0` when the schedule itself can not be
+    /// resolved.
+    pub fn block_ratios_for_manifest(
+        &self,
+        workspace_id: &str,
+        manifest: &Manifest,
+    ) -> WorkspaceResult<Option<(u64, u64, u64)>> {
+        // Resolve the SchedulingProblem.
+        let resolved_schedule = self
+            .resolve_schedule_for_manifest(workspace_id, manifest)
+            .ok();
+        let problem = match self.resolve_problem_for_manifest(manifest, resolved_schedule.as_ref())
+        {
+            Some(p) => p,
+            None => return Ok(None),
+        };
+
+        // Pick the horizon — prefer the workspace_context period.
+        let horizon = manifest
+            .workspace_context()
+            .and_then(|c| c.period)
+            .unwrap_or(manifest.horizon);
+
+        let entry = match self.preschedule_cache.get_or_compute(&problem, horizon) {
+            Ok(e) => e,
+            Err(e) => {
+                return Err(WorkspaceError::Internal(format!(
+                    "preschedule cache failed: {e}"
+                )));
+            }
+        };
+        let total = entry.total_block_count;
+        let schedulable = entry.schedulable_block_ids.len() as u64;
+
+        // Completed: if we have a schedule, reconstruct placements and
+        // count blocks that are complete. Otherwise 0.
+        let completed = if let Some(schedule_value) = resolved_schedule {
+            count_completed_blocks(&problem, &schedule_value)
+        } else {
+            0
+        };
+
+        Ok(Some((total, schedulable, completed)))
+    }
+
+    /// Resolve a [`SchedulingProblem`] for a manifest.  Order:
+    /// 1. From a workspace-stored / file:// schedule (envelope shape).
+    /// 2. From `manifest.dataset.source_path` if it points to a readable file.
+    fn resolve_problem_for_manifest(
+        &self,
+        manifest: &Manifest,
+        resolved_schedule: Option<&Value>,
+    ) -> Option<scheduler::SchedulingProblem> {
+        if let Some(value) = resolved_schedule
+            && let Ok(p) = serde_json::from_value::<scheduler::SchedulingProblem>(value.clone())
+        {
+            return Some(p);
+        }
+        if let Some(path) = manifest_file_schedule_path(manifest)
+            && let Ok(bytes) = fs::read(&path)
+            && let Ok(p) = serde_json::from_slice::<scheduler::SchedulingProblem>(&bytes)
+        {
+            return Some(p);
+        }
+        let dataset_path = Path::new(&manifest.dataset.source_path);
+        if dataset_path.is_file()
+            && let Ok(bytes) = fs::read(dataset_path)
+            && let Ok(p) = serde_json::from_slice::<scheduler::SchedulingProblem>(&bytes)
+        {
+            return Some(p);
+        }
+        None
+    }
+}
+
+fn count_completed_blocks(problem: &scheduler::SchedulingProblem, schedule_value: &Value) -> u64 {
+    let placements = collect_task_placements(schedule_value);
+    if placements.is_empty() {
+        return 0;
+    }
+    let mut schedule = scheduler::Schedule::new();
+    for (task_id, start, end) in placements {
+        let placement = scheduler::TaskPlacement {
+            task_id: scheduler::time::TaskId(task_id),
+            start: scheduler::time::Time::<scheduler::time::MJD>::new(start),
+            end: scheduler::time::Time::<scheduler::time::MJD>::new(end),
+        };
+        schedule.insert_placement(placement);
+    }
+    let mut count = 0u64;
+    for block in problem.blocks() {
+        if block.is_complete(&schedule) {
+            count += 1;
+        }
+    }
+    count
+}
+
+fn collect_task_placements(schedule_value: &Value) -> Vec<(u64, f64, f64)> {
+    let mut out = Vec::new();
+    let blocks_iter: Box<dyn Iterator<Item = &Value>> = if let Some(arr) = schedule_value
+        .get("scheduling_blocks")
+        .and_then(|v| v.as_array())
+    {
+        Box::new(arr.iter())
+    } else if let Some(arr) = schedule_value.get("blocks").and_then(|v| v.as_array()) {
+        Box::new(arr.iter())
+    } else {
+        return out;
+    };
+    for block in blocks_iter {
+        let Some(tasks) = block.get("tasks").and_then(|v| v.as_array()) else {
+            continue;
+        };
+        for task in tasks {
+            let scheduled = task
+                .get("scheduled")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            if !scheduled {
+                continue;
+            }
+            let id = task.get("id").and_then(|v| v.as_u64());
+            let start = task.get("scheduled_start_mjd_utc").and_then(|v| v.as_f64());
+            let end = task.get("scheduled_end_mjd_utc").and_then(|v| v.as_f64());
+            if let (Some(id), Some(start), Some(end)) = (id, start, end) {
+                out.push((id, start, end));
+            }
+        }
+    }
+    out
 }
 
 /// JSON convenience: the `Manifest` validator on add. Keeps the route

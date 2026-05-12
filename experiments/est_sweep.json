@@ -7,28 +7,19 @@
       "label": "SDC North"
     },
     {
-      "id": "lst_2024",
-      "path": "../data/lst_2024.json",
-      "label": "LST 2024"
-    },
-    {
-      "id": "lst_2025",
-      "path": "../data/lst_2025.json",
-      "label": "LST 2025"
-    },
-    {
-      "id": "lst_2026",
-      "path": "../data/lst_2026.json",
-      "label": "LST 2026"
+      "id": "isdc_s",
+      "path": "../data/isdc_s.json",
+      "label": "SDC South"
     }
   ],
   "algorithms": [
     {
       "kind": "est",
       "axes": {
-        "endangered_thresholds": [0, 1, 2, 4, 8, 16, 32],
-        "k_beams": [1, 2, 4, 8, 16, 32],
-        "branching_factors": [1, 2, 4, 8, 16, 32]
+        "endangered_thresholds": [0, 5, 10],
+        "k_beams": [1, 5, 10],
+        "branching_factors": [1, 5, 10],
+        "foms": ["soft_constraint", "future_flexibility"]
       }
     }
   ],

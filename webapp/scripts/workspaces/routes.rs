@@ -35,8 +35,8 @@ use std::sync::Arc;
 
 use crate::workspaces::errors::{WorkspaceError, WorkspaceResult};
 use crate::workspaces::store::{
-    ManifestEntry, ManifestSummary, WorkspaceRecord, WorkspaceStatus, WorkspaceStore,
-    validate_manifest_payload,
+    CohortBlockRow, CohortSummary, ManifestEntry, ManifestSummary, WorkspaceRecord,
+    WorkspaceStatus, WorkspaceStore, validate_manifest_payload,
 };
 
 #[derive(Clone)]
@@ -70,6 +70,11 @@ where
             get(get_manifest_schedule),
         )
         .route("/workspaces/{id}/comparison", get(comparison_summary))
+        .route("/workspaces/{id}/cohorts", get(list_cohorts))
+        .route(
+            "/workspaces/{id}/cohorts/{cohort_key}/blocks",
+            get(cohort_blocks),
+        )
         .route("/workspaces/{id}/schedules", post(ingest_schedule))
         .route(
             "/workspaces/{id}/schedules/batch",
@@ -298,6 +303,22 @@ async fn comparison_summary(
     Ok(Json(json!({ "summaries": summaries })))
 }
 
+async fn list_cohorts(
+    Extension(state): Extension<Arc<WorkspacesState>>,
+    Path(id): Path<String>,
+) -> WorkspaceResult<Json<Value>> {
+    let cohorts: Vec<CohortSummary> = state.store.list_cohorts(&id)?;
+    Ok(Json(json!({ "cohorts": cohorts })))
+}
+
+async fn cohort_blocks(
+    Extension(state): Extension<Arc<WorkspacesState>>,
+    Path((id, cohort_key)): Path<(String, String)>,
+) -> WorkspaceResult<Json<Value>> {
+    let blocks: Vec<CohortBlockRow> = state.store.cohort_blocks(&id, &cohort_key)?;
+    Ok(Json(json!({ "blocks": blocks })))
+}
+
 // ── schedule ingestion ────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
@@ -429,10 +450,38 @@ fn ingest_one(
         sha256: sha,
         media_type: "application/json".to_string(),
     });
+    // Derive workspace_context from the schedule when the manifest does
+    // not already carry a fully populated one.
+    let derived = crate::workspaces::store::workspace_context_from_schedule(&body.schedule);
+    let existing = manifest.workspace_context();
+    let merged = merge_workspace_context(existing, derived);
+    if merged != scheduler::manifest::WorkspaceContext::default() {
+        manifest.extensions = serde_json::json!({ "workspace_context": merged });
+    }
     // Re-run the structural validator with the new artifact ref so the
     // stored manifest carries an up-to-date validation report.
     manifest.validation = manifest.validate();
     store.add_manifest(workspace_id, &manifest, body.idempotency_key)
+}
+
+fn merge_workspace_context(
+    existing: Option<scheduler::manifest::WorkspaceContext>,
+    derived: scheduler::manifest::WorkspaceContext,
+) -> scheduler::manifest::WorkspaceContext {
+    let mut out = existing.unwrap_or_default();
+    if out.observatory_id.is_none() {
+        out.observatory_id = derived.observatory_id;
+    }
+    if out.period.is_none() {
+        out.period = derived.period;
+    }
+    if out.block_pool_hash.is_none() {
+        out.block_pool_hash = derived.block_pool_hash;
+    }
+    if out.block_count.is_none() {
+        out.block_count = derived.block_count;
+    }
+    out
 }
 
 async fn ingest_schedule(

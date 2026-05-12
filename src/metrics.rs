@@ -129,6 +129,18 @@ pub struct FragmentationStats {
     /// `gap_total_sec / available_time_sec`. `0.0` when no schedule is
     /// possible. Higher means more fragmented.
     pub fragmentation_index: f64,
+    /// Smallest non-zero idle gap, in seconds. Optional (additive).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gap_min_sec: Option<f64>,
+    /// Mean idle gap, in seconds (= gap_total_sec / gap_count). Optional.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gap_mean_sec: Option<f64>,
+    /// Median idle gap, in seconds. Optional.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gap_median_sec: Option<f64>,
+    /// 90th-percentile idle gap, in seconds. Optional.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gap_p90_sec: Option<f64>,
 }
 
 /// Sort direction used by [`ScheduledPriorityStair`].
@@ -386,7 +398,7 @@ impl FragmentationStats {
             .collect();
         intervals.sort_by(|a, b| a.0.total_cmp(&b.0));
 
-        let mut gap_count = 0usize;
+        let mut gaps_days: Vec<f64> = Vec::new();
         let mut gap_total_days = 0.0;
         let mut largest_gap_days = 0.0;
         for window in intervals.windows(2) {
@@ -394,7 +406,7 @@ impl FragmentationStats {
             let next_start = window[1].0;
             if next_start > prev_end {
                 let gap = next_start - prev_end;
-                gap_count += 1;
+                gaps_days.push(gap);
                 gap_total_days += gap;
                 if gap > largest_gap_days {
                     largest_gap_days = gap;
@@ -402,16 +414,54 @@ impl FragmentationStats {
             }
         }
 
+        let gap_count = gaps_days.len();
         let gap_total_sec = gap_total_days * SECONDS_PER_DAY;
         let largest_gap_sec = largest_gap_days * SECONDS_PER_DAY;
         let fragmentation_index = ratio(gap_total_sec, available_time_sec);
+
+        let (gap_min_sec, gap_mean_sec, gap_median_sec, gap_p90_sec) = if gap_count == 0 {
+            (None, None, None, None)
+        } else {
+            let mut sorted = gaps_days.clone();
+            sorted.sort_by(|a, b| a.total_cmp(b));
+            let min = sorted[0] * SECONDS_PER_DAY;
+            let mean = (gap_total_days / gap_count as f64) * SECONDS_PER_DAY;
+            let median = percentile_sorted(&sorted, 0.5) * SECONDS_PER_DAY;
+            let p90 = percentile_sorted(&sorted, 0.9) * SECONDS_PER_DAY;
+            (Some(min), Some(mean), Some(median), Some(p90))
+        };
 
         Self {
             gap_count,
             gap_total_sec,
             largest_gap_sec,
             fragmentation_index,
+            gap_min_sec,
+            gap_mean_sec,
+            gap_median_sec,
+            gap_p90_sec,
         }
+    }
+}
+
+/// Linear-interpolated percentile over a pre-sorted slice. Returns 0.0
+/// for an empty slice. `q` is in `[0.0, 1.0]`.
+fn percentile_sorted(sorted: &[f64], q: f64) -> f64 {
+    if sorted.is_empty() {
+        return 0.0;
+    }
+    if sorted.len() == 1 {
+        return sorted[0];
+    }
+    let q = q.clamp(0.0, 1.0);
+    let idx = q * (sorted.len() - 1) as f64;
+    let lo = idx.floor() as usize;
+    let hi = idx.ceil() as usize;
+    if lo == hi {
+        sorted[lo]
+    } else {
+        let frac = idx - lo as f64;
+        sorted[lo] * (1.0 - frac) + sorted[hi] * frac
     }
 }
 

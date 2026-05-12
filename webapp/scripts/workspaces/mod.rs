@@ -7,6 +7,7 @@
 //! the responsibility of TSI.
 
 pub mod errors;
+pub mod preschedule_cache;
 pub mod routes;
 pub mod store;
 

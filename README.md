@@ -89,6 +89,21 @@ self-contained schedule JSON per cell** into `<DIR>` (flat — no
 subdirectories). Use `--manifest` to also emit a companion
 `<cell_id>.manifest.json` next to every schedule.
 
+> Note: `phd sweep` invokes the sibling `experiments` binary from
+> `target/debug/experiments` or `target/release/experiments`. If you
+> encounter `failed to spawn experiments: No such file or directory`,
+> build it first with:
+>
+> ```bash
+> cargo build --manifest-path experiments/Cargo.toml --target-dir target
+> ```
+> 
+> For a release run, build the release binary as well:
+>
+> ```bash
+> cargo build --release --manifest-path experiments/Cargo.toml --target-dir target
+> ```
+
 | Flag | Required | Description |
 |---|---|---|
 | `--spec <FILE>` | ✅ | Path to the experiment spec JSON (see [Spec Format](#spec-format)) |
@@ -325,6 +340,7 @@ scheduler <input_json> [horizon_start_mjd horizon_end_mjd]
 | `--est-b <usize>` | `1` | Branching factor |
 
 Aliases: `--est-endangered-threshold`, `--est-schedule-states`, `--est-branching-factor`.
+Short flags `-e`, `-k`, and `-b` are not supported; use `--est-e`, `--est-k`, and `--est-b`.
 
 #### HAP options
 
@@ -503,15 +519,19 @@ environment variables.
 | Section | Location | Purpose |
 |---|---|---|
 | Schedule Management | `/schedules` | Browse and manage all uploaded schedules |
-| Workspace | `/workspace` | Create schedule-comparison environments and upload algorithm results |
-| Algorithm Analysis | `/algorithm-analysis` | Compare algorithms across configurations |
+| Workspace | `/workspace` | Group runs by cohort, compare manifests, drill down into schedules |
 
-**Workspace page** has two subsections:
+**Workspace page** is the single home for comparable runs. Each workspace
+contains uploaded **manifests** (lightweight, canonical exchange format)
+and optionally the **full schedules** they reference. Results are grouped
+by cohort — `(dataset, observatory, period, block_pool_hash)` — so the
+summary table works on manifest metrics alone, while the per-block table
+appears only when at least one schedule has been persisted.
 
-1. **Schedule comparison workspaces** — group schedules sharing the same observatory
-   and period for visual comparison (sky maps, timelines, KPIs).
-2. **Algorithm Results** — upload manifest or schedule JSON files into named PhD
-   workspaces for long-term result tracking.
+The upload area accepts mixed batches of `manifest.json` and self-contained
+`schedule.json` files (drag-and-drop a folder). Standalone
+`schedule_metrics.json` files are rejected; metrics live inside the
+manifest envelope.
 
 ---
 
@@ -630,4 +650,3 @@ Auto-fix formatting:
 ```bash
 cargo fmt --all
 ```
-

@@ -28,7 +28,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 /// Current manifest schema version. Bump per the rules in the module docs.
-pub const MANIFEST_SCHEMA_VERSION: &str = "1.0.0";
+pub const MANIFEST_SCHEMA_VERSION: &str = "1.1.0";
 
 /// Where a heavy artifact lives and how to verify it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -343,6 +343,35 @@ impl Manifest {
         };
 
         ValidationReport { status, issues }
+    }
+}
+
+/// Reserved subkey under `Manifest::extensions` carrying cohort-grouping
+/// hints for the webapp `/workspace` UI.
+///
+/// All fields are optional and additive. Producers populate what they
+/// know; readers tolerate missing fields by falling back to the manifest
+/// `dataset` + `horizon`.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct WorkspaceContext {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observatory_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub period: Option<Horizon>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub block_pool_hash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub block_count: Option<u64>,
+}
+
+impl Manifest {
+    /// Read the optional `extensions.workspace_context` block. Returns
+    /// `None` when the manifest has no extensions, no `workspace_context`
+    /// subkey, or the subkey fails to deserialize.
+    pub fn workspace_context(&self) -> Option<WorkspaceContext> {
+        let ext = self.extensions.as_object()?;
+        let value = ext.get("workspace_context")?;
+        serde_json::from_value(value.clone()).ok()
     }
 }
 

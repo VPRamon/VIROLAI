@@ -580,3 +580,132 @@ async fn schedule_drill_down_404_when_not_stored() {
     .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
+
+// ── cohorts ────────────────────────────────────────────────────────────
+
+fn manifest_with_cohort(
+    manifest_id: &str,
+    algorithm: &str,
+    dataset: &str,
+    observatory: Option<&str>,
+    pool: Option<&str>,
+) -> Value {
+    let mut m = sample_manifest(manifest_id, algorithm, dataset);
+    let mut ctx = serde_json::Map::new();
+    if let Some(o) = observatory {
+        ctx.insert("observatory_id".into(), Value::String(o.to_string()));
+    }
+    ctx.insert(
+        "period".into(),
+        json!({ "start_mjd_utc": 60000.0, "end_mjd_utc": 60001.0 }),
+    );
+    if let Some(p) = pool {
+        ctx.insert("block_pool_hash".into(), Value::String(p.to_string()));
+    }
+    m["extensions"] = json!({ "workspace_context": Value::Object(ctx) });
+    m
+}
+
+#[tokio::test]
+async fn cohorts_group_manifests_by_workspace_context() {
+    let (_tmp, app) = build_app();
+    let _ = json_call(
+        &app,
+        Method::POST,
+        "/v1/workspaces",
+        Some(json!({ "name": "Cohorts" })),
+    )
+    .await;
+    // Two manifests share the same cohort (same dataset, observatory, pool).
+    let m1 = manifest_with_cohort("m-1", "est", "ds-A", Some("CTA-N"), Some("pool-1"));
+    let m2 = manifest_with_cohort("m-2", "fom", "ds-A", Some("CTA-N"), Some("pool-1"));
+    // Third differs by observatory.
+    let m3 = manifest_with_cohort("m-3", "est", "ds-A", Some("CTA-S"), Some("pool-1"));
+    for m in [&m1, &m2, &m3] {
+        let (status, _) = json_call(
+            &app,
+            Method::POST,
+            "/v1/workspaces/cohorts/manifests",
+            Some(json!({ "manifest": m })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED);
+    }
+    let (status, body) = json_call(&app, Method::GET, "/v1/workspaces/cohorts/cohorts", None).await;
+    assert_eq!(status, StatusCode::OK);
+    let cohorts = body["cohorts"].as_array().unwrap();
+    assert_eq!(cohorts.len(), 2);
+    let counts: Vec<u64> = cohorts
+        .iter()
+        .map(|c| c["manifest_count"].as_u64().unwrap())
+        .collect();
+    assert!(counts.contains(&2));
+    assert!(counts.contains(&1));
+}
+
+#[tokio::test]
+async fn cohort_fallback_groups_legacy_manifests() {
+    let (_tmp, app) = build_app();
+    let _ = json_call(
+        &app,
+        Method::POST,
+        "/v1/workspaces",
+        Some(json!({ "name": "Legacy" })),
+    )
+    .await;
+    // No workspace_context → fallback cohort by (dataset, horizon).
+    let m1 = sample_manifest("m-1", "est", "ds-A");
+    let m2 = sample_manifest("m-2", "fom", "ds-A");
+    for m in [&m1, &m2] {
+        let (status, _) = json_call(
+            &app,
+            Method::POST,
+            "/v1/workspaces/legacy/manifests",
+            Some(json!({ "manifest": m })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED);
+    }
+    let (status, body) = json_call(&app, Method::GET, "/v1/workspaces/legacy/cohorts", None).await;
+    assert_eq!(status, StatusCode::OK);
+    let cohorts = body["cohorts"].as_array().unwrap();
+    assert_eq!(cohorts.len(), 1);
+    assert_eq!(cohorts[0]["manifest_count"], 2);
+}
+
+#[tokio::test]
+async fn cohort_blocks_only_uses_persisted_schedules() {
+    let (_tmp, app) = build_app();
+    let _ = json_call(
+        &app,
+        Method::POST,
+        "/v1/workspaces",
+        Some(json!({ "name": "Blocks" })),
+    )
+    .await;
+    // A manifest with no stored schedule.
+    let bare = manifest_with_cohort("m-bare", "est", "ds-A", Some("CTA-N"), Some("pool-1"));
+    let (status, _) = json_call(
+        &app,
+        Method::POST,
+        "/v1/workspaces/blocks/manifests",
+        Some(json!({ "manifest": bare })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let cohort_key = json_call(&app, Method::GET, "/v1/workspaces/blocks/cohorts", None)
+        .await
+        .1["cohorts"][0]["cohort_key"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let (status, body) = json_call(
+        &app,
+        Method::GET,
+        &format!("/v1/workspaces/blocks/cohorts/{cohort_key}/blocks"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body["blocks"].as_array().unwrap().is_empty());
+}

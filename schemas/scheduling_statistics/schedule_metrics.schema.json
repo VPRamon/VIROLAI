@@ -76,7 +76,27 @@
         "gap_count": { "type": "integer", "minimum": 0 },
         "gap_total_sec": { "type": "number", "minimum": 0 },
         "largest_gap_sec": { "type": "number", "minimum": 0 },
-        "fragmentation_index": { "type": "number" }
+        "fragmentation_index": { "type": "number" },
+        "gap_min_sec": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Smallest non-zero idle gap, in seconds. Optional; absent for back-compat with manifests produced before the gap distribution was tracked."
+        },
+        "gap_mean_sec": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Mean idle gap, in seconds (= gap_total_sec / gap_count when gap_count > 0). Optional."
+        },
+        "gap_median_sec": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Median idle gap, in seconds. Optional."
+        },
+        "gap_p90_sec": {
+          "type": "number",
+          "minimum": 0,
+          "description": "90th-percentile idle gap, in seconds. Optional."
+        }
       }
     },
     "PriorityStair": {

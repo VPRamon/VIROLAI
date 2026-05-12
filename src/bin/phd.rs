@@ -23,7 +23,7 @@
 use clap::{Parser, Subcommand};
 use scheduler::manifest::{
     AlgorithmRef, ArtifactRef, DatasetRef, Horizon, Manifest, Producer, Provenance, RunInfo,
-    RunKind, RunStatus, ValidationReport, ValidationStatus,
+    RunKind, RunStatus, ValidationReport, ValidationStatus, WorkspaceContext,
 };
 use scheduler::metrics::ScheduleMetrics;
 use serde::Deserialize;
@@ -677,6 +677,24 @@ fn manifest_create_from_schedule(
     let schedule_sha = sha256_of(schedule_path).unwrap_or_else(|_| "0".repeat(64));
     let schedule_size = fs::metadata(schedule_path).map(|m| m.len()).unwrap_or(0);
 
+    let observatory_id = meta
+        .get("observatory_id")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+    let ws_ctx = WorkspaceContext {
+        observatory_id,
+        period: Some(Horizon {
+            start_mjd_utc: start_mjd,
+            end_mjd_utc: end_mjd,
+        }),
+        block_pool_hash: meta
+            .get("block_pool_hash")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
+        block_count: meta.get("block_count").and_then(|v| v.as_u64()),
+    };
+    let extensions = workspace_context_to_extensions(ws_ctx);
+
     let manifest = Manifest {
         manifest_schema_version: scheduler::manifest::MANIFEST_SCHEMA_VERSION.to_string(),
         manifest_id: uuid::Uuid::new_v4().to_string(),
@@ -735,7 +753,7 @@ fn manifest_create_from_schedule(
             status: ValidationStatus::Valid,
             issues: Vec::new(),
         },
-        extensions: serde_json::Value::Null,
+        extensions,
     };
 
     let serialized = serde_json::to_string_pretty(&manifest)
@@ -811,7 +829,10 @@ fn build_cell_manifest(
         None
     };
 
-    let horizon = horizon_from_metrics(&metrics);
+    let horizon = horizon_from_schedule_metadata(&schedule_doc)
+        .unwrap_or_else(|| horizon_from_metrics(&metrics));
+    let ws_ctx = derive_workspace_context_from_dataset(&dataset_path, horizon);
+    let extensions = workspace_context_to_extensions(ws_ctx);
 
     let manifest = Manifest {
         manifest_schema_version: scheduler::manifest::MANIFEST_SCHEMA_VERSION.to_string(),
@@ -863,10 +884,74 @@ fn build_cell_manifest(
             status: ValidationStatus::Valid,
             issues: Vec::new(),
         },
-        extensions: serde_json::Value::Null,
+        extensions,
     };
     let _ = experiment_name; // currently unused but reserved for future provenance fields.
     Ok(manifest)
+}
+
+/// Read a scheduling-problem JSON file and derive a [`WorkspaceContext`].
+///
+/// Returns a context with `block_pool_hash` (sha256 over sorted block ids),
+/// `block_count`, and `observatory_id` when those fields can be parsed
+/// without typed deserialization. `period` is set to `horizon` so cohort
+/// keys align with the manifest horizon. On any parse error returns a
+/// minimal context populated only with `period`.
+fn derive_workspace_context_from_dataset(
+    dataset_path: &Path,
+    horizon: Horizon,
+) -> WorkspaceContext {
+    let mut ctx = WorkspaceContext {
+        period: Some(horizon),
+        ..Default::default()
+    };
+    let Ok(text) = fs::read_to_string(dataset_path) else {
+        return ctx;
+    };
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return ctx;
+    };
+
+    if let Some(blocks) = value.get("scheduling_blocks").and_then(|v| v.as_array()) {
+        let mut ids: Vec<String> = blocks
+            .iter()
+            .filter_map(|b| {
+                b.get("id").and_then(|id| match id {
+                    serde_json::Value::String(s) => Some(s.clone()),
+                    serde_json::Value::Number(n) => Some(n.to_string()),
+                    _ => None,
+                })
+            })
+            .collect();
+        ids.sort();
+        if !ids.is_empty() {
+            let mut hasher = Sha256::new();
+            for id in &ids {
+                hasher.update(id.as_bytes());
+                hasher.update([0u8]);
+            }
+            ctx.block_pool_hash = Some(format!("{:x}", hasher.finalize()));
+            ctx.block_count = Some(ids.len() as u64);
+        }
+    }
+
+    if let Some(resources) = value.get("resources").and_then(|v| v.as_array())
+        && let Some(name) = resources
+            .first()
+            .and_then(|r| r.get("name"))
+            .and_then(|v| v.as_str())
+    {
+        ctx.observatory_id = Some(name.to_string());
+    }
+
+    ctx
+}
+
+fn workspace_context_to_extensions(ctx: WorkspaceContext) -> serde_json::Value {
+    if ctx == WorkspaceContext::default() {
+        return serde_json::Value::Null;
+    }
+    serde_json::json!({ "workspace_context": ctx })
 }
 
 fn horizon_from_metrics(metrics: &ScheduleMetrics) -> Horizon {
@@ -879,6 +964,20 @@ fn horizon_from_metrics(metrics: &ScheduleMetrics) -> Horizon {
         start_mjd_utc: 0.0,
         end_mjd_utc: days,
     }
+}
+
+/// Extract `schedule_metadata.period.{start,end}_mjd_utc` from a schedule
+/// JSON document and turn it into a [`Horizon`].
+fn horizon_from_schedule_metadata(schedule_doc: &serde_json::Value) -> Option<Horizon> {
+    let period = schedule_doc
+        .get("schedule_metadata")
+        .and_then(|m| m.get("period"))?;
+    let start_mjd_utc = period.get("start_mjd_utc").and_then(|v| v.as_f64())?;
+    let end_mjd_utc = period.get("end_mjd_utc").and_then(|v| v.as_f64())?;
+    Some(Horizon {
+        start_mjd_utc,
+        end_mjd_utc,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -1124,6 +1223,13 @@ fn collect_dir_paths(
             JsonKind::Manifest => manifests.push(path),
             JsonKind::Schedule if include_schedules => schedules.push(path),
             JsonKind::Schedule => { /* dropped per --include-schedules=false */ }
+            JsonKind::StandaloneMetrics => {
+                eprintln!(
+                    "  · skipping `{}`: standalone schedule_metrics.json is no longer accepted; \
+                     embed metrics inside a manifest or upload the full schedule",
+                    path.display()
+                );
+            }
             JsonKind::Unknown => {
                 eprintln!(
                     "  · skipping `{}` (not a manifest nor a self-contained schedule)",
@@ -1153,16 +1259,20 @@ fn walk_json(dir: &Path, out: &mut Vec<PathBuf>) {
 enum JsonKind {
     Manifest,
     Schedule,
+    StandaloneMetrics,
     Unknown,
     Unreadable(String),
 }
 
 fn classify_json(path: &Path) -> JsonKind {
     // Cheap path-name heuristic first; fall back to content inspection.
-    if let Some(name) = path.file_name().and_then(|s| s.to_str())
-        && (name == "manifest.json" || name.ends_with(".manifest.json"))
-    {
-        return JsonKind::Manifest;
+    if let Some(name) = path.file_name().and_then(|s| s.to_str()) {
+        if name == "manifest.json" || name.ends_with(".manifest.json") {
+            return JsonKind::Manifest;
+        }
+        if name == "schedule_metrics.json" || name.ends_with(".schedule_metrics.json") {
+            return JsonKind::StandaloneMetrics;
+        }
     }
     let bytes = match fs::read(path) {
         Ok(b) => b,
@@ -1174,8 +1284,16 @@ fn classify_json(path: &Path) -> JsonKind {
     };
     if value.get("manifest_schema_version").is_some() && value.get("manifest_id").is_some() {
         JsonKind::Manifest
-    } else if value.get("schedule_metadata").is_some() && value.get("schedule_metrics").is_some() {
+    } else if value.get("schedule_metadata").is_some()
+        && (value.get("scheduling_blocks").is_some() || value.get("blocks").is_some())
+    {
         JsonKind::Schedule
+    } else if value.get("scheduled_task_count").is_some()
+        && value.get("fragmentation").is_some()
+        && value.get("manifest_schema_version").is_none()
+    {
+        // Bare ScheduleMetrics blob (no envelope).
+        JsonKind::StandaloneMetrics
     } else {
         JsonKind::Unknown
     }

@@ -14,10 +14,10 @@ another doc disagrees with this one, this one wins.
     │     │            ├ <cell>.json   │ ──────► │  POST /v1/workspaces/…/schedules  │
     │     │            └ <cell>.manifest.json     │  GET  /v1/workspaces/…/comparison │
     │     ▼                                       │                                  │
-    │  phd publish  ──────────────────────────►   │  → /workspaces/<id> UI           │
-    │                                             │     • Manifests table (paged)    │
-    │                                             │     • Compare (manifests only)    │
-    │                                             │     • Drill-down → schedule view  │
+    │  phd publish  ──────────────────────────►   │  → /workspace/<id> UI            │
+    │                                             │     • Cohort summary (manifests) │
+    │                                             │     • Per-block table (schedules)│
+    │                                             │     • Drill-down → schedule view │
     └──────────────────────────────────┘         └──────────────────────────────────┘
 ```
 
@@ -96,6 +96,8 @@ Invariants enforced by `WorkspaceStore`:
 | `GET`  | `/v1/workspaces/{id}/manifests/{mid}` | Get one manifest. |
 | `GET`  | `/v1/workspaces/{id}/manifests/{mid}/schedule` | Drill-down: full schedule, 404 if not persisted. |
 | `GET`  | `/v1/workspaces/{id}/comparison` | Lightweight comparison summary (manifests only). |
+| `GET`  | `/v1/workspaces/{id}/cohorts` | List cohorts (manifests grouped by `(dataset, observatory, period, block_pool_hash)`). |
+| `GET`  | `/v1/workspaces/{id}/cohorts/{cohort_key}/blocks` | Per-block breakdown across the schedules persisted in a cohort. |
 | `DELETE` | `/v1/workspaces/{id}/manifests/{mid}?delete_artifact=1` | Remove manifest, GC orphaned schedule. |
 
 All POST endpoints accept an `idempotency_key`. Manifests use
@@ -114,15 +116,34 @@ JSON bytes.
 `experiments run` and `experiments matrix` remain available for
 advanced direct use; they share the same artefact contract.
 
-## 6. UI surface (`/workspaces`)
+## 6. UI surface (`/workspace`)
 
-The detail page treats the manifest as the unit of work. The upload
-zone accepts mixed batches (manifests and self-contained schedules) by
-drag-and-drop, including whole folders. Each file is classified by
-content (presence of `manifest_schema_version` vs `schedule_metadata`)
-and routed to the matching batch endpoint with progress reported per
-file. Comparison and Pareto views read only manifests; opening a row
-issues a single drill-down request to fetch the full schedule.
+`/workspace` is the **only** workspace surface in the app. It is reached
+from the Landing page (no navbar entry). The list view shows existing
+workspaces and lets the user create new ones; the detail view
+(`/workspace/:id`) groups uploaded results by **cohort** — a
+`(dataset, observatory, period, block_pool_hash)` tuple derived from
+`extensions.workspace_context` on each manifest.
+
+Each cohort renders:
+
+- a **summary table** built exclusively from manifest metrics
+  (no schedules required);
+- a **per-block table** (only when at least one schedule was persisted
+  in the cohort) with one column per schedule and a `differences only`
+  filter; priority bins are user-configurable, default `N=5`,
+  persisted in `localStorage`.
+
+The upload zone accepts mixed batches (manifests and self-contained
+schedules) by drag-and-drop, including whole folders. Each file is
+classified by content (presence of `manifest_schema_version` vs
+`schedule_metadata`) and routed to the matching batch endpoint with
+per-file status. **Standalone `schedule_metrics.json` files are
+rejected**; embed metrics inside a manifest or upload the full schedule.
+
+Legacy `environments` / `EnvironmentCompare` / `AlgorithmAnalysis`
+surfaces and the previous `/workspaces` extension are gone; they have
+no redirects.
 
 ## 7. Migration notes (one-shot)
 
@@ -133,8 +154,13 @@ The previous architecture had:
 - A `Cell.emit_trace` flag in the runner — gone.
 - A `scripts/upload_results.sh` that POSTed to non-existent endpoints
   with broken payloads — replaced by a thin wrapper over `phd publish`.
-- Two separate UI inputs for "manifest" and "schedule" uploads — being
-  replaced by a single mixed-classification drop zone.
+- Two separate UI inputs for "manifest" and "schedule" uploads —
+  replaced by a single mixed-classification drop zone in `/workspace`.
+- An `environments` REST surface (`/v1/environments/...`) and the
+  matching `/environments/*` UI — removed entirely; the `workspace`
+  domain is now the single home for comparable runs.
+- A standalone `schedule_metrics.json` artefact accepted as input —
+  no longer accepted; the metrics block lives inside the manifest.
 
 If you find a doc still referring to those, treat the doc as stale and
 prefer this file.

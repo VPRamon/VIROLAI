@@ -1,114 +1,166 @@
 # `experiments` crate
 
-Multi-cell experiment **runner** used to sweep a scheduler across a
-matrix of `(dataset × algorithm × seed × …)` cells. This crate provides
-the engine; researchers normally drive it through the higher-level
-`phd sweep` subcommand of the main `scheduler` binary.
+The `experiments` crate runs parameter-sweep experiments against the
+`scheduler` library. Its only CLI entrypoint is `experiments run`,
+which expands an `ExperimentSpec` into a matrix of cells and executes
+them in parallel.
 
-The output of every run is a set of **self-contained schedule JSONs**
-(metrics embedded) plus a small `experiment.json` describing the
-matrix. There are no separate `metrics/` or `traces/` sub-directories;
-that legacy layout is gone.
+Most users should still drive experiments through `phd sweep`, but this
+crate is the source of truth for the spec format, raw output layout,
+checkpointing, and resume semantics.
 
----
+## Entry points
 
-## Two ways to drive the runner
-
-### A. `phd sweep` (recommended)
+### Recommended: `phd sweep`
 
 ```bash
 cargo run --bin phd -- sweep \
     --spec experiments/hap_sweep.json \
-    --out  out/hap-sweep \
+    --out out/hap-sweep \
     --manifest
 ```
 
-`phd sweep` invokes this crate under the hood, then flattens the
-`run-<timestamp>/schedules/*.json` tree into `out/hap-sweep/<cell>.json`
-and (with `--manifest`) emits a sibling `out/hap-sweep/<cell>.manifest.json`
-for each cell. This is the canonical layout consumed by `phd publish`.
-
-### B. `experiments run` (advanced / direct)
-
-```bash
-cargo run -p experiments -- run \
-    --spec experiments/hap_sweep.json \
-    --out  out/hap-sweep-raw
-```
-
-Direct invocation preserves the full per-run layout described below.
-Use this when you need checkpoints, custom resume semantics, or want to
-inspect the unflattened output.
-
----
-
-## Output layout (direct invocation)
+`phd sweep` invokes the sibling `experiments` binary, then flattens the
+raw `run-<timestamp>/schedules/*.json` tree into:
 
 ```text
-<out>/<experiment_slug>/run-<timestamp>/
-    experiment.json     # resolved spec + complete cell list
-    schedules/
-        <cell_id>.json  # self-contained schedule, embeds schedule_metrics
-    state.jsonl         # append-only checkpoint stream (omitted with --no-state)
+out/hap-sweep/
+    <cell_id>.json
+    <cell_id>.manifest.json
 ```
 
-Each `schedules/<cell_id>.json` matches `schemas/schedule/...` and
-includes a `schedule_metadata` block (dataset, algorithm, seed, params,
-horizon) and a `schedule_metrics` block (`schemas/scheduling_statistics/
-schedule_metrics.schema.json`). This is the **single source of truth**
-for the cell — manifests are derived from it.
+This flat layout is the canonical input for `phd publish`.
 
----
+`phd sweep` expects the `experiments` binary at
+`target/debug/experiments` or `target/release/experiments`. Build it
+explicitly when needed:
 
-## Spec format (matrix)
+```bash
+cargo build --manifest-path experiments/Cargo.toml --target-dir target
+cargo build --release --manifest-path experiments/Cargo.toml --target-dir target
+```
 
-```jsonc
+### Direct crate invocation: `experiments run`
+
+```bash
+cargo run --manifest-path experiments/Cargo.toml -- run \
+    --spec experiments/hap_sweep.json
+```
+
+Supported flags:
+
+| Flag | Description |
+| --- | --- |
+| `--spec <FILE>` | Required experiment spec JSON |
+| `--resume <DIR>` | Reuse an existing `run-<timestamp>/` directory and skip completed cells |
+| `--output-dir <DIR>` | Override `spec.output_dir` for `--dry-run` |
+| `--dry-run` | Resolve cells and write `experiment.json` without executing runs |
+| `--no-state` | Do not write `state.jsonl`; incompatible with `--resume` |
+
+Use direct invocation when you need the raw run directory, checkpoint
+stream, or explicit resume control.
+
+## Output layout
+
+Raw crate output:
+
+```text
+<output_dir>/<experiment_slug>/run-<timestamp>/
+    experiment.json
+    schedules/
+        <cell_id>.json
+    state.jsonl
+```
+
+`state.jsonl` is omitted with `--no-state`.
+
+Each schedule JSON is self-contained and embeds:
+
+- `schedule_metadata` for dataset, algorithm, resolved parameters, and horizon
+- `schedule_metrics` for downstream ranking and comparison
+
+There are no separate `metrics/` or `traces/` directories in this
+workflow.
+
+## Spec format
+
+The JSON schema is defined by `experiments::spec::ExperimentSpec`.
+Paths in `datasets[*].path` and `output_dir` may be relative to the
+spec file.
+
+Minimal shape:
+
+```json
 {
-    "name": "hap_sweep",
-    "output_dir": "out",
-    "max_parallel": 4,
-    "datasets": [
-        { "id": "lst_sh", "path": "data/lst_sh.json" }
-    ],
-    "algorithms": [
-        {
-            "id": "hap_i64",
-            "kind": "Hap",
-            "params": { "iterations": 64 }
-        }
-    ],
-    "seeds": [1, 2, 3]
+  "name": "paper-sweep",
+  "datasets": [
+    { "id": "ctao_n", "path": "../data/ctao_n.json" }
+  ],
+  "algorithms": [
+    { "kind": "est", "axes": { "k_beams": [1, 4], "branching_factors": [1, 2] } },
+    { "kind": "hap", "axes": { "iota_max_values": [64, 128], "seeds": [0, 1] } }
+  ],
+  "ranking": { "completion": 2.0, "priority": 1.0 },
+  "max_parallel": 4,
+  "output_dir": "../out/paper"
 }
 ```
 
-The full schema is enforced by `experiments::spec::ExperimentSpec`. See
-`experiments/hap_sweep.json` and `experiments/paper_sweep.json` for
-working examples.
+Key fields:
 
----
+| Field | Meaning |
+| --- | --- |
+| `name` | Human-readable experiment name; used to derive the output slug |
+| `datasets` | Input scheduling problems to evaluate |
+| `algorithms` | One or more `est` / `hap` sweep blocks |
+| `ranking` | Optional weights mirrored into metrics output |
+| `max_parallel` | Optional concurrency cap |
+| `output_dir` | Root directory for raw run artifacts |
 
-## Resume / checkpoints
+Working examples live next to this README:
 
-Each cell append-writes to `state.jsonl` as it completes. Re-running
-with the same `--out` and `--name` skips cells already marked done. To
-disable checkpoints (smaller IO, no resume), pass `--no-state`.
+- `experiments/hap_sweep.json`
+- `experiments/paper_sweep.json`
 
----
+## Sweep operations
 
-## Publishing results
+### Planning
 
-After a sweep finishes, publish the entire output directory in one
-command:
+A sweep is the Cartesian product of `datasets × algorithms × axes`. Tune:
+
+- `max_parallel` to match available CPU
+- `seeds` high enough for the statistics you intend to compare
+- axis breadth carefully, because output size grows linearly with cell count
+
+### Resume and checkpoints
+
+When `state.jsonl` is enabled, re-running with `--resume <run-dir>`
+skips cells already recorded as completed. For checkpoint-free runs with
+lower IO, use `--no-state` and accept that resume is unavailable.
+
+### Dry runs
+
+Use `--dry-run` to validate a spec, resolve the full cell list, and
+write `experiment.json` without running the scheduler.
+
+## Publishing
+
+After a sweep completes, publish the flattened output with `phd
+publish`:
 
 ```bash
 cargo run --bin phd -- publish \
     --workspace paper \
-    --dir       out/hap-sweep \
+    --dir out/hap-sweep \
     --create-workspace \
     --include-schedules
 ```
 
-`phd publish` walks `--dir`, classifies each `.json` as a manifest or
-a self-contained schedule, and uploads them in chunked batches against
-the workspaces backend. Idempotency is automatic. See
-`docs/architecture.md` for the full pipeline.
+`phd publish` uploads manifests and schedules in batches and handles
+idempotency. See `docs/architecture.md` for the end-to-end pipeline.
+
+## Anti-patterns
+
+- Do not edit generated cell JSONs by hand; they are the source of truth.
+- Do not maintain parallel `metrics/` or `traces/` directories for this flow.
+- Do not use `cargo run -p experiments`; this crate is not a workspace member.

@@ -137,7 +137,7 @@
       }
     },
     "extensions": {
-      "description": "Reserved namespace for additive, non-breaking extensions. Readers must ignore unknown keys here.",
+      "description": "Reserved namespace for additive, non-breaking extensions. Readers must ignore unknown keys here.\n\nReserved subkey `workspace_context` carries cohort-grouping hints used by the webapp `/workspace` UI:\n  - `observatory_id` (string): observatory the run targeted; consumed for cohort grouping when present.\n  - `period` ({ start_mjd_utc, end_mjd_utc }): scheduling period; falls back to the manifest `horizon` when absent.\n  - `block_pool_hash` (hex SHA-256 string): stable hash of the sorted block-id list used as scheduler input; used to detect equivalent input pools across runs.\n  - `block_count` (uint): number of input blocks the scheduler considered.\n\nManifests without `workspace_context` are grouped into a fallback cohort keyed by `(dataset_id, horizon.start_mjd_utc, horizon.end_mjd_utc)`.",
       "type": ["object", "null"]
     }
   },
