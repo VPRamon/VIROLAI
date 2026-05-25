@@ -16,9 +16,9 @@
  *     repeats issues a request of size <=N.
  *   - Re-fetches on `(slug, runId, sortedCellIds)` change only.
  */
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { bulkCells } from './api';
-import type { BulkCellMetricsItem } from './types';
+import { useEffect, useMemo, useRef, useState } from "react";
+import { bulkCells } from "./api";
+import type { BulkCellMetricsItem } from "./types";
 
 const DEFAULT_DEBOUNCE_MS = 50;
 
@@ -45,7 +45,7 @@ export function useBulkCellMetrics(
   // Stable, deduped key derived from the input. Sorting+joining lets us
   // cheaply skip refetches when the *contents* are unchanged regardless
   // of order — the matrix re-orders cells on every pivot change.
-  const key = useMemo(() => {
+  const cellIdKey = useMemo(() => {
     const seen = new Set<string>();
     const out: string[] = [];
     for (const id of cellIds) {
@@ -55,8 +55,12 @@ export function useBulkCellMetrics(
       }
     }
     out.sort();
-    return out;
+    return out.join("\0");
   }, [cellIds]);
+  const dedupedCellIds = useMemo(
+    () => (cellIdKey ? cellIdKey.split("\0") : []),
+    [cellIdKey],
+  );
 
   const [data, setData] = useState<Map<string, BulkCellMetricsItem>>(new Map());
   const [loading, setLoading] = useState(false);
@@ -64,7 +68,7 @@ export function useBulkCellMetrics(
   const seq = useRef(0);
 
   useEffect(() => {
-    if (!enabled || key.length === 0) {
+    if (!enabled || dedupedCellIds.length === 0) {
       setData(new Map());
       setLoading(false);
       setError(undefined);
@@ -76,7 +80,7 @@ export function useBulkCellMetrics(
     setError(undefined);
 
     const handle = setTimeout(() => {
-      bulkCells(slug, runId, key)
+      bulkCells(slug, runId, dedupedCellIds)
         .then((resp) => {
           if (id !== seq.current) return;
           const map = new Map<string, BulkCellMetricsItem>();
@@ -92,7 +96,7 @@ export function useBulkCellMetrics(
     }, debounceMs);
 
     return () => clearTimeout(handle);
-  }, [slug, runId, key, debounceMs, enabled]);
+  }, [slug, runId, dedupedCellIds, debounceMs, enabled]);
 
   return { data, loading, error };
 }
