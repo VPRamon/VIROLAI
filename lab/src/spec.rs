@@ -19,7 +19,6 @@
 //!     { "kind": "est", "axes": { "k_beams": [1, 4], "branching_factors": [1, 2] } },
 //!     { "kind": "hap", "axes": { "iota_max_values": [64, 128], "seeds": [0, 1] } }
 //!   ],
-//!   "ranking": { "completion": 2.0, "priority": 1.0 },
 //!   "max_parallel": 4,
 //!   "output_dir": "out/paper"
 //! }
@@ -41,7 +40,11 @@ pub struct ExperimentSpec {
     pub datasets: Vec<DatasetEntry>,
     /// Per-algorithm sweep blocks.
     pub algorithms: Vec<AlgorithmSweep>,
-    /// Optional composite-score ranking weights for metrics output.
+    /// Legacy ranking weights.
+    ///
+    /// This field is kept only so older experiment specs still deserialize.
+    /// Sweep execution records objective metrics; ranking is a query-time
+    /// concern handled by registry/query commands.
     #[serde(default)]
     pub ranking: Option<RankingWeightsSpec>,
     /// Maximum number of cells to execute concurrently.
@@ -162,7 +165,6 @@ mod tests {
                 { "kind": "est", "axes": { "k_beams": [1, 2] } },
                 { "kind": "hap", "axes": { "iota_max_values": [64], "rho_values": [2] } }
             ],
-            "ranking": { "completion": 2.0, "priority": 1.0, "utilization": 1.0, "fragmentation": 0.5 },
             "max_parallel": 4,
             "output_dir": "out/demo"
         }"#
@@ -177,9 +179,22 @@ mod tests {
         assert_eq!(spec.algorithms.len(), 2);
         assert_eq!(spec.algorithms[0].algorithm(), "est");
         assert_eq!(spec.algorithms[1].algorithm(), "hap");
+        assert!(spec.ranking.is_none());
+        assert_eq!(spec.max_parallel, Some(4));
+    }
+
+    #[test]
+    fn legacy_ranking_field_is_still_accepted() {
+        let json = r#"{
+            "name": "demo",
+            "datasets": [{ "id": "ctao_n", "path": "data/ctao_n.json" }],
+            "algorithms": [{ "kind": "est", "axes": { "k_beams": [1] } }],
+            "ranking": { "completion": 2.0, "priority": 1.0 },
+            "output_dir": "out/demo"
+        }"#;
+        let spec: ExperimentSpec = serde_json::from_str(json).expect("parse");
         let weights: RankingWeights = spec.ranking.unwrap().into();
         assert_eq!(weights.scheduled_task, 2.0);
-        assert_eq!(spec.max_parallel, Some(4));
     }
 
     #[test]

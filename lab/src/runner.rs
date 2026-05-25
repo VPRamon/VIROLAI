@@ -21,7 +21,7 @@
 
 use chrono::Utc;
 use rayon::prelude::*;
-use schedulers::metrics::{MetricsContext, RankingWeights, ScheduleMetrics};
+use schedulers::metrics::{MetricsContext, ScheduleMetrics};
 use schedulers::schedule::{LocationMeta, PeriodMeta, ScheduleMetadata, ScheduleOutput};
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -222,7 +222,6 @@ pub fn execute_with_options(
         .build()
         .map_err(|e| format!("failed to build rayon pool: {e}"))?;
 
-    let ranking: Option<RankingWeights> = spec.ranking.map(Into::into);
     let run_dir_owned = run_dir.to_path_buf();
 
     // Shared registry for miss-path inserts.
@@ -246,7 +245,6 @@ pub fn execute_with_options(
                     cell,
                     &prepared,
                     &run_dir_owned,
-                    ranking,
                     state_writer.as_deref(),
                     registry_arc.as_deref(),
                     &sched_ver,
@@ -288,7 +286,6 @@ fn run_one_cell(
     cell: &MatrixCell,
     prepared: &PreparedProblem,
     run_dir: &Path,
-    ranking: Option<RankingWeights>,
     state_writer: Option<&StateWriter>,
     registry: Option<&Mutex<Registry>>,
     sched_ver: &str,
@@ -307,7 +304,7 @@ fn run_one_cell(
         eprintln!("▶ {}", cell.cell_id);
     }
 
-    match run_cell_inner(cell, prepared, run_dir, ranking, registry, sched_ver) {
+    match run_cell_inner(cell, prepared, run_dir, registry, sched_ver) {
         Ok(paths) => {
             if let Some(w) = state_writer {
                 let _ = w.append(&StateEvent {
@@ -354,7 +351,6 @@ fn run_cell_inner(
     cell: &MatrixCell,
     prepared: &PreparedProblem,
     run_dir: &Path,
-    ranking: Option<RankingWeights>,
     registry: Option<&Mutex<Registry>>,
     sched_ver: &str,
 ) -> Result<CellPaths, String> {
@@ -388,10 +384,7 @@ fn run_cell_inner(
     let scheduler_runtime_ms = scheduler_started.elapsed().as_secs_f64() * 1000.0;
 
     let metadata = build_schedule_metadata(&cell.run_config, cell, prepared);
-    let mut ctx = MetricsContext::new();
-    if let Some(r) = ranking {
-        ctx = ctx.with_ranking(r);
-    }
+    let ctx = MetricsContext::new();
     let mut metrics =
         ScheduleMetrics::compute(&schedule, &prepared.problem, &prepared.horizon, &ctx);
     metrics.scheduler_runtime_ms = Some(scheduler_runtime_ms);

@@ -77,7 +77,8 @@ Raw crate output:
 Each schedule JSON is self-contained and embeds:
 
 - `schedule_metadata` for dataset, algorithm, resolved parameters, and horizon
-- `schedule_metrics` for downstream ranking and comparison
+- `schedule_metrics` with objective/descriptive run metrics for downstream
+  query-time ranking and comparison
 
 There are no separate `metrics/` or `traces/` directories in this
 workflow.
@@ -100,7 +101,6 @@ Minimal shape:
     { "kind": "est", "axes": { "k_beams": [1, 4], "branching_factors": [1, 2] } },
     { "kind": "hap", "axes": { "iota_max_values": [64, 128], "seeds": [0, 1] } }
   ],
-  "ranking": { "completion": 2.0, "priority": 1.0 },
   "max_parallel": 4,
   "output_dir": "../out/paper"
 }
@@ -113,9 +113,12 @@ Key fields:
 | `name` | Human-readable experiment name; used to derive the output slug |
 | `datasets` | Input scheduling problems to evaluate |
 | `algorithms` | One or more `est` / `hap` sweep blocks |
-| `ranking` | Optional weights mirrored into metrics output |
 | `max_parallel` | Optional concurrency cap |
 | `output_dir` | Root directory for raw run artifacts |
+
+`ranking` is accepted only as a legacy field. `lab run` records objective
+metrics; scientific interpretation lives in registry/query commands such as
+`lab registry sort`, `lab registry rank`, and `lab registry pareto`.
 
 Working examples live next to this README:
 

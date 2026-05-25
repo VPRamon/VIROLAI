@@ -29,14 +29,14 @@ Single source of truth for evaluation metrics. See `schedulers/src/metrics.rs`.
 - `per_resource: Vec<ResourceMetrics>` — currently length 1 (single
   telescope), typed as `Vec` for forward compatibility with multi-resource
   problems
-- `composite_rank_score` — weighted scalar score driven by
-  `RankingWeights` (priority_sum, scheduled_count, fragmentation,
-  utilization). Override the weights through `MetricsContext` to give
-  scientists an objective ranking knob.
+- objective/descriptive run metrics such as scheduled-task ratio,
+  scheduled-priority ratio, priority density, utilization, fragmentation,
+  and scheduler runtime. Ranking policy belongs in query/analysis commands,
+  not in sweep execution.
 
 All fields implement `Serialize`/`Deserialize` so cells can be persisted
 and round-tripped without recomputing schedules. **Do not duplicate
-metric computation** anywhere else in the tree — extend this module.
+objective metric computation** anywhere else in the tree — extend this module.
 
 ## 2. Matrix runner — `lab`
 

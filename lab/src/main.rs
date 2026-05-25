@@ -26,10 +26,16 @@
 //!
 //! ```text
 //! lab registry list   [--dataset <ID>] [--algorithm <NAME>] [--metric <NAME>]
-//!                     [--min <VAL>] [--max <VAL>] [--limit <N>]
+//!                     [--min <VAL>] [--max <VAL>]
+//!                     [--sort <METRIC:DIR>]... [--limit <N>]
 //!                     [--run-db <PATH>] [--format json]
-//! lab registry best   --dataset <ID> [--algorithm <NAME>] [--metric <NAME>]
+//! lab registry best   --dataset <ID> [--algorithm <NAME>]
+//!                     [--sort <METRIC:DIR>]...
 //!                     [--limit <N>] [--run-db <PATH>]
+//! lab registry rank   [--dataset <ID>] [--algorithm <NAME>]
+//!                     --weight <METRIC=WEIGHT>...
+//! lab registry pareto [--dataset <ID>] [--algorithm <NAME>]
+//!                     [--maximize <METRIC>]... [--minimize <METRIC>]...
 //! lab registry inspect --run <KEY_OR_PREFIX> [--run-db <PATH>]
 //! lab registry regenerate --run <KEY_OR_PREFIX> --out <FILE>
 //!                         [--run-db <PATH>] [--force]
@@ -38,7 +44,10 @@
 use clap::{Parser, Subcommand};
 use lab::cell::resolve_cells;
 use lab::output;
-use lab::registry::{BestOpts, ListOpts, Registry, RunIdentity, registry_path};
+use lab::registry::{
+    BestOpts, ListOpts, Registry, RunIdentity, RunRow, SortKey, default_sort_keys, parse_sort_key,
+    registry_path,
+};
 use lab::runner::{RunOptions, execute_with_options};
 use lab::spec::ExperimentSpec;
 use schedulers::metrics::{MetricsContext, ScheduleMetrics};
@@ -118,8 +127,14 @@ struct RegistryArgs {
 enum RegistryCmd {
     /// List run records (with optional filters).
     List(RegistryListArgs),
+    /// Sort registry records by query-time metric keys.
+    Sort(RegistrySortArgs),
     /// Show the best runs for a dataset.
     Best(RegistryBestArgs),
+    /// Compute a weighted query-time score and rank matching records.
+    Rank(RegistryRankArgs),
+    /// Compute a Pareto front from objective metrics.
+    Pareto(RegistryParetoArgs),
     /// Inspect a single run record.
     Inspect(RegistryInspectArgs),
     /// Regenerate a schedule JSON from a stored registry record.
@@ -136,7 +151,7 @@ struct RegistryListArgs {
     #[arg(long, value_name = "NAME")]
     algorithm: Option<String>,
 
-    /// Metric column to filter/sort by.
+    /// Metric column for --min / --max filtering.
     #[arg(long, value_name = "NAME")]
     metric: Option<String>,
 
@@ -148,7 +163,40 @@ struct RegistryListArgs {
     #[arg(long, value_name = "VAL")]
     max: Option<f64>,
 
+    /// Sort key in `metric:asc` or `metric:desc` form. Repeat for
+    /// lexicographic ordering. Alias: `--by`.
+    #[arg(long = "sort", alias = "by", value_name = "METRIC:DIR")]
+    sort: Vec<String>,
+
     /// Maximum number of rows to return (default: 100).
+    #[arg(long, value_name = "N")]
+    limit: Option<usize>,
+
+    /// Output format: `table` (default) or `json`.
+    #[arg(long, value_name = "FORMAT", default_value = "table")]
+    format: String,
+
+    /// Path to the SQLite registry file.
+    #[arg(long, value_name = "PATH")]
+    run_db: Option<PathBuf>,
+}
+
+#[derive(Parser, Debug)]
+struct RegistrySortArgs {
+    /// Filter by dataset ID.
+    #[arg(long, value_name = "ID")]
+    dataset: Option<String>,
+
+    /// Filter by algorithm name (`est` or `hap`).
+    #[arg(long, value_name = "NAME")]
+    algorithm: Option<String>,
+
+    /// Sort key in `metric:asc` or `metric:desc` form. Repeat for
+    /// lexicographic ordering. Alias: `--by`.
+    #[arg(long = "sort", alias = "by", value_name = "METRIC:DIR")]
+    sort: Vec<String>,
+
+    /// Maximum number of rows to return (default: 20).
     #[arg(long, value_name = "N")]
     limit: Option<usize>,
 
@@ -171,13 +219,72 @@ struct RegistryBestArgs {
     #[arg(long, value_name = "NAME")]
     algorithm: Option<String>,
 
-    /// Metric to rank by (default: `composite_score`).
-    #[arg(long, value_name = "NAME")]
-    metric: Option<String>,
+    /// Sort key in `metric:asc` or `metric:desc` form. Repeat for
+    /// lexicographic ordering. Alias: `--by`.
+    #[arg(long = "sort", alias = "by", value_name = "METRIC:DIR")]
+    sort: Vec<String>,
 
     /// Maximum number of results (default: 10).
     #[arg(long, value_name = "N")]
     limit: Option<usize>,
+
+    /// Path to the SQLite registry file.
+    #[arg(long, value_name = "PATH")]
+    run_db: Option<PathBuf>,
+}
+
+#[derive(Parser, Debug)]
+struct RegistryRankArgs {
+    /// Filter by dataset ID.
+    #[arg(long, value_name = "ID")]
+    dataset: Option<String>,
+
+    /// Restrict to a single algorithm.
+    #[arg(long, value_name = "NAME")]
+    algorithm: Option<String>,
+
+    /// Query-time weight in `metric=value` form. Repeat to define a score.
+    #[arg(long, value_name = "METRIC=WEIGHT")]
+    weight: Vec<String>,
+
+    /// Maximum number of results (default: 20).
+    #[arg(long, value_name = "N")]
+    limit: Option<usize>,
+
+    /// Output format: `table` (default) or `json`.
+    #[arg(long, value_name = "FORMAT", default_value = "table")]
+    format: String,
+
+    /// Path to the SQLite registry file.
+    #[arg(long, value_name = "PATH")]
+    run_db: Option<PathBuf>,
+}
+
+#[derive(Parser, Debug)]
+struct RegistryParetoArgs {
+    /// Filter by dataset ID.
+    #[arg(long, value_name = "ID")]
+    dataset: Option<String>,
+
+    /// Restrict to a single algorithm.
+    #[arg(long, value_name = "NAME")]
+    algorithm: Option<String>,
+
+    /// Metric to maximize. Repeat as needed.
+    #[arg(long, value_name = "METRIC")]
+    maximize: Vec<String>,
+
+    /// Metric to minimize. Repeat as needed.
+    #[arg(long, value_name = "METRIC")]
+    minimize: Vec<String>,
+
+    /// Maximum number of front rows to print after default objective sorting.
+    #[arg(long, value_name = "N")]
+    limit: Option<usize>,
+
+    /// Output format: `table` (default) or `json`.
+    #[arg(long, value_name = "FORMAT", default_value = "table")]
+    format: String,
 
     /// Path to the SQLite registry file.
     #[arg(long, value_name = "PATH")]
@@ -306,7 +413,10 @@ fn run(args: RunArgs) -> Result<(), String> {
 fn registry(args: RegistryArgs) -> Result<(), String> {
     match args.cmd {
         RegistryCmd::List(a) => registry_list(a),
+        RegistryCmd::Sort(a) => registry_sort(a),
         RegistryCmd::Best(a) => registry_best(a),
+        RegistryCmd::Rank(a) => registry_rank(a),
+        RegistryCmd::Pareto(a) => registry_pareto(a),
         RegistryCmd::Inspect(a) => registry_inspect(a),
         RegistryCmd::Regenerate(a) => registry_regenerate(a),
     }
@@ -317,52 +427,36 @@ fn registry(args: RegistryArgs) -> Result<(), String> {
 fn registry_list(args: RegistryListArgs) -> Result<(), String> {
     let db_path = registry_path(args.run_db.as_deref());
     let reg = Registry::open(&db_path)?;
+    let sort = parse_sort_keys(&args.sort)?;
     let opts = ListOpts {
         dataset: args.dataset,
         algorithm: args.algorithm,
         metric: args.metric,
         min: args.min,
         max: args.max,
+        sort,
         limit: args.limit,
     };
     let rows = reg.list(&opts)?;
-
-    if args.format == "json" {
-        let values: Vec<serde_json::Value> = rows
-            .iter()
-            .map(|r| {
-                serde_json::json!({
-                    "run_key": r.run_key,
-                    "dataset_id": r.dataset_id,
-                    "algorithm": r.algorithm,
-                    "config_slug": r.config_slug,
-                    "created_at": r.created_at,
-                    "last_seen_at": r.last_seen_at,
-                    "source_cell_id": r.source_cell_id,
-                    "metrics": serde_json::from_str::<serde_json::Value>(&r.metrics_json).unwrap_or(serde_json::Value::Null),
-                })
-            })
-            .collect();
-        println!("{}", serde_json::to_string_pretty(&values).unwrap());
-    } else {
-        println!(
-            "{:<18}  {:<12}  {:<8}  {:<30}  created_at",
-            "run_key (prefix)", "dataset", "algo", "config_slug"
-        );
-        println!("{}", "-".repeat(90));
-        for r in &rows {
-            println!(
-                "{:<18}  {:<12}  {:<8}  {:<30}  {}",
-                &r.run_key[..r.run_key.len().min(16)],
-                r.dataset_id,
-                r.algorithm,
-                r.config_slug,
-                r.created_at,
-            );
-        }
-        println!("({} rows)", rows.len());
-    }
+    print_rows(&rows, &args.format)?;
     Ok(())
+}
+
+// ── `registry sort` ───────────────────────────────────────────────────────────
+
+fn registry_sort(args: RegistrySortArgs) -> Result<(), String> {
+    let db_path = registry_path(args.run_db.as_deref());
+    let reg = Registry::open(&db_path)?;
+    let sort = parse_sort_keys(&args.sort)?;
+    print_sort_policy(&sort);
+    let rows = reg.list(&ListOpts {
+        dataset: args.dataset,
+        algorithm: args.algorithm,
+        sort,
+        limit: args.limit.or(Some(20)),
+        ..Default::default()
+    })?;
+    print_rows(&rows, &args.format)
 }
 
 // ── `registry best` ───────────────────────────────────────────────────────────
@@ -370,30 +464,140 @@ fn registry_list(args: RegistryListArgs) -> Result<(), String> {
 fn registry_best(args: RegistryBestArgs) -> Result<(), String> {
     let db_path = registry_path(args.run_db.as_deref());
     let reg = Registry::open(&db_path)?;
+    let sort = parse_sort_keys(&args.sort)?;
     let opts = BestOpts {
         dataset_id: args.dataset,
         algorithm: args.algorithm,
-        metric: args.metric.clone(),
+        sort: sort.clone(),
         limit: args.limit,
     };
     let rows = reg.best(&opts)?;
-    let metric_label = args.metric.as_deref().unwrap_or("composite_score");
+    print_sort_policy(&sort);
     println!(
-        "{:<18}  {:<8}  {:<30}  {}",
-        "run_key (prefix)", "algo", "config_slug", metric_label
+        "{:<18}  {:<8}  {:<30}  metrics",
+        "run_key (prefix)", "algo", "config_slug"
     );
     println!("{}", "-".repeat(80));
     for r in &rows {
         let mv: serde_json::Value =
             serde_json::from_str(&r.metrics_json).unwrap_or(serde_json::Value::Null);
-        let val = extract_metric(&mv, metric_label);
         println!(
-            "{:<18}  {:<8}  {:<30}  {:.4}",
+            "{:<18}  {:<8}  {:<30}  {}",
             &r.run_key[..r.run_key.len().min(16)],
             r.algorithm,
             r.config_slug,
-            val,
+            compact_metric_summary(&mv),
         );
+    }
+    Ok(())
+}
+
+// ── `registry rank` ───────────────────────────────────────────────────────────
+
+fn registry_rank(args: RegistryRankArgs) -> Result<(), String> {
+    let weights = parse_weights(&args.weight)?;
+    if weights.is_empty() {
+        return Err("registry rank requires at least one --weight metric=value".to_string());
+    }
+
+    let db_path = registry_path(args.run_db.as_deref());
+    let reg = Registry::open(&db_path)?;
+    let mut scored: Vec<(RunRow, f64)> = reg
+        .list(&ListOpts {
+            dataset: args.dataset,
+            algorithm: args.algorithm,
+            limit: Some(10_000_000),
+            ..Default::default()
+        })?
+        .into_iter()
+        .map(|row| {
+            let metrics = parse_metrics(&row.metrics_json);
+            let score = weights
+                .iter()
+                .map(|(metric, weight)| metric_value(&metrics, metric).unwrap_or(0.0) * weight)
+                .sum();
+            (row, score)
+        })
+        .collect();
+    scored.sort_by(|a, b| {
+        b.1.total_cmp(&a.1)
+            .then_with(|| a.0.run_key.cmp(&b.0.run_key))
+    });
+    scored.truncate(args.limit.unwrap_or(20));
+
+    if args.format == "json" {
+        let values: Vec<_> = scored
+            .iter()
+            .map(|(row, score)| row_json(row, Some(*score)))
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&values).unwrap());
+    } else {
+        println!(
+            "{:<18}  {:<12}  {:<8}  {:<30}  score",
+            "run_key (prefix)", "dataset", "algo", "config_slug"
+        );
+        println!("{}", "-".repeat(96));
+        for (row, score) in &scored {
+            println!(
+                "{:<18}  {:<12}  {:<8}  {:<30}  {:.6}",
+                &row.run_key[..row.run_key.len().min(16)],
+                row.dataset_id,
+                row.algorithm,
+                row.config_slug,
+                score,
+            );
+        }
+        println!("({} rows)", scored.len());
+    }
+    Ok(())
+}
+
+// ── `registry pareto` ─────────────────────────────────────────────────────────
+
+fn registry_pareto(args: RegistryParetoArgs) -> Result<(), String> {
+    let objectives = parse_objectives(&args.maximize, &args.minimize)?;
+    let db_path = registry_path(args.run_db.as_deref());
+    let reg = Registry::open(&db_path)?;
+    let rows = reg.list(&ListOpts {
+        dataset: args.dataset,
+        algorithm: args.algorithm,
+        limit: Some(10_000_000),
+        ..Default::default()
+    })?;
+
+    let mut front: Vec<RunRow> = rows
+        .iter()
+        .filter(|candidate| {
+            !rows.iter().any(|other| {
+                other.run_key != candidate.run_key && dominates(other, candidate, &objectives)
+            })
+        })
+        .cloned()
+        .collect();
+    front.sort_by(compare_rows_by_default_policy);
+    front.truncate(args.limit.unwrap_or(front.len()));
+
+    if args.format == "json" {
+        let values: Vec<_> = front.iter().map(|row| row_json(row, None)).collect();
+        println!("{}", serde_json::to_string_pretty(&values).unwrap());
+    } else {
+        println!(
+            "{:<18}  {:<12}  {:<8}  {:<30}  metrics",
+            "run_key (prefix)", "dataset", "algo", "config_slug"
+        );
+        println!("{}", "-".repeat(110));
+        for row in &front {
+            let metrics = parse_metrics(&row.metrics_json);
+            println!(
+                "{:<18}  {:<12}  {:<8}  {:<30}  {}",
+                &row.run_key[..row.run_key.len().min(16)],
+                row.dataset_id,
+                row.algorithm,
+                row.config_slug,
+                compact_metric_summary(&metrics),
+            );
+        }
+        println!("({} rows on Pareto front)", front.len());
     }
     Ok(())
 }
@@ -543,20 +747,201 @@ fn registry_regenerate(args: RegistryRegenerateArgs) -> Result<(), String> {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-fn extract_metric(mv: &serde_json::Value, metric: &str) -> f64 {
-    match metric {
-        "task_ratio" | "scheduled_task_ratio" => mv["scheduled_task_ratio"].as_f64().unwrap_or(0.0),
-        "priority_ratio" | "scheduled_priority_ratio" => {
-            mv["scheduled_priority_ratio"].as_f64().unwrap_or(0.0)
-        }
-        "priority_density" => mv["priority_density"].as_f64().unwrap_or(0.0),
-        "utilization" => mv["utilization"].as_f64().unwrap_or(0.0),
-        "fragmentation_index" => mv["fragmentation"]["fragmentation_index"]
-            .as_f64()
-            .unwrap_or(0.0),
-        "runtime_ms" | "scheduler_runtime_ms" => mv["scheduler_runtime_ms"].as_f64().unwrap_or(0.0),
-        _ => mv["composite_rank_score"].as_f64().unwrap_or(0.0),
+fn parse_sort_keys(raw: &[String]) -> Result<Vec<SortKey>, String> {
+    raw.iter().map(|s| parse_sort_key(s)).collect()
+}
+
+fn print_sort_policy(sort: &[SortKey]) {
+    let keys = if sort.is_empty() {
+        default_sort_keys()
+    } else {
+        sort.to_vec()
+    };
+    let policy = keys
+        .iter()
+        .map(|k| format!("{}:{}", k.metric, k.direction.as_str()))
+        .collect::<Vec<_>>()
+        .join(", ");
+    eprintln!("registry query sort: {policy}");
+}
+
+fn print_rows(rows: &[RunRow], format: &str) -> Result<(), String> {
+    if format == "json" {
+        let values: Vec<_> = rows.iter().map(|row| row_json(row, None)).collect();
+        println!("{}", serde_json::to_string_pretty(&values).unwrap());
+        return Ok(());
     }
+    if format != "table" {
+        return Err(format!(
+            "unsupported output format '{format}', expected table or json"
+        ));
+    }
+    println!(
+        "{:<18}  {:<12}  {:<8}  {:<30}  created_at",
+        "run_key (prefix)", "dataset", "algo", "config_slug"
+    );
+    println!("{}", "-".repeat(90));
+    for row in rows {
+        println!(
+            "{:<18}  {:<12}  {:<8}  {:<30}  {}",
+            &row.run_key[..row.run_key.len().min(16)],
+            row.dataset_id,
+            row.algorithm,
+            row.config_slug,
+            row.created_at,
+        );
+    }
+    println!("({} rows)", rows.len());
+    Ok(())
+}
+
+fn row_json(row: &RunRow, score: Option<f64>) -> serde_json::Value {
+    let mut value = serde_json::json!({
+        "run_key": row.run_key,
+        "dataset_id": row.dataset_id,
+        "algorithm": row.algorithm,
+        "config_slug": row.config_slug,
+        "created_at": row.created_at,
+        "last_seen_at": row.last_seen_at,
+        "source_cell_id": row.source_cell_id,
+        "metrics": parse_metrics(&row.metrics_json),
+    });
+    if let Some(score) = score {
+        value["query_score"] = serde_json::json!(score);
+    }
+    value
+}
+
+fn parse_metrics(metrics_json: &str) -> serde_json::Value {
+    serde_json::from_str(metrics_json).unwrap_or(serde_json::Value::Null)
+}
+
+fn compact_metric_summary(mv: &serde_json::Value) -> String {
+    format!(
+        "priority={:.4} task={:.4} density={:.4} runtime_ms={:.2}",
+        metric_value(mv, "scheduled_priority_ratio").unwrap_or(0.0),
+        metric_value(mv, "scheduled_task_ratio").unwrap_or(0.0),
+        metric_value(mv, "priority_density").unwrap_or(0.0),
+        metric_value(mv, "runtime_ms").unwrap_or(0.0),
+    )
+}
+
+fn metric_value(mv: &serde_json::Value, metric: &str) -> Result<f64, String> {
+    match metric {
+        "task_ratio" | "scheduled_task_ratio" => {
+            Ok(mv["scheduled_task_ratio"].as_f64().unwrap_or(0.0))
+        }
+        "scheduled_task_count" => Ok(mv["scheduled_task_count"].as_f64().unwrap_or(0.0)),
+        "scheduled_priority_sum" => Ok(mv["scheduled_priority_sum"].as_f64().unwrap_or(0.0)),
+        "priority_ratio" | "scheduled_priority_ratio" => {
+            Ok(mv["scheduled_priority_ratio"].as_f64().unwrap_or(0.0))
+        }
+        "priority_density" => Ok(mv["priority_density"].as_f64().unwrap_or(0.0)),
+        "scheduled_time_sec" => Ok(mv["scheduled_time_sec"].as_f64().unwrap_or(0.0)),
+        "utilization" => Ok(mv["utilization"].as_f64().unwrap_or(0.0)),
+        "fragmentation_index" => Ok(mv["fragmentation"]["fragmentation_index"]
+            .as_f64()
+            .unwrap_or(0.0)),
+        "runtime_ms" | "scheduler_runtime_ms" => {
+            Ok(mv["scheduler_runtime_ms"].as_f64().unwrap_or(0.0))
+        }
+        "composite_score" | "composite_rank_score" => Err(
+            "composite_rank_score is persisted only for backward-compatible schedule metrics; define query-time weights with `registry rank` instead"
+                .to_string(),
+        ),
+        _ => Err(format!("unsupported metric '{metric}'")),
+    }
+}
+
+fn parse_weights(raw: &[String]) -> Result<Vec<(String, f64)>, String> {
+    raw.iter()
+        .map(|entry| {
+            let (metric, weight) = entry
+                .split_once('=')
+                .ok_or_else(|| format!("invalid weight '{entry}', expected metric=value"))?;
+            let metric = metric.trim();
+            if metric.is_empty() {
+                return Err(format!("invalid weight '{entry}', metric cannot be empty"));
+            }
+            let weight = weight
+                .trim()
+                .parse::<f64>()
+                .map_err(|e| format!("invalid weight in '{entry}': {e}"))?;
+            metric_value(&serde_json::Value::Null, metric)?;
+            Ok((metric.to_string(), weight))
+        })
+        .collect()
+}
+
+fn parse_objectives(
+    maximize: &[String],
+    minimize: &[String],
+) -> Result<Vec<(String, bool)>, String> {
+    let mut objectives = Vec::new();
+    if maximize.is_empty() && minimize.is_empty() {
+        objectives.extend([
+            ("scheduled_priority_ratio".to_string(), true),
+            ("scheduled_task_ratio".to_string(), true),
+            ("priority_density".to_string(), true),
+            ("runtime_ms".to_string(), false),
+        ]);
+        return Ok(objectives);
+    }
+    for metric in maximize {
+        metric_value(&serde_json::Value::Null, metric)?;
+        objectives.push((metric.clone(), true));
+    }
+    for metric in minimize {
+        metric_value(&serde_json::Value::Null, metric)?;
+        objectives.push((metric.clone(), false));
+    }
+    Ok(objectives)
+}
+
+fn dominates(a: &RunRow, b: &RunRow, objectives: &[(String, bool)]) -> bool {
+    let a_metrics = parse_metrics(&a.metrics_json);
+    let b_metrics = parse_metrics(&b.metrics_json);
+    let mut strictly_better = false;
+    for (metric, maximize) in objectives {
+        let av = metric_value(&a_metrics, metric).unwrap_or(0.0);
+        let bv = metric_value(&b_metrics, metric).unwrap_or(0.0);
+        if *maximize {
+            if av < bv {
+                return false;
+            }
+            strictly_better |= av > bv;
+        } else {
+            if av > bv {
+                return false;
+            }
+            strictly_better |= av < bv;
+        }
+    }
+    strictly_better
+}
+
+fn compare_rows_by_default_policy(a: &RunRow, b: &RunRow) -> std::cmp::Ordering {
+    let am = parse_metrics(&a.metrics_json);
+    let bm = parse_metrics(&b.metrics_json);
+    metric_value(&bm, "scheduled_priority_ratio")
+        .unwrap_or(0.0)
+        .total_cmp(&metric_value(&am, "scheduled_priority_ratio").unwrap_or(0.0))
+        .then_with(|| {
+            metric_value(&bm, "scheduled_task_ratio")
+                .unwrap_or(0.0)
+                .total_cmp(&metric_value(&am, "scheduled_task_ratio").unwrap_or(0.0))
+        })
+        .then_with(|| {
+            metric_value(&bm, "priority_density")
+                .unwrap_or(0.0)
+                .total_cmp(&metric_value(&am, "priority_density").unwrap_or(0.0))
+        })
+        .then_with(|| {
+            metric_value(&am, "runtime_ms")
+                .unwrap_or(0.0)
+                .total_cmp(&metric_value(&bm, "runtime_ms").unwrap_or(0.0))
+        })
+        .then_with(|| a.run_key.cmp(&b.run_key))
 }
 
 // ── Spec loading ──────────────────────────────────────────────────────────────

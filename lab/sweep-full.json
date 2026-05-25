@@ -1,0 +1,53 @@
+{
+  "name": "est-hap-comparison",
+  "output_dir": "out/est-hap-comparison",
+  "max_parallel": 8,
+
+  "datasets": [
+    {
+      "id": "isdc_n",
+      "path": "data/isdc_n.json",
+      "label": "ISDC North"
+    },
+    {
+      "id": "isdc_s",
+      "path": "data/isdc_s.json",
+      "label": "ISDC South"
+    },
+    {
+      "id": "lst_2024",
+      "path": "data/lst_2024.json",
+      "label": "LST 2024"
+    }
+  ],
+
+  "algorithms": [
+    {
+      "kind": "est",
+      "axes": {
+        "endangered_thresholds": [0, 1, 2],
+        "k_beams": [1, 2, 4],
+        "branching_factors": [1, 2],
+        "foms": [
+            "soft_constraint",
+            "future_flexibility"
+        ]
+      }
+    },
+    {
+      "kind": "hap",
+      "axes": {
+        "iota_max_values": [64, 128],
+        "rho_values": [3, 5],
+        "population_sizes": [4, 8],
+        "survivor_modes": ["elitist_top_k"],
+        "survivor_caps": [4],
+        "seeds": [0, 1, 2],
+        "foms": [
+            "soft_constraint",
+            "future_flexibility"
+        ]
+      }
+    }
+  ]
+}

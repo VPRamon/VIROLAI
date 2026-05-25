@@ -1,9 +1,12 @@
 //! SQLite-backed run registry / cache for the lab experiment runner.
 //!
-//! The registry stores the metrics of every successfully completed scheduler
-//! run indexed by a stable content-hash key (`run_key`).  On subsequent runs
+//! The registry stores objective/descriptive metrics of every successfully
+//! completed scheduler run indexed by a stable content-hash key (`run_key`).
+//! On subsequent runs
 //! against the same (dataset content, algorithm, config, horizon, versions)
 //! the runner can skip re-execution and return the cached metrics instead.
+//! Query-time commands decide how to sort, rank, or compare rows; the registry
+//! does not persist a subjective "best" decision.
 //!
 //! # Default location
 //! `.lab/runs.sqlite` relative to the current working directory.
@@ -185,7 +188,6 @@ CREATE TABLE IF NOT EXISTS runs (
     priority_density        REAL,
     utilization             REAL,
     fragmentation_index     REAL,
-    composite_score         REAL,
     runtime_ms              REAL,
     -- timestamps
     created_at      TEXT NOT NULL,
@@ -196,10 +198,11 @@ CREATE TABLE IF NOT EXISTS runs (
 CREATE INDEX IF NOT EXISTS idx_runs_dataset   ON runs (dataset_id);
 CREATE INDEX IF NOT EXISTS idx_runs_algorithm ON runs (algorithm);
 CREATE INDEX IF NOT EXISTS idx_runs_config    ON runs (config_slug);
-CREATE INDEX IF NOT EXISTS idx_runs_composite ON runs (composite_score DESC);
+CREATE INDEX IF NOT EXISTS idx_runs_priority_ratio ON runs (priority_ratio DESC);
 CREATE INDEX IF NOT EXISTS idx_runs_task_ratio ON runs (task_ratio DESC);
 CREATE INDEX IF NOT EXISTS idx_runs_utilization ON runs (utilization DESC);
 CREATE INDEX IF NOT EXISTS idx_runs_fragmentation ON runs (fragmentation_index ASC);
+CREATE INDEX IF NOT EXISTS idx_runs_runtime ON runs (runtime_ms ASC);
 ",
             )
             .map_err(|e| format!("failed to init registry schema: {e}"))
@@ -230,7 +233,6 @@ CREATE INDEX IF NOT EXISTS idx_runs_fragmentation ON runs (fragmentation_index A
         let priority_density = mv["priority_density"].as_f64();
         let utilization = mv["utilization"].as_f64();
         let fragmentation_index = mv["fragmentation"]["fragmentation_index"].as_f64();
-        let composite_score = mv["composite_rank_score"].as_f64();
         let runtime_ms = mv["scheduler_runtime_ms"].as_f64();
 
         self.conn
@@ -241,12 +243,12 @@ CREATE INDEX IF NOT EXISTS idx_runs_fragmentation ON runs (fragmentation_index A
                     scheduler_version, metrics_version,
                     identity_json, metrics_json,
                     task_ratio, priority_ratio, priority_density,
-                    utilization, fragmentation_index, composite_score, runtime_ms,
+                    utilization, fragmentation_index, runtime_ms,
                     created_at, last_seen_at, source_cell_id
                 ) VALUES (
                     ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10,
-                    ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19,
-                    ?20, ?21, ?22
+                    ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18,
+                    ?19, ?20, ?21
                 )
                 ON CONFLICT(run_key) DO UPDATE SET
                     metrics_json       = excluded.metrics_json,
@@ -255,7 +257,6 @@ CREATE INDEX IF NOT EXISTS idx_runs_fragmentation ON runs (fragmentation_index A
                     priority_density   = excluded.priority_density,
                     utilization        = excluded.utilization,
                     fragmentation_index = excluded.fragmentation_index,
-                    composite_score    = excluded.composite_score,
                     runtime_ms         = excluded.runtime_ms,
                     last_seen_at       = excluded.last_seen_at",
                 params![
@@ -276,7 +277,6 @@ CREATE INDEX IF NOT EXISTS idx_runs_fragmentation ON runs (fragmentation_index A
                     priority_density,
                     utilization,
                     fragmentation_index,
-                    composite_score,
                     runtime_ms,
                     now,
                     now,
@@ -382,7 +382,7 @@ CREATE INDEX IF NOT EXISTS idx_runs_fragmentation ON runs (fragmentation_index A
 
         let (min_val, max_val) = if let Some(metric) = &opts.metric {
             let min = if opts.min.is_some() {
-                let col = metric_col(metric);
+                let col = metric_col(metric)?;
                 conditions.push(format!("{col} >= ?{param_idx}"));
                 param_idx += 1;
                 opts.min
@@ -390,7 +390,7 @@ CREATE INDEX IF NOT EXISTS idx_runs_fragmentation ON runs (fragmentation_index A
                 None
             };
             let max = if opts.max.is_some() {
-                let col = metric_col(metric);
+                let col = metric_col(metric)?;
                 conditions.push(format!("{col} <= ?{param_idx}"));
                 param_idx += 1;
                 opts.max
@@ -410,11 +410,12 @@ CREATE INDEX IF NOT EXISTS idx_runs_fragmentation ON runs (fragmentation_index A
             format!("WHERE {}", conditions.join(" AND "))
         };
 
-        let order = opts
-            .metric
-            .as_deref()
-            .map(metric_sort_expr)
-            .unwrap_or_else(|| "composite_score DESC".to_string());
+        let sort = if opts.sort.is_empty() {
+            default_sort_keys()
+        } else {
+            opts.sort.clone()
+        };
+        let order = sort_expr(&sort)?;
         let limit = opts.limit.unwrap_or(100);
 
         let sql = format!(
@@ -453,10 +454,14 @@ CREATE INDEX IF NOT EXISTS idx_runs_fragmentation ON runs (fragmentation_index A
         Ok(rows)
     }
 
-    /// Returns the best runs for a dataset ordered by metric.
+    /// Returns the best runs for a dataset ordered by query-time sort keys.
     pub fn best(&self, opts: &BestOpts) -> Result<Vec<RunRow>, String> {
-        let metric = opts.metric.as_deref().unwrap_or("composite_score");
-        let order = metric_sort_expr(metric);
+        let sort = if opts.sort.is_empty() {
+            default_sort_keys()
+        } else {
+            opts.sort.clone()
+        };
+        let order = sort_expr(&sort)?;
         let limit = opts.limit.unwrap_or(10);
 
         let (where_clause, has_algo) = if opts.algorithm.is_some() {
@@ -501,6 +506,7 @@ pub struct ListOpts {
     pub metric: Option<String>,
     pub min: Option<f64>,
     pub max: Option<f64>,
+    pub sort: Vec<SortKey>,
     pub limit: Option<usize>,
 }
 
@@ -509,8 +515,89 @@ pub struct ListOpts {
 pub struct BestOpts {
     pub dataset_id: String,
     pub algorithm: Option<String>,
-    pub metric: Option<String>,
+    pub sort: Vec<SortKey>,
     pub limit: Option<usize>,
+}
+
+/// Direction for a query-time sort key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SortDirection {
+    Asc,
+    Desc,
+}
+
+impl SortDirection {
+    pub const fn as_sql(self) -> &'static str {
+        match self {
+            Self::Asc => "ASC",
+            Self::Desc => "DESC",
+        }
+    }
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Asc => "asc",
+            Self::Desc => "desc",
+        }
+    }
+}
+
+/// One metric/direction pair used for query-time ordering.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SortKey {
+    pub metric: String,
+    pub direction: SortDirection,
+}
+
+/// Parse `metric:asc` / `metric:desc`. If direction is omitted, the metric's
+/// conventional objective direction is used.
+pub fn parse_sort_key(input: &str) -> Result<SortKey, String> {
+    let (metric, dir) = input
+        .split_once(':')
+        .map_or((input, None), |(m, d)| (m, Some(d)));
+    let metric = metric.trim();
+    if metric.is_empty() {
+        return Err("sort key metric cannot be empty".to_string());
+    }
+    let direction = match dir.map(str::trim) {
+        Some("asc") => SortDirection::Asc,
+        Some("desc") => SortDirection::Desc,
+        Some(other) => {
+            return Err(format!(
+                "invalid sort direction '{other}' in '{input}', expected asc or desc"
+            ));
+        }
+        None => default_metric_direction(metric)?,
+    };
+    metric_col(metric)?;
+    Ok(SortKey {
+        metric: metric.to_string(),
+        direction,
+    })
+}
+
+/// Default query-time policy used only when the user does not provide sort
+/// keys. It is deliberately expressed as objective metric ordering, not as a
+/// persisted composite score.
+pub fn default_sort_keys() -> Vec<SortKey> {
+    vec![
+        SortKey {
+            metric: "scheduled_priority_ratio".to_string(),
+            direction: SortDirection::Desc,
+        },
+        SortKey {
+            metric: "scheduled_task_ratio".to_string(),
+            direction: SortDirection::Desc,
+        },
+        SortKey {
+            metric: "priority_density".to_string(),
+            direction: SortDirection::Desc,
+        },
+        SortKey {
+            metric: "runtime_ms".to_string(),
+            direction: SortDirection::Asc,
+        },
+    ]
 }
 
 // ── Row type ──────────────────────────────────────────────────────────────────
@@ -547,26 +634,37 @@ fn row_to_run_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RunRow> {
 
 // ── Metric helpers ────────────────────────────────────────────────────────────
 
-fn metric_col(metric: &str) -> &str {
+pub fn metric_col(metric: &str) -> Result<&'static str, String> {
     match metric {
-        "task_ratio" | "scheduled_task_ratio" => "task_ratio",
-        "priority_ratio" | "scheduled_priority_ratio" => "priority_ratio",
-        "priority_density" => "priority_density",
-        "utilization" => "utilization",
-        "fragmentation_index" => "fragmentation_index",
-        "composite_score" | "composite_rank_score" => "composite_score",
-        "runtime_ms" | "scheduler_runtime_ms" => "runtime_ms",
-        _ => "composite_score",
+        "task_ratio" | "scheduled_task_ratio" => Ok("task_ratio"),
+        "priority_ratio" | "scheduled_priority_ratio" => Ok("priority_ratio"),
+        "priority_density" => Ok("priority_density"),
+        "utilization" => Ok("utilization"),
+        "fragmentation_index" => Ok("fragmentation_index"),
+        "runtime_ms" | "scheduler_runtime_ms" => Ok("runtime_ms"),
+        "composite_score" | "composite_rank_score" => Err(
+            "composite_rank_score is not a registry sort/filter metric; use `registry rank --weight ...` to compute a query-time score"
+                .to_string(),
+        ),
+        _ => Err(format!("unsupported registry metric '{metric}'")),
     }
 }
 
-fn metric_sort_expr(metric: &str) -> String {
-    let col = metric_col(metric);
-    if col == "fragmentation_index" {
-        format!("{col} ASC")
-    } else {
-        format!("{col} DESC")
+fn default_metric_direction(metric: &str) -> Result<SortDirection, String> {
+    Ok(match metric_col(metric)? {
+        "fragmentation_index" | "runtime_ms" => SortDirection::Asc,
+        _ => SortDirection::Desc,
+    })
+}
+
+fn sort_expr(keys: &[SortKey]) -> Result<String, String> {
+    let mut parts = Vec::with_capacity(keys.len() + 1);
+    for key in keys {
+        let col = metric_col(&key.metric)?;
+        parts.push(format!("{col} {}", key.direction.as_sql()));
     }
+    parts.push("run_key ASC".to_string());
+    Ok(parts.join(", "))
 }
 
 /// Returns the registry path from an optional CLI override.
@@ -754,13 +852,19 @@ mod tests {
             .best(&BestOpts {
                 dataset_id: "ds1".to_string(),
                 algorithm: None,
-                metric: Some("composite_score".to_string()),
+                sort: vec![parse_sort_key("scheduled_priority_ratio:desc").unwrap()],
                 limit: Some(2),
             })
             .unwrap();
         assert_eq!(rows.len(), 2);
-        // Best composite score (0.9) should come first.
+        // Best scheduled priority ratio (0.95) should come first.
         assert_eq!(rows[0].config_slug, "e1-k2-b1");
+    }
+
+    #[test]
+    fn composite_score_is_not_a_registry_sort_metric() {
+        let err = parse_sort_key("composite_score:desc").unwrap_err();
+        assert!(err.contains("query-time score"));
     }
 
     #[test]
