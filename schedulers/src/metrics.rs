@@ -268,7 +268,20 @@ pub struct ScheduleMetrics {
     pub fragmentation: FragmentationStats,
     pub total_horizon_sec: f64,
     pub available_time_sec: f64,
+    /// Sum of requested durations of all tasks in the problem, in seconds.
+    #[serde(default)]
+    pub requested_time_sec: f64,
     pub scheduled_time_sec: f64,
+    /// `scheduled_time_sec / requested_time_sec`; `0.0` when denominator ≤ 0.
+    ///
+    /// Measures how much of the *requested* observation time was actually
+    /// placed on the schedule. This is distinct from:
+    /// - `scheduled_task_ratio` (task-count coverage, not time coverage), and
+    /// - `utilization` (scheduled_time_sec / available_time_sec, which is
+    ///   resource-side — it can be high even when many short tasks are skipped
+    ///   in favour of a few long ones).
+    #[serde(default)]
+    pub scheduled_time_ratio: f64,
     /// Wall-clock runtime spent inside the scheduler, in milliseconds.
     /// Optional so older payloads remain readable.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -313,12 +326,15 @@ impl ScheduleMetrics {
         let total_horizon_sec = (horizon.end.value() - horizon.start.value()) * SECONDS_PER_DAY;
         let available_time_sec = context.available_time_sec.unwrap_or(total_horizon_sec);
 
+        let requested_time_sec: f64 = problem.iter_tasks().map(|t| t.duration.value()).sum();
+
         let scheduled_time_sec: f64 = schedule
             .placements()
             .map(|p| (p.end.value() - p.start.value()) * SECONDS_PER_DAY)
             .sum();
 
         let utilization = ratio(scheduled_time_sec, available_time_sec);
+        let scheduled_time_ratio = ratio(scheduled_time_sec, requested_time_sec);
 
         let scheduled_priority = PriorityStats::from_values(&scheduled_priorities);
         let scheduled_priority_sum = scheduled_priority.sum;
@@ -375,7 +391,9 @@ impl ScheduleMetrics {
             fragmentation,
             total_horizon_sec,
             available_time_sec,
+            requested_time_sec,
             scheduled_time_sec,
+            scheduled_time_ratio,
             scheduler_runtime_ms: None,
             utilization,
             per_resource,
@@ -1136,5 +1154,145 @@ mod tests {
         assert!((m.scheduled_priority.sum - 5.0).abs() < 1e-9);
         assert!((m.ranking_weights.scheduled_task - 1.0).abs() < 1e-9);
         assert!((m.ranking_weights.scheduled_priority - 1.0).abs() < 1e-9);
+    }
+
+    // ── scheduled_time_ratio tests ────────────────────────────────────────────
+
+    /// Helper: build a problem whose tasks have known durations (in seconds).
+    fn problem_with_durations(durations_sec: &[(u64, f64)]) -> SchedulingProblem {
+        let tasks: Vec<Task> = durations_sec
+            .iter()
+            .map(|&(id, dur)| build_task(id, dur, Some(1.0)))
+            .collect();
+        let block = SchedulingBlock::from_tasks(SchedulingBlockId(1), tasks).unwrap();
+        SchedulingProblem::from_blocks(vec![block]).unwrap()
+    }
+
+    #[test]
+    fn scheduled_time_ratio_is_one_when_all_time_scheduled() {
+        // Two tasks of 3600 s each → requested_time_sec = 7200 s.
+        // Place them so the scheduled_time_sec also equals their durations.
+        // One day = 86400 s, so 3600 s = 3600/86400 ≈ 0.041667 days.
+        let dur_days = 3600.0 / SECONDS_PER_DAY;
+        let problem = problem_with_durations(&[(1, 3600.0), (2, 3600.0)]);
+        let mut schedule = Schedule::new();
+        place(&mut schedule, 1, 0.0, dur_days);
+        place(&mut schedule, 2, dur_days, 2.0 * dur_days);
+        let h = horizon(0.0, 1.0);
+        let m = ScheduleMetrics::compute(&schedule, &problem, &h, &MetricsContext::default());
+
+        assert!((m.requested_time_sec - 7200.0).abs() < 1e-6);
+        assert!((m.scheduled_time_sec - 7200.0).abs() < 1e-6);
+        assert!((m.scheduled_time_ratio - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn scheduled_time_ratio_differs_from_scheduled_task_ratio_when_durations_differ() {
+        // Task 1: 600 s, task 2: 3000 s.  requested_time_sec = 3600 s.
+        // Schedule only task 2 (the long one).
+        // scheduled_task_ratio = 1/2 = 0.5 (count-based).
+        // scheduled_time_ratio = 3000/3600 ≈ 0.833 (time-based).
+        let dur2_days = 3000.0 / SECONDS_PER_DAY;
+        let problem = problem_with_durations(&[(1, 600.0), (2, 3000.0)]);
+        let mut schedule = Schedule::new();
+        place(&mut schedule, 2, 0.0, dur2_days);
+        let h = horizon(0.0, 1.0);
+        let m = ScheduleMetrics::compute(&schedule, &problem, &h, &MetricsContext::default());
+
+        assert!((m.requested_time_sec - 3600.0).abs() < 1e-6);
+        assert!((m.scheduled_time_sec - 3000.0).abs() < 1e-6);
+        assert!((m.scheduled_task_ratio - 0.5).abs() < 1e-9);
+        assert!((m.scheduled_time_ratio - (3000.0 / 3600.0)).abs() < 1e-9);
+        assert!(
+            (m.scheduled_time_ratio - m.scheduled_task_ratio).abs() > 1e-6,
+            "ratios should differ when durations are unequal"
+        );
+    }
+
+    #[test]
+    fn scheduled_time_ratio_is_zero_when_no_tasks_requested() {
+        // Empty problem → requested_time_sec = 0 → ratio = 0.
+        let problem = empty_problem();
+        let schedule = Schedule::new();
+        let h = horizon(0.0, 1.0);
+        let m = ScheduleMetrics::compute(&schedule, &problem, &h, &MetricsContext::default());
+
+        assert_eq!(m.requested_time_sec, 0.0);
+        assert_eq!(m.scheduled_time_ratio, 0.0);
+    }
+
+    #[test]
+    fn scheduled_time_ratio_is_zero_when_nothing_scheduled() {
+        // Problem has tasks but schedule is empty.
+        let problem = problem_with_durations(&[(1, 1800.0), (2, 1800.0)]);
+        let schedule = Schedule::new();
+        let h = horizon(0.0, 1.0);
+        let m = ScheduleMetrics::compute(&schedule, &problem, &h, &MetricsContext::default());
+
+        assert!((m.requested_time_sec - 3600.0).abs() < 1e-6);
+        assert_eq!(m.scheduled_time_sec, 0.0);
+        assert_eq!(m.scheduled_time_ratio, 0.0);
+    }
+
+    #[test]
+    fn scheduled_time_ratio_is_distinct_from_utilization() {
+        // requested_time_sec = 1800 s (one 1800-s task).
+        // available_time_sec = 86400 s (1 day horizon, no override).
+        // Schedule the task fully → scheduled_time_sec = 1800 s.
+        // utilization       = 1800 / 86400 ≈ 0.0208  (vs the resource budget)
+        // scheduled_time_ratio = 1800 / 1800 = 1.0 (all requested time covered)
+        let dur_days = 1800.0 / SECONDS_PER_DAY;
+        let problem = problem_with_durations(&[(1, 1800.0)]);
+        let mut schedule = Schedule::new();
+        place(&mut schedule, 1, 0.0, dur_days);
+        let h = horizon(0.0, 1.0);
+        let m = ScheduleMetrics::compute(&schedule, &problem, &h, &MetricsContext::default());
+
+        assert!((m.scheduled_time_ratio - 1.0).abs() < 1e-9);
+        assert!(
+            m.utilization < 0.1,
+            "utilization should be low against 1-day horizon, got {}",
+            m.utilization
+        );
+        assert!(
+            (m.scheduled_time_ratio - m.utilization).abs() > 0.5,
+            "scheduled_time_ratio and utilization should differ when requested << available"
+        );
+    }
+
+    #[test]
+    fn requested_time_sec_is_sum_of_all_task_durations() {
+        // Verify requested_time_sec even when nothing is scheduled.
+        let problem = problem_with_durations(&[(1, 300.0), (2, 700.0), (3, 1000.0)]);
+        let schedule = Schedule::new();
+        let h = horizon(0.0, 1.0);
+        let m = ScheduleMetrics::compute(&schedule, &problem, &h, &MetricsContext::default());
+        assert!((m.requested_time_sec - 2000.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn scheduled_time_ratio_defaults_to_zero_on_old_json() {
+        // Simulate deserializing an older metrics payload that lacks the new fields.
+        let json = r#"{
+            "scheduled_task_count": 1,
+            "total_task_count": 2,
+            "scheduled_task_ratio": 0.5,
+            "scheduled_priority": { "count": 1, "sum": 5.0, "min": 5.0, "max": 5.0, "mean": 5.0, "std": 0.0, "p25": 5.0, "p50": 5.0, "p75": 5.0, "p90": 5.0 },
+            "scheduled_priority_sum": 5.0,
+            "total_priority_sum": 10.0,
+            "scheduled_priority_ratio": 0.5,
+            "priority_density": 1.0,
+            "fragmentation": { "gap_count": 0, "gap_total_sec": 0.0, "largest_gap_sec": 0.0, "fragmentation_index": 0.0 },
+            "total_horizon_sec": 86400.0,
+            "available_time_sec": 86400.0,
+            "scheduled_time_sec": 600.0,
+            "utilization": 0.00694,
+            "per_resource": [],
+            "composite_rank_score": 0.5,
+            "ranking_weights": { "scheduled_task": 1.0, "scheduled_priority": 1.0, "utilization": 1.0, "fragmentation": 1.0 }
+        }"#;
+        let m: ScheduleMetrics = serde_json::from_str(json).unwrap();
+        assert_eq!(m.requested_time_sec, 0.0);
+        assert_eq!(m.scheduled_time_ratio, 0.0);
     }
 }

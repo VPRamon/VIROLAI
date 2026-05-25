@@ -848,6 +848,8 @@ fn metric_value(mv: &serde_json::Value, metric: &str) -> Result<f64, String> {
         }
         "priority_density" => Ok(mv["priority_density"].as_f64().unwrap_or(0.0)),
         "scheduled_time_sec" => Ok(mv["scheduled_time_sec"].as_f64().unwrap_or(0.0)),
+        "requested_time_sec" => Ok(mv["requested_time_sec"].as_f64().unwrap_or(0.0)),
+        "scheduled_time_ratio" => Ok(mv["scheduled_time_ratio"].as_f64().unwrap_or(0.0)),
         "utilization" => Ok(mv["utilization"].as_f64().unwrap_or(0.0)),
         "fragmentation_index" => Ok(mv["fragmentation"]["fragmentation_index"]
             .as_f64()

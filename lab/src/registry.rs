@@ -189,6 +189,9 @@ CREATE TABLE IF NOT EXISTS runs (
     utilization             REAL,
     fragmentation_index     REAL,
     runtime_ms              REAL,
+    requested_time_sec      REAL,
+    scheduled_time_sec      REAL,
+    scheduled_time_ratio    REAL,
     -- timestamps
     created_at      TEXT NOT NULL,
     last_seen_at    TEXT NOT NULL,
@@ -203,12 +206,44 @@ CREATE INDEX IF NOT EXISTS idx_runs_task_ratio ON runs (task_ratio DESC);
 CREATE INDEX IF NOT EXISTS idx_runs_utilization ON runs (utilization DESC);
 CREATE INDEX IF NOT EXISTS idx_runs_fragmentation ON runs (fragmentation_index ASC);
 CREATE INDEX IF NOT EXISTS idx_runs_runtime ON runs (runtime_ms ASC);
+CREATE INDEX IF NOT EXISTS idx_runs_scheduled_time_ratio ON runs (scheduled_time_ratio DESC);
 ",
             )
-            .map_err(|e| format!("failed to init registry schema: {e}"))
+            .map_err(|e| format!("failed to init registry schema: {e}"))?;
+
+        // Column-level migrations: add columns introduced after the initial
+        // schema so that existing databases are upgraded transparently.
+        for (col, ty) in &[
+            ("requested_time_sec", "REAL"),
+            ("scheduled_time_sec", "REAL"),
+            ("scheduled_time_ratio", "REAL"),
+        ] {
+            self.ensure_column("runs", col, ty)?;
+        }
+
+        Ok(())
     }
 
     // ── Write ─────────────────────────────────────────────────────────────────
+
+    /// Adds `col` of type `ty` to `table` if it does not already exist.
+    /// Used for incremental schema migrations.
+    fn ensure_column(&self, table: &str, col: &str, ty: &str) -> Result<(), String> {
+        let exists: bool = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) > 0 FROM pragma_table_info(?1) WHERE name = ?2",
+                params![table, col],
+                |row| row.get(0),
+            )
+            .map_err(|e| format!("failed to check column {col} in {table}: {e}"))?;
+        if !exists {
+            self.conn
+                .execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {col} {ty};"))
+                .map_err(|e| format!("failed to add column {col} to {table}: {e}"))?;
+        }
+        Ok(())
+    }
 
     /// Inserts or updates a successful run record.
     ///
@@ -234,6 +269,9 @@ CREATE INDEX IF NOT EXISTS idx_runs_runtime ON runs (runtime_ms ASC);
         let utilization = mv["utilization"].as_f64();
         let fragmentation_index = mv["fragmentation"]["fragmentation_index"].as_f64();
         let runtime_ms = mv["scheduler_runtime_ms"].as_f64();
+        let requested_time_sec = mv["requested_time_sec"].as_f64();
+        let scheduled_time_sec = mv["scheduled_time_sec"].as_f64();
+        let scheduled_time_ratio = mv["scheduled_time_ratio"].as_f64();
 
         self.conn
             .execute(
@@ -244,21 +282,25 @@ CREATE INDEX IF NOT EXISTS idx_runs_runtime ON runs (runtime_ms ASC);
                     identity_json, metrics_json,
                     task_ratio, priority_ratio, priority_density,
                     utilization, fragmentation_index, runtime_ms,
+                    requested_time_sec, scheduled_time_sec, scheduled_time_ratio,
                     created_at, last_seen_at, source_cell_id
                 ) VALUES (
                     ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10,
                     ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18,
-                    ?19, ?20, ?21
+                    ?19, ?20, ?21, ?22, ?23, ?24
                 )
                 ON CONFLICT(run_key) DO UPDATE SET
-                    metrics_json       = excluded.metrics_json,
-                    task_ratio         = excluded.task_ratio,
-                    priority_ratio     = excluded.priority_ratio,
-                    priority_density   = excluded.priority_density,
-                    utilization        = excluded.utilization,
-                    fragmentation_index = excluded.fragmentation_index,
-                    runtime_ms         = excluded.runtime_ms,
-                    last_seen_at       = excluded.last_seen_at",
+                    metrics_json          = excluded.metrics_json,
+                    task_ratio            = excluded.task_ratio,
+                    priority_ratio        = excluded.priority_ratio,
+                    priority_density      = excluded.priority_density,
+                    utilization           = excluded.utilization,
+                    fragmentation_index   = excluded.fragmentation_index,
+                    runtime_ms            = excluded.runtime_ms,
+                    requested_time_sec    = excluded.requested_time_sec,
+                    scheduled_time_sec    = excluded.scheduled_time_sec,
+                    scheduled_time_ratio  = excluded.scheduled_time_ratio,
+                    last_seen_at          = excluded.last_seen_at",
                 params![
                     run_key,
                     identity.dataset_id,
@@ -278,6 +320,9 @@ CREATE INDEX IF NOT EXISTS idx_runs_runtime ON runs (runtime_ms ASC);
                     utilization,
                     fragmentation_index,
                     runtime_ms,
+                    requested_time_sec,
+                    scheduled_time_sec,
+                    scheduled_time_ratio,
                     now,
                     now,
                     source_cell_id,
@@ -642,6 +687,9 @@ pub fn metric_col(metric: &str) -> Result<&'static str, String> {
         "utilization" => Ok("utilization"),
         "fragmentation_index" => Ok("fragmentation_index"),
         "runtime_ms" | "scheduler_runtime_ms" => Ok("runtime_ms"),
+        "requested_time_sec" => Ok("requested_time_sec"),
+        "scheduled_time_sec" => Ok("scheduled_time_sec"),
+        "scheduled_time_ratio" => Ok("scheduled_time_ratio"),
         "composite_score" | "composite_rank_score" => Err(
             "composite_rank_score is not a registry sort/filter metric; use `registry rank --weight ...` to compute a query-time score"
                 .to_string(),

@@ -89,7 +89,16 @@ export interface ScheduleMetrics {
   fragmentation: FragmentationStats;
   total_horizon_sec: number;
   available_time_sec: number;
+  /** Sum of requested durations of all tasks in the problem, in seconds. */
+  requested_time_sec: number;
   scheduled_time_sec: number;
+  /**
+   * scheduled_time_sec / requested_time_sec.
+   * 1.0 = all requested observation time was placed.
+   * Distinct from utilization (vs. available resource time) and from
+   * scheduled_task_ratio (task-count coverage).
+   */
+  scheduled_time_ratio: number;
   utilization: number;
   per_resource: ResourceMetrics[];
   composite_rank_score: number;

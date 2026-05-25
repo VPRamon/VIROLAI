@@ -12,7 +12,9 @@
     "fragmentation",
     "total_horizon_sec",
     "available_time_sec",
+    "requested_time_sec",
     "scheduled_time_sec",
+    "scheduled_time_ratio",
     "utilization",
     "per_resource",
     "composite_rank_score",
@@ -27,7 +29,16 @@
     "fragmentation": { "$ref": "#/$defs/FragmentationStats" },
     "total_horizon_sec": { "type": "number", "minimum": 0 },
     "available_time_sec": { "type": "number", "minimum": 0 },
+    "requested_time_sec": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Sum of requested durations of all tasks in the scheduling problem, in seconds."
+    },
     "scheduled_time_sec": { "type": "number", "minimum": 0 },
+    "scheduled_time_ratio": {
+      "type": "number",
+      "description": "scheduled_time_sec / requested_time_sec. 1.0 means all requested observation time was placed. 0.0 when requested_time_sec <= 0. Distinct from utilization (scheduled_time_sec / available_time_sec) and from scheduled_task_ratio (task-count coverage)."
+    },
     "scheduler_runtime_ms": { "type": "number", "minimum": 0 },
     "utilization": { "type": "number" },
     "per_resource": {
