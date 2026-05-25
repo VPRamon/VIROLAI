@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use qtty::Seconds;
-use scheduler::{
+use schedulers::{
     Period, PeriodSet, TaskPeriodMap,
     constraints::ConstraintExpr,
     schedule::{Schedule, SchedulingProblem},

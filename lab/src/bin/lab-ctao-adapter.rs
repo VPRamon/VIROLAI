@@ -19,7 +19,7 @@
 //
 // # Usage
 // ```text
-// cargo run --bin ctao_adapter -- <dataset_dir> [output_json]
+// cargo run -p lab --bin lab-ctao-adapter -- <dataset_dir> [output_json]
 // ```
 // `<dataset_dir>` can be an absolute/relative path or one of the dataset
 // short-names `CTA-N` / `CTA-S`, which are resolved to `data/<name>` relative
@@ -28,7 +28,7 @@
 // `[output_json]` defaults to `<dataset_dir>/scheduling_problem.json`.
 
 use chrono::{DateTime, NaiveDate, Utc};
-use scheduler::time::{MJD, Time};
+use schedulers::time::{MJD, Time};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use siderust::calculus::solar::Twilight;

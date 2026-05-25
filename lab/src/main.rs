@@ -1,14 +1,14 @@
-//! `experiments` binary entry point.
+//! `lab` binary entry point.
 //!
-//! Provides a `clap`-based CLI for running parameter-sweep experiments
-//! against the `scheduler` library.
+//! Provides a `clap`-based CLI for running parameter-sweep lab runs
+//! against the `schedulers` library.
 //!
 //! # Commands
 //!
 //! ## `run` (default)
 //!
 //! ```text
-//! experiments run --spec <experiment.json>
+//! lab run --spec <experiment.json>
 //!                 [--resume <existing_run_dir>]
 //!                 [--output-dir <dir>]
 //!                 [--dry-run]
@@ -21,10 +21,10 @@
 //! `experiment.json` without running any scheduler.
 
 use clap::{Parser, Subcommand};
-use experiments::cell::resolve_cells;
-use experiments::output;
-use experiments::runner;
-use experiments::spec::ExperimentSpec;
+use lab::cell::resolve_cells;
+use lab::output;
+use lab::runner;
+use lab::spec::ExperimentSpec;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -32,9 +32,9 @@ use std::process::ExitCode;
 
 #[derive(Parser, Debug)]
 #[command(
-    name = "experiments",
+    name = "lab",
     version,
-    about = "Run parameter-sweep experiments against the PhD scheduling library"
+    about = "Run parameter-sweep lab jobs against the PhD schedulers library"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -49,7 +49,7 @@ enum Cmd {
 
 // ── `run` sub-command ─────────────────────────────────────────────────────────
 
-/// Arguments for `experiments run`.
+/// Arguments for `lab run`.
 #[derive(Parser, Debug)]
 struct RunArgs {
     /// Path to the experiment spec JSON.
@@ -84,7 +84,7 @@ fn main() -> ExitCode {
     match dispatch(cli.cmd) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("experiments: error: {e}");
+            eprintln!("lab: error: {e}");
             ExitCode::FAILURE
         }
     }
@@ -135,7 +135,7 @@ fn run(args: RunArgs) -> Result<(), String> {
 
     let summary = runner::execute(&spec, &cells, &run_dir, resume, args.no_state)?;
     println!(
-        "experiments run done: {} cells total, {} skipped (resume), {} completed, {} failed",
+        "lab run done: {} cells total, {} skipped (resume), {} completed, {} failed",
         summary.total, summary.already_done, summary.completed, summary.failed
     );
     println!("artifacts -> {}", summary.run_dir.display());

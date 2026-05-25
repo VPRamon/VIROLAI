@@ -2,14 +2,14 @@
 //!
 //! Phase 1 (foundation) responsibilities:
 //! - `phd run` / `phd matrix` / `phd dataset adapt` — dispatch to the
-//!   existing sibling binaries (`scheduler`, `experiments`,
-//!   `ctao_adapter`) so users only need to remember one entry point.
+//!   workspace sibling binaries (`schedulers`, `lab`, `lab-ctao-adapter`)
+//!   so users only need to remember one entry point.
 //! - `phd manifest create` — walk a `run-<ts>/` directory produced by
-//!   `experiments` and emit per-cell `manifest.json` files plus a
+//!   `lab` and emit per-cell `manifest.json` files plus a
 //!   batch index (`manifest-batch.json`) under
 //!   `<run-dir>/cells/<cell_id>/manifest.json`.
 //! - `phd manifest validate` — load a manifest and run the structural
-//!   validator from [`scheduler::manifest`].
+//!   validator from [`schedulers::manifest`].
 //! - `phd publish` — uploads manifests and (optionally) full schedules
 //!   to the webapp `/v1/workspaces/{id}` endpoints with idempotency,
 //!   chunked batches and exponential-backoff retries;
@@ -24,11 +24,11 @@
 mod ranking;
 
 use clap::{Parser, Subcommand};
-use scheduler::manifest::{
+use schedulers::manifest::{
     AlgorithmRef, ArtifactRef, DatasetRef, Horizon, Manifest, Producer, Provenance, RunInfo,
     RunKind, RunStatus, ValidationReport, ValidationStatus, WorkspaceContext,
 };
-use scheduler::metrics::ScheduleMetrics;
+use schedulers::metrics::ScheduleMetrics;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::fs;
@@ -53,24 +53,24 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Cmd {
-    /// Run a single scheduling problem (delegates to the `scheduler` binary).
+    /// Run a single scheduling problem (delegates to the `schedulers` binary).
     #[command(
         disable_help_flag = true,
         allow_hyphen_values = true,
         trailing_var_arg = true
     )]
     Run {
-        /// Forwarded as-is to the `scheduler` binary.
+        /// Forwarded as-is to the `schedulers` binary.
         args: Vec<String>,
     },
-    /// Run a sweep / matrix experiment (delegates to `experiments`).
+    /// Run a sweep / matrix experiment (delegates to `lab`).
     #[command(
         disable_help_flag = true,
         allow_hyphen_values = true,
         trailing_var_arg = true
     )]
     Matrix {
-        /// Forwarded as-is to the `experiments` binary.
+        /// Forwarded as-is to the `lab` binary.
         args: Vec<String>,
     },
     /// Run a sweep and collect flat results — the canonical way to run experiments.
@@ -111,7 +111,7 @@ enum Cmd {
 
 #[derive(Subcommand, Debug)]
 enum DatasetCmd {
-    /// CTA-O dataset adapter (delegates to `ctao_adapter`).
+    /// CTA-O dataset adapter (delegates to `lab-ctao-adapter`).
     #[command(
         disable_help_flag = true,
         allow_hyphen_values = true,
@@ -122,7 +122,7 @@ enum DatasetCmd {
 
 #[derive(Subcommand, Debug)]
 enum ManifestCmd {
-    /// Build manifest(s) from a `experiments` run directory or a single schedule JSON.
+    /// Build manifest(s) from a `lab` run directory or a single schedule JSON.
     ///
     /// Use `--run <DIR>` to build manifests for all cells in an experiment run, or
     /// `--schedule <FILE>` to build a manifest from a single self-contained schedule JSON.
@@ -208,8 +208,8 @@ fn main() -> ExitCode {
 
 fn dispatch(cmd: Cmd) -> Result<ExitCode, String> {
     match cmd {
-        Cmd::Run { args } => exec_sibling("scheduler", &args),
-        Cmd::Matrix { args } => exec_sibling("experiments", &args),
+        Cmd::Run { args } => exec_sibling("schedulers", &args),
+        Cmd::Matrix { args } => exec_sibling("lab", &args),
         Cmd::Sweep {
             spec,
             out,
@@ -218,7 +218,7 @@ fn dispatch(cmd: Cmd) -> Result<ExitCode, String> {
         } => sweep(&spec, &out, manifest, parallel),
         Cmd::Dataset {
             cmd: DatasetCmd::Adapt { args },
-        } => exec_sibling("ctao_adapter", &args),
+        } => exec_sibling("lab-ctao-adapter", &args),
         Cmd::Manifest {
             cmd:
                 ManifestCmd::Create {
@@ -293,7 +293,7 @@ fn sweep(
         return Err(format!("spec file `{}` not found", spec_path.display()));
     }
 
-    // Build a temp output dir for the experiments run.
+    // Build a temp output dir for the lab run.
     let tmp = tempfile::TempDir::new().map_err(|e| format!("failed to create temp dir: {e}"))?;
     let tmp_out = tmp.path().join("sweep_run");
     fs::create_dir_all(&tmp_out).map_err(|e| format!("failed to create temp output dir: {e}"))?;
@@ -301,16 +301,16 @@ fn sweep(
     let spec_for_run: PathBuf =
         patch_spec_for_run(spec_path, tmp.path(), &tmp_out, parallel_override)?;
 
-    // Run experiments without state.jsonl — progress goes to stderr.
-    let status = Command::new(locate_sibling("experiments"))
+    // Run lab without state.jsonl — progress goes to stderr.
+    let status = Command::new(locate_sibling("lab"))
         .arg("run")
         .arg("--spec")
         .arg(&spec_for_run)
         .arg("--no-state")
         .status()
-        .map_err(|e| format!("failed to spawn experiments: {e}"))?;
+        .map_err(|e| format!("failed to spawn lab: {e}"))?;
     if !status.success() {
-        return Err("experiments run failed".to_string());
+        return Err("lab run failed".to_string());
     }
 
     // Find the single run-<ts> directory experiments created.
@@ -487,7 +487,7 @@ fn resolve_relative(base: &Path, path: &Path) -> PathBuf {
 
 /// Find the single `run-<ts>/` directory inside `<out>/<exp_slug>/`.
 fn find_single_run_dir(tmp_out: &Path) -> Option<PathBuf> {
-    // experiments creates <tmp_out>/<exp_slug>/run-<ts>/
+    // lab creates <tmp_out>/<exp_slug>/run-<ts>/
     let exp_dirs: Vec<PathBuf> = fs::read_dir(tmp_out)
         .ok()?
         .flatten()
@@ -737,7 +737,7 @@ fn manifest_create_from_schedule(
     let extensions = workspace_context_to_extensions(ws_ctx);
 
     let manifest = Manifest {
-        manifest_schema_version: scheduler::manifest::MANIFEST_SCHEMA_VERSION.to_string(),
+        manifest_schema_version: schedulers::manifest::MANIFEST_SCHEMA_VERSION.to_string(),
         manifest_id: uuid::Uuid::new_v4().to_string(),
         created_at: now.clone(),
         producer: Producer {
@@ -772,7 +772,7 @@ fn manifest_create_from_schedule(
             end_mjd_utc: end_mjd,
         },
         metrics,
-        artifacts: scheduler::manifest::Artifacts {
+        artifacts: schedulers::manifest::Artifacts {
             schedule: Some(ArtifactRef {
                 uri: file_uri(schedule_path),
                 size_bytes: schedule_size,
@@ -782,7 +782,7 @@ fn manifest_create_from_schedule(
             trace: None,
             problem: None,
         },
-        links: scheduler::manifest::Links::default(),
+        links: schedulers::manifest::Links::default(),
         provenance: Provenance {
             matrix_run_id: None,
             cell_id: None,
@@ -876,7 +876,7 @@ fn build_cell_manifest(
     let extensions = workspace_context_to_extensions(ws_ctx);
 
     let manifest = Manifest {
-        manifest_schema_version: scheduler::manifest::MANIFEST_SCHEMA_VERSION.to_string(),
+        manifest_schema_version: schedulers::manifest::MANIFEST_SCHEMA_VERSION.to_string(),
         manifest_id: uuid::Uuid::new_v4().to_string(),
         created_at: now.to_string(),
         producer: Producer {
@@ -908,12 +908,12 @@ fn build_cell_manifest(
         },
         horizon,
         metrics,
-        artifacts: scheduler::manifest::Artifacts {
+        artifacts: schedulers::manifest::Artifacts {
             schedule: schedule_artifact,
             trace: None,
             problem: None,
         },
-        links: scheduler::manifest::Links::default(),
+        links: schedulers::manifest::Links::default(),
         provenance: Provenance {
             matrix_run_id: Some(run_id.to_string()),
             cell_id: Some(cell.cell_id.clone()),

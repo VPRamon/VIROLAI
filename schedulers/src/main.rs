@@ -1,13 +1,13 @@
-use scheduler::manifest::{
+use schedulers::manifest::{
     AlgorithmRef, ArtifactRef, Artifacts, DatasetRef, Horizon as ManifestHorizon, Links,
     MANIFEST_SCHEMA_VERSION, Manifest, Producer, Provenance, RunInfo, RunKind, RunStatus,
     ValidationReport, ValidationStatus,
 };
-use scheduler::metrics::{MetricsContext, ScheduleMetrics};
-use scheduler::scheduler::{SchedulingAlgorithm, est, hap, lst};
-use scheduler::telescope::Telescope;
-use scheduler::time::{MJD, Period, Time};
-use scheduler::{
+use schedulers::metrics::{MetricsContext, ScheduleMetrics};
+use schedulers::scheduler::{SchedulingAlgorithm, est, hap, lst};
+use schedulers::telescope::Telescope;
+use schedulers::time::{MJD, Period, Time};
+use schedulers::{
     LocationMeta, PeriodMeta, Schedule, ScheduleMetadata, ScheduleOutput, SchedulingProblem,
     preschedule,
 };
@@ -699,7 +699,7 @@ fn write_manifest_sidecar(
         manifest_id: uuid::Uuid::new_v4().to_string(),
         created_at: now.clone(),
         producer: Producer {
-            name: "scheduler".to_string(),
+            name: "schedulers".to_string(),
             version: env!("CARGO_PKG_VERSION").to_string(),
             git_sha: option_env!("GIT_SHA").map(str::to_string),
             host: std::env::var("HOSTNAME").ok().filter(|s| !s.is_empty()),

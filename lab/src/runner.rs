@@ -13,8 +13,8 @@
 
 use chrono::Utc;
 use rayon::prelude::*;
-use scheduler::metrics::{MetricsContext, RankingWeights, ScheduleMetrics};
-use scheduler::schedule::{LocationMeta, PeriodMeta, ScheduleMetadata, ScheduleOutput};
+use schedulers::metrics::{MetricsContext, RankingWeights, ScheduleMetrics};
+use schedulers::schedule::{LocationMeta, PeriodMeta, ScheduleMetadata, ScheduleOutput};
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -74,7 +74,7 @@ pub fn execute(
         .collect();
 
     eprintln!(
-        "experiments: {} total cells, {} already completed, {} to run",
+        "lab: {} total cells, {} already completed, {} to run",
         cells.len(),
         already_done.len(),
         pending.len()

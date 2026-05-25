@@ -24,11 +24,11 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use scheduler::manifest::{
+use schedulers::manifest::{
     AlgorithmRef, ArtifactRef, Artifacts, DatasetRef, Horizon, Links, MANIFEST_SCHEMA_VERSION,
     Manifest, Producer, Provenance, RunInfo, RunKind, RunStatus,
 };
-use scheduler::metrics::ScheduleMetrics;
+use schedulers::metrics::ScheduleMetrics;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -455,7 +455,7 @@ fn ingest_one(
     let derived = crate::workspaces::store::workspace_context_from_schedule(&body.schedule);
     let existing = manifest.workspace_context();
     let merged = merge_workspace_context(existing, derived);
-    if merged != scheduler::manifest::WorkspaceContext::default() {
+    if merged != schedulers::manifest::WorkspaceContext::default() {
         manifest.extensions = serde_json::json!({ "workspace_context": merged });
     }
     // Re-run the structural validator with the new artifact ref so the
@@ -465,9 +465,9 @@ fn ingest_one(
 }
 
 fn merge_workspace_context(
-    existing: Option<scheduler::manifest::WorkspaceContext>,
-    derived: scheduler::manifest::WorkspaceContext,
-) -> scheduler::manifest::WorkspaceContext {
+    existing: Option<schedulers::manifest::WorkspaceContext>,
+    derived: schedulers::manifest::WorkspaceContext,
+) -> schedulers::manifest::WorkspaceContext {
     let mut out = existing.unwrap_or_default();
     if out.observatory_id.is_none() {
         out.observatory_id = derived.observatory_id;

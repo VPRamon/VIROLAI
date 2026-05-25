@@ -11,6 +11,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 WEBAPP_ROOT=$(pwd)
+WORKSPACE_ROOT="$(cd "${WEBAPP_ROOT}/.." && pwd)"
 TSI_BACKEND="${WEBAPP_ROOT}/TSI/backend"
 TSI_FRONTEND="${WEBAPP_ROOT}/TSI/frontend"
 
@@ -19,6 +20,15 @@ TSI_FRONTEND="${WEBAPP_ROOT}/TSI/frontend"
 TSI_FEATURES="local-repo,http-server"
 
 log() { printf '\n=== %s ===\n' "$*"; }
+
+log "Workspace webapp: cargo fmt --check"
+(cd "${WORKSPACE_ROOT}" && cargo fmt --package webapp -- --check)
+
+log "Workspace webapp: cargo clippy"
+(cd "${WORKSPACE_ROOT}" && cargo clippy -p webapp --all-targets -- -D warnings)
+
+log "Workspace webapp: cargo test"
+(cd "${WORKSPACE_ROOT}" && cargo test -p webapp --all-features)
 
 log "Backend: cargo fmt --check"
 (cd "${TSI_BACKEND}" && cargo fmt --all -- --check)

@@ -10,15 +10,15 @@ The pipeline is built around four layers, each independently testable:
 
 ```
 ┌──────────────────┐   ┌─────────────────────┐   ┌────────────────────┐   ┌──────────────────────┐
-│ scheduler::metrics│  │ experiment_matrix    │  │ phd_tsi_server      │  │ phd-extensions UI    │
+│ schedulers::metrics│ │ lab runner          │  │ webapp      │  │ phd-extensions UI    │
 │ (canonical metric │→ │ (matrix runner +     │→ │ (filesystem catalog │→ │ (Experiments section │
 │  shape)           │  │  on-disk artefacts)  │  │  + REST + SSE)      │  │  in the webapp)      │
 └──────────────────┘   └─────────────────────┘   └────────────────────┘   └──────────────────────┘
 ```
 
-## 1. Metric shape — `scheduler::metrics`
+## 1. Metric shape — `schedulers::metrics`
 
-Single source of truth for evaluation metrics. See `src/metrics.rs`.
+Single source of truth for evaluation metrics. See `schedulers/src/metrics.rs`.
 
 `ScheduleMetrics::compute(&Schedule, &SchedulingProblem, &Period<MJD>, &MetricsContext)` returns:
 
@@ -38,17 +38,17 @@ All fields implement `Serialize`/`Deserialize` so cells can be persisted
 and round-tripped without recomputing schedules. **Do not duplicate
 metric computation** anywhere else in the tree — extend this module.
 
-## 2. Matrix runner — `experiment_matrix`
+## 2. Matrix runner — `lab`
 
 ```bash
-cargo run --release --bin experiment_matrix -- \
+cargo run --release -p lab --bin lab -- \
     --spec my-experiment.json \
     --output-dir ./experiments
 ```
 
 ### Spec shape
 
-`ExperimentSpec` (see `scripts/experiment_matrix/spec.rs`) is a Cartesian
+`ExperimentSpec` (see `lab/src/spec.rs`) is a Cartesian
 product of:
 
 - `datasets: Vec<DatasetRef>` — by id or path
@@ -85,9 +85,9 @@ bounded rayon pool with one shared `PreparedProblem` per dataset.
 | `--resume <run-dir>` | Skip cells already marked `CellCompleted`. |
 | `migrate --legacy <dir> --output <dir>` | Port pre-existing `est_experiment` runs. |
 
-## 3. Backend — `phd_tsi_server` Experiments domain
+## 3. Backend — `webapp` Experiments domain
 
-Lives entirely in `webapp/scripts/experiments/` (the upstream TSI
+Lives entirely in `webapp/src/experiments/` (the upstream TSI
 submodule under `webapp/TSI/` is **not** modified). Mounted into the
 TSI router via `BackendExtensions::with_routes(...)`.
 
@@ -191,7 +191,7 @@ npm run build
   (a) the runner's `summary.csv` flatten, (b) the matrix tab's metric
   selector, (c) the pareto tab's axis dropdowns.
 - **New algorithm**: add an arm to the runner's per-algorithm execution
-  branch (`scripts/experiment_matrix/cell.rs`), define its sweep-axis
+  branch (`lab/src/cell.rs`), define its sweep-axis
   shape in `spec.rs`, and add the algorithm id to the New Experiment
   form.
 - **New tab**: drop a component under

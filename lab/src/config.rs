@@ -12,9 +12,9 @@
 //! string that uniquely identifies each configuration — used as the stem of
 //! schedule output files and as the last component of `cell_id` strings.
 
-use scheduler::scheduler::est::{Configuration as EstConfiguration, EstScheduler, FomKind};
-use scheduler::scheduler::fom::ScheduleFom;
-use scheduler::scheduler::hap::{
+use schedulers::scheduler::est::{Configuration as EstConfiguration, EstScheduler, FomKind};
+use schedulers::scheduler::fom::ScheduleFom;
+use schedulers::scheduler::hap::{
     HapScheduler, PlannerConfig, SurvivorSelector as HapSurvivorSelector,
 };
 use serde::{Deserialize, Serialize};

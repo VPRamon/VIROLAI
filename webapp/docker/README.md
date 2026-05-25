@@ -5,7 +5,7 @@ This directory contains the Docker assets for running TSI with the PhD schema ad
 ## Files
 
 - docker-compose.yml: frontend + adapted backend + postgres stack
-- Dockerfile.backend: builds the phd_tsi_server binary
+- Dockerfile.backend: builds the webapp binary
 - Dockerfile.frontend: builds and serves the TSI frontend
 - Dockerfile.backend.dockerignore: backend-specific Docker ignore rules
 - Dockerfile.frontend.dockerignore: frontend-specific Docker ignore rules

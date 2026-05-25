@@ -24,9 +24,8 @@ echo "Quality Assurance Pipeline"
 echo "================================"
 echo ""
 
-# Run clippy
 echo "1. Running clippy..."
-if cargo clippy --all-targets -- -D warnings; then
+if cargo clippy --workspace --exclude tsi-rust --all-targets -- -D warnings; then
     echo "✓ Clippy passed"
 else
     echo "✗ Clippy failed"
@@ -34,7 +33,6 @@ else
 fi
 echo ""
 
-# Run format check
 echo "2. Running format check..."
 if cargo fmt --all -- --check; then
     echo "✓ Format check passed"
@@ -44,9 +42,8 @@ else
 fi
 echo ""
 
-# Run tests
 echo "3. Running tests..."
-if cargo test --all-features; then
+if cargo test --workspace --exclude tsi-rust --all-features; then
     echo "✓ Tests passed"
 else
     echo "✗ Tests failed"

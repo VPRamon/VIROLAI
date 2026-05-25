@@ -1,4 +1,4 @@
-//! `experiments` — experiment runner for the PhD scheduling workspace.
+//! `lab` — experiment runner for the PhD scheduling workspace.
 //!
 //! This crate provides the tooling to run parameter-sweep experiments
 //! against the [`scheduler`] library crate.  It is intentionally
@@ -19,10 +19,10 @@
 //!
 //! # Usage
 //!
-//! The `experiments` binary exposes a single sub-command:
+//! The `lab` binary exposes a single sub-command:
 //!
 //! ```text
-//! experiments run --spec <experiment.json>
+//! lab run --spec <experiment.json>
 //!                 [--resume <existing_run_dir>]
 //!                 [--output-dir <dir>]
 //!                 [--dry-run] [--no-state]

@@ -19,8 +19,8 @@ interactive result inspection.
 cargo build --release
 
 # 2. Run a sweep experiment (multiple datasets × algorithm configurations)
-cargo run --bin phd --release -- sweep \
-  --spec experiments/est_sweep.json \
+cargo run -p lab --bin phd --release -- sweep \
+  --spec lab/est_sweep.json \
   --out out/my-sweep \
   --manifest
 
@@ -47,13 +47,12 @@ cargo run --bin phd --release -- sweep \
 
 | Path | Contents |
 |---|---|
-| `src/` | Scheduler library and `scheduler` binary |
-| `src/bin/phd.rs` | The `phd` unified CLI |
-| `scripts/experiment_matrix/` | Parallel matrix runner invoked by `phd sweep` |
-| `scripts/ctao_adapter.rs` | CTAO → `scheduling_problem.json` adapter |
+| `schedulers/src/` | Scheduler library and `schedulers` binary |
+| `lab/src/bin/phd.rs` | The `phd` unified CLI |
+| `lab/src/bin/lab-ctao-adapter.rs` | CTAO → `scheduling_problem.json` adapter |
 | `schemas/` | Modular JSON schemas (problem, block, algorithm, metrics, schedule, manifest) |
 | `data/` | Example datasets (`isdc_n.json`, `lst_2024.json`, …) |
-| `experiments/` | Ready-to-run sweep specs |
+| `lab/` | Ready-to-run sweep specs |
 | `webapp/` | TSI integration: Docker stack and PhD adapter server |
 | `siderust/` | Local astronomy / time / coordinate utilities crate |
 
@@ -64,14 +63,14 @@ cargo run --bin phd --release -- sweep \
 `phd` is the single entry point for all research workflows.
 
 ```
-cargo run --bin phd -- <COMMAND> [OPTIONS]
+cargo run -p lab --bin phd -- <COMMAND> [OPTIONS]
 ```
 
 | Command | Purpose |
 |---|---|
 | `sweep` | Run a parameter sweep and collect flat results (primary workflow) |
-| `matrix` | Lower-level alias — delegates directly to `experiment_matrix` |
-| `run` | Run a single scheduling problem (delegates to `scheduler`) |
+| `matrix` | Lower-level alias — delegates directly to the `lab` binary |
+| `run` | Run a single scheduling problem (delegates to `schedulers`) |
 | `dataset adapt` | Convert a CTAO dataset directory into `scheduling_problem.json` |
 | `manifest create` | Build manifest(s) from a sweep run-directory or a single schedule JSON |
 | `manifest validate` | Validate a manifest against structural rules |
@@ -89,19 +88,18 @@ self-contained schedule JSON per cell** into `<DIR>` (flat — no
 subdirectories). Use `--manifest` to also emit a companion
 `<cell_id>.manifest.json` next to every schedule.
 
-> Note: `phd sweep` invokes the sibling `experiments` binary from
-> `target/debug/experiments` or `target/release/experiments`. If you
-> encounter `failed to spawn experiments: No such file or directory`,
-> build it first with:
+> Note: `phd sweep` invokes the sibling `lab` binary from
+> `target/debug/lab` or `target/release/lab`. If you encounter
+> `failed to spawn lab: No such file or directory`, build it first with:
 >
 > ```bash
-> cargo build --manifest-path experiments/Cargo.toml --target-dir target
+> cargo build -p lab --bin lab
 > ```
-> 
+>
 > For a release run, build the release binary as well:
 >
 > ```bash
-> cargo build --release --manifest-path experiments/Cargo.toml --target-dir target
+> cargo build --release -p lab --bin lab
 > ```
 
 | Flag | Required | Description |
@@ -188,19 +186,19 @@ Converts a CTAO `*_internalSDC.json` directory into `scheduling_problem.json`.
 Shorthand names `CTA-N` and `CTA-S` are resolved automatically under `data/`:
 
 ```bash
-cargo run --bin phd -- dataset adapt CTA-N
-cargo run --bin phd -- dataset adapt CTA-S
-cargo run --bin phd -- dataset adapt data/my_site data/my_site/scheduling_problem.json
+cargo run -p lab --bin phd -- dataset adapt CTA-N
+cargo run -p lab --bin phd -- dataset adapt CTA-S
+cargo run -p lab --bin phd -- dataset adapt data/my_site data/my_site/scheduling_problem.json
 ```
 
 ---
 
 ### `phd run` (single run)
 
-Delegates directly to the `scheduler` binary. Useful for one-off experiments.
+Delegates directly to the `schedulers` binary. Useful for one-off experiments.
 
 ```bash
-cargo run --bin phd -- run data/isdc_n.json --algorithm est --est-k 4 --est-b 2
+cargo run -p lab --bin phd -- run data/isdc_n.json --algorithm est --est-k 4 --est-b 2
 ```
 
 See `phd run --help` or the [scheduler options](#scheduler-options) section for full
@@ -320,10 +318,10 @@ Each EST cell is the cartesian product of all three axes.
 
 ## Scheduler Options
 
-For one-off runs via `phd run` or the raw `scheduler` binary:
+For one-off runs via `phd run` or the raw `schedulers` binary:
 
 ```
-scheduler <input_json> [horizon_start_mjd horizon_end_mjd]
+schedulers <input_json> [horizon_start_mjd horizon_end_mjd]
           [--algorithm est|hap]
           [--output <path>]
           [EST options]
@@ -360,10 +358,10 @@ manifests → upload to the webapp**.
 
 ### Step 1 — Prepare your experiment spec
 
-Copy one of the bundled examples from `experiments/` and edit it:
+Copy one of the bundled examples from `lab/` and edit it:
 
 ```bash
-cp experiments/est_sweep.json experiments/my_sweep.json
+cp lab/est_sweep.json lab/my_sweep.json
 ```
 
 Edit `my_sweep.json` to point at your datasets and set the parameter ranges.
@@ -371,8 +369,8 @@ Edit `my_sweep.json` to point at your datasets and set the parameter ranges.
 ### Step 2 — Run the sweep
 
 ```bash
-cargo run --bin phd --release -- sweep \
-  --spec experiments/my_sweep.json \
+cargo run -p lab --bin phd --release -- sweep \
+  --spec lab/my_sweep.json \
   --out out/my-sweep \
   --manifest
 ```
@@ -398,12 +396,12 @@ If you ran the sweep without `--manifest`, or want to regenerate manifests:
 
 ```bash
 # For a single schedule:
-cargo run --bin phd -- manifest create \
+cargo run -p lab --bin phd -- manifest create \
   --schedule out/my-sweep/isdc_n__est__e0_k1_b1.json \
   --out out/my-sweep/isdc_n__est__e0_k1_b1.manifest.json
 
 # For all schedules in a run directory (phd matrix output):
-cargo run --bin phd -- manifest create \
+cargo run -p lab --bin phd -- manifest create \
   --run out/matrix-run/run-20260101T120000Z \
   --out out/matrix-run/manifests
 ```
@@ -419,7 +417,7 @@ Using Docker (recommended):
 Or locally (without Docker):
 
 ```bash
-PHD_WORKSPACES_DIR=./workspaces cargo run --bin phd_tsi_server
+PHD_WORKSPACES_DIR=./workspaces cargo run -p webapp --bin webapp
 ```
 
 Wait for the backend health endpoint to respond:
@@ -508,7 +506,7 @@ Run only the backend server:
 
 ```bash
 PHD_WORKSPACES_DIR=./workspaces \
-cargo run --bin phd_tsi_server
+cargo run -p webapp --bin webapp
 ```
 
 Listens on `http://localhost:8080` by default. Adjust with `HOST` and `PORT`
@@ -623,10 +621,10 @@ The repository ships ready-to-use scheduling problem files under `data/`:
 To convert a raw CTAO dataset directory:
 
 ```bash
-cargo run --bin phd -- dataset adapt CTA-N
-cargo run --bin phd -- dataset adapt CTA-S
+cargo run -p lab --bin phd -- dataset adapt CTA-N
+cargo run -p lab --bin phd -- dataset adapt CTA-S
 # or with explicit paths:
-cargo run --bin phd -- dataset adapt data/my_ctao_dir data/my_ctao_dir/scheduling_problem.json
+cargo run -p lab --bin phd -- dataset adapt data/my_ctao_dir data/my_ctao_dir/scheduling_problem.json
 ```
 
 ---
@@ -634,9 +632,9 @@ cargo run --bin phd -- dataset adapt data/my_ctao_dir data/my_ctao_dir/schedulin
 ## QA
 
 ```bash
-cargo clippy --all-targets -- -D warnings
+cargo clippy --workspace --exclude tsi-rust --all-targets -- -D warnings
 cargo fmt --all -- --check
-cargo test --all-features
+cargo test --workspace --exclude tsi-rust --all-features
 ```
 
 Shortcut:

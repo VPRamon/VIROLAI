@@ -1,7 +1,7 @@
-# `experiments` crate
+# `lab` crate
 
-The `experiments` crate runs parameter-sweep experiments against the
-`scheduler` library. Its only CLI entrypoint is `experiments run`,
+The `lab` crate runs parameter-sweep experiments against the
+`scheduler` library. Its only CLI entrypoint is `lab run`,
 which expands an `ExperimentSpec` into a matrix of cells and executes
 them in parallel.
 
@@ -14,13 +14,13 @@ checkpointing, and resume semantics.
 ### Recommended: `phd sweep`
 
 ```bash
-cargo run --bin phd -- sweep \
-    --spec experiments/hap_sweep.json \
+cargo run -p lab --bin phd -- sweep \
+    --spec lab/hap_sweep.json \
     --out out/hap-sweep \
     --manifest
 ```
 
-`phd sweep` invokes the sibling `experiments` binary, then flattens the
+`phd sweep` invokes the sibling `lab` binary, then flattens the
 raw `run-<timestamp>/schedules/*.json` tree into:
 
 ```text
@@ -31,20 +31,20 @@ out/hap-sweep/
 
 This flat layout is the canonical input for `phd publish`.
 
-`phd sweep` expects the `experiments` binary at
-`target/debug/experiments` or `target/release/experiments`. Build it
+`phd sweep` expects the `lab` binary at
+`target/debug/lab` or `target/release/lab`. Build it
 explicitly when needed:
 
 ```bash
-cargo build --manifest-path experiments/Cargo.toml --target-dir target
-cargo build --release --manifest-path experiments/Cargo.toml --target-dir target
+cargo build -p lab --bin lab
+cargo build --release -p lab --bin lab
 ```
 
-### Direct crate invocation: `experiments run`
+### Direct crate invocation: `lab run`
 
 ```bash
-cargo run --manifest-path experiments/Cargo.toml -- run \
-    --spec experiments/hap_sweep.json
+cargo run -p lab --bin lab -- run \
+    --spec lab/hap_sweep.json
 ```
 
 Supported flags:
@@ -84,7 +84,7 @@ workflow.
 
 ## Spec format
 
-The JSON schema is defined by `experiments::spec::ExperimentSpec`.
+The JSON schema is defined by `lab::spec::ExperimentSpec`.
 Paths in `datasets[*].path` and `output_dir` may be relative to the
 spec file.
 
@@ -119,8 +119,8 @@ Key fields:
 
 Working examples live next to this README:
 
-- `experiments/hap_sweep.json`
-- `experiments/paper_sweep.json`
+- `lab/hap_sweep.json`
+- `lab/paper_sweep.json`
 
 ## Sweep operations
 
@@ -149,7 +149,7 @@ After a sweep completes, publish the flattened output with `phd
 publish`:
 
 ```bash
-cargo run --bin phd -- publish \
+cargo run -p lab --bin phd -- publish \
     --workspace paper \
     --dir out/hap-sweep \
     --create-workspace \
@@ -163,4 +163,4 @@ idempotency. See `docs/architecture.md` for the end-to-end pipeline.
 
 - Do not edit generated cell JSONs by hand; they are the source of truth.
 - Do not maintain parallel `metrics/` or `traces/` directories for this flow.
-- Do not use `cargo run -p experiments`; this crate is not a workspace member.
+- Do not use the old `experiments/` path; this crate is now the `lab` workspace member.

@@ -25,7 +25,7 @@
 //! }
 //! ```
 
-use scheduler::metrics::RankingWeights;
+use schedulers::metrics::RankingWeights;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -97,7 +97,7 @@ impl AlgorithmSweep {
     }
 }
 
-/// Serialisable mirror of [`scheduler::metrics::RankingWeights`].
+/// Serialisable mirror of [`schedulers::metrics::RankingWeights`].
 ///
 /// Redeclared here so the spec can use `#[serde(default)]` on each field and
 /// remain forward-compatible when new ranking terms are added to the metrics

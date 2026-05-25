@@ -28,7 +28,7 @@ There is exactly one canonical path:
    --include-schedules`.
 3. Open the workspace in the webapp.
 
-Everything else (`experiments run`, `phd manifest create`, the
+Everything else (`lab run`, `phd manifest create`, the
 `upload_results.sh` wrapper) is a supporting tool, not a separate
 pathway.
 
@@ -113,7 +113,7 @@ JSON bytes.
 | `phd manifest create --schedule …` / `--run …` | Build a manifest post-hoc from a single schedule or a `run-<ts>/` directory. |
 | `phd manifest validate` | Validate a manifest against the schema. |
 
-`experiments run` and `experiments matrix` remain available for
+`lab run` and `lab matrix` remain available for
 advanced direct use; they share the same artefact contract.
 
 ## 6. UI surface (`/workspace`)

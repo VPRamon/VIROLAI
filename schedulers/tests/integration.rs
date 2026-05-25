@@ -6,7 +6,7 @@
 //!    dependency ordering, and constraint violations.
 
 use qtty::{Degrees, Meter, Quantity, Seconds};
-use scheduler::{
+use schedulers::{
     Period,
     constraints::{Constraint, ConstraintExpr, TimeWindowConstraint},
     error::ScheduleError,
@@ -31,7 +31,7 @@ fn roque() -> Geodetic<ECEF> {
 }
 
 /// A simple ICRS target pointing to Sirius (RA=101.287°, Dec=-16.716°).
-fn sirius_target() -> scheduler::task::IcrsTarget {
+fn sirius_target() -> schedulers::task::IcrsTarget {
     use siderust::coordinates::frames::ICRS;
     use siderust::coordinates::spherical::Direction;
     // Direction fields: polar = dec, azimuth = ra

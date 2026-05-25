@@ -16,13 +16,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # ---------- Stage 2: planner ----------
 FROM chef AS planner
+COPY Cargo.toml Cargo.lock* /app/
+COPY schedulers/Cargo.toml /app/schedulers/Cargo.toml
+COPY lab/Cargo.toml /app/lab/Cargo.toml
+COPY webapp/Cargo.toml /app/webapp/Cargo.toml
 COPY webapp/TSI/backend/Cargo.toml webapp/TSI/backend/Cargo.lock* webapp/TSI/backend/
 COPY webapp/TSI/backend/src webapp/TSI/backend/src
 COPY siderust /app/siderust
-COPY Cargo.toml Cargo.lock* /app/
-COPY src /app/src
-COPY webapp/scripts /app/webapp/scripts
-COPY schemas /app/schemas
+COPY schedulers/src /app/schedulers/src
+COPY lab/src /app/lab/src
+COPY webapp/src /app/webapp/src
 RUN cargo chef prepare --recipe-path recipe.json
 
 # ---------- Stage 3: builder ----------
@@ -30,24 +33,28 @@ FROM chef AS builder
 # cargo-chef cook must locate all local path dependencies to validate manifests.
 # Both siderust and tsi_rust are local path deps, so copy their full source
 # trees before cooking. Registry crates are pre-built by cook; app-only sources
-# (webapp/scripts, schemas) come after to preserve layer caching.
+# (webapp/src, schemas) come after to preserve layer caching.
 COPY Cargo.toml Cargo.lock* /app/
 COPY siderust /app/siderust
+COPY schedulers/Cargo.toml /app/schedulers/Cargo.toml
+COPY lab/Cargo.toml /app/lab/Cargo.toml
+COPY webapp/Cargo.toml /app/webapp/Cargo.toml
 COPY webapp/TSI/backend/Cargo.toml webapp/TSI/backend/Cargo.lock* webapp/TSI/backend/
 COPY webapp/TSI/backend/src webapp/TSI/backend/src
 COPY --from=planner /app/recipe.json recipe.json
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/app/target \
-    cargo chef cook --release --recipe-path recipe.json --bin phd_tsi_server
+    cargo chef cook --release --recipe-path recipe.json -p webapp --bin webapp
 
-COPY src /app/src
-COPY webapp/scripts /app/webapp/scripts
+COPY schedulers/src /app/schedulers/src
+COPY lab/src /app/lab/src
+COPY webapp/src /app/webapp/src
 COPY schemas /app/schemas
 
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/app/target \
-    cargo build --release --bin phd_tsi_server \
-    && cp target/release/phd_tsi_server /usr/local/bin/phd_tsi_server
+    cargo build --release -p webapp --bin webapp \
+    && cp target/release/webapp /usr/local/bin/webapp
 
 # ---------- Stage 4: runtime ----------
 FROM debian:bookworm-slim AS runtime
@@ -60,7 +67,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libpq5 \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder /usr/local/bin/phd_tsi_server /usr/local/bin/phd_tsi_server
+COPY --from=builder /usr/local/bin/webapp /usr/local/bin/webapp
 
 RUN useradd -r -s /bin/false phd \
     && mkdir -p /data/experiments /data/workspaces \
@@ -75,4 +82,4 @@ EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:8080/health || exit 1
 
-CMD ["phd_tsi_server"]
+CMD ["webapp"]

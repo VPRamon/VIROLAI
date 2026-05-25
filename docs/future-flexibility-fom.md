@@ -318,5 +318,5 @@ cargo run --release --bin phd -- run data/isdc_n.json \
 ```
 
 Short forms such as `-e`, `-k`, and `-b` are not currently supported by the
-`scheduler` CLI or by `phd run`, which forwards arguments to `scheduler`
+`schedulers` CLI or by `phd run`, which forwards arguments to `schedulers`
 unchanged.

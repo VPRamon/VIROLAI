@@ -58,7 +58,7 @@ if [[ -z "${PHD_BIN}" ]]; then
         PHD_BIN="$(command -v phd)"
     else
         echo "upload_results.sh: cannot find the \`phd\` binary." >&2
-        echo "Build it with \`cargo build --bin phd\` or add it to PATH." >&2
+        echo "Build it with \`cargo build -p lab --bin phd\` or add it to PATH." >&2
         exit 127
     fi
 fi

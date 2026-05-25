@@ -8,9 +8,9 @@
 //! and is independent of scheduler configuration, so it is performed once and
 //! shared across all runs that use the same dataset.
 
-use scheduler::prescheduler::{TaskPeriodMap, preschedule};
-use scheduler::schedule::SchedulingProblem;
-use scheduler::time::{MJD, Period, Time};
+use schedulers::prescheduler::{TaskPeriodMap, preschedule};
+use schedulers::schedule::SchedulingProblem;
+use schedulers::time::{MJD, Period, Time};
 use serde_json::Value;
 use std::fs;
 use std::path::Path;

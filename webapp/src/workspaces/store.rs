@@ -29,8 +29,8 @@
 //! lock for the relatively small surface here.
 
 use chrono::{DateTime, Utc};
-use scheduler::manifest::{ArtifactRef, Manifest, ValidationStatus, WorkspaceContext};
-use scheduler::metrics::ScheduledPriorityStair;
+use schedulers::manifest::{ArtifactRef, Manifest, ValidationStatus, WorkspaceContext};
+use schedulers::metrics::ScheduledPriorityStair;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -137,7 +137,7 @@ pub struct CohortSummary {
     pub dataset_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub observatory_id: Option<String>,
-    pub period: scheduler::manifest::Horizon,
+    pub period: schedulers::manifest::Horizon,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub block_pool_hash: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1127,7 +1127,7 @@ fn derive_workspace_context_from_schedule(schedule: &Value) -> WorkspaceContext 
         let s = period.get("start_mjd_utc").and_then(|v| v.as_f64());
         let e = period.get("end_mjd_utc").and_then(|v| v.as_f64());
         if let (Some(start_mjd_utc), Some(end_mjd_utc)) = (s, e) {
-            ctx.period = Some(scheduler::manifest::Horizon {
+            ctx.period = Some(schedulers::manifest::Horizon {
                 start_mjd_utc,
                 end_mjd_utc,
             });
@@ -1221,22 +1221,22 @@ impl WorkspaceStore {
         &self,
         manifest: &Manifest,
         resolved_schedule: Option<&Value>,
-    ) -> Option<scheduler::SchedulingProblem> {
+    ) -> Option<schedulers::SchedulingProblem> {
         if let Some(value) = resolved_schedule
-            && let Ok(p) = serde_json::from_value::<scheduler::SchedulingProblem>(value.clone())
+            && let Ok(p) = serde_json::from_value::<schedulers::SchedulingProblem>(value.clone())
         {
             return Some(p);
         }
         if let Some(path) = manifest_file_schedule_path(manifest)
             && let Ok(bytes) = fs::read(&path)
-            && let Ok(p) = serde_json::from_slice::<scheduler::SchedulingProblem>(&bytes)
+            && let Ok(p) = serde_json::from_slice::<schedulers::SchedulingProblem>(&bytes)
         {
             return Some(p);
         }
         let dataset_path = Path::new(&manifest.dataset.source_path);
         if dataset_path.is_file()
             && let Ok(bytes) = fs::read(dataset_path)
-            && let Ok(p) = serde_json::from_slice::<scheduler::SchedulingProblem>(&bytes)
+            && let Ok(p) = serde_json::from_slice::<schedulers::SchedulingProblem>(&bytes)
         {
             return Some(p);
         }
@@ -1244,17 +1244,17 @@ impl WorkspaceStore {
     }
 }
 
-fn count_completed_blocks(problem: &scheduler::SchedulingProblem, schedule_value: &Value) -> u64 {
+fn count_completed_blocks(problem: &schedulers::SchedulingProblem, schedule_value: &Value) -> u64 {
     let placements = collect_task_placements(schedule_value);
     if placements.is_empty() {
         return 0;
     }
-    let mut schedule = scheduler::Schedule::new();
+    let mut schedule = schedulers::Schedule::new();
     for (task_id, start, end) in placements {
-        let placement = scheduler::TaskPlacement {
-            task_id: scheduler::time::TaskId(task_id),
-            start: scheduler::time::Time::<scheduler::time::MJD>::new(start),
-            end: scheduler::time::Time::<scheduler::time::MJD>::new(end),
+        let placement = schedulers::TaskPlacement {
+            task_id: schedulers::time::TaskId(task_id),
+            start: schedulers::time::Time::<schedulers::time::MJD>::new(start),
+            end: schedulers::time::Time::<schedulers::time::MJD>::new(end),
         };
         schedule.insert_placement(placement);
     }
@@ -1312,7 +1312,7 @@ pub fn validate_manifest_payload(value: &Value) -> WorkspaceResult<Manifest> {
         let msg = report
             .issues
             .iter()
-            .filter(|i| matches!(i.severity, scheduler::manifest::IssueSeverity::Error))
+            .filter(|i| matches!(i.severity, schedulers::manifest::IssueSeverity::Error))
             .map(|i| format!("{}: {}", i.code, i.message))
             .collect::<Vec<_>>()
             .join("; ");

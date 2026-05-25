@@ -1,15 +1,15 @@
 # `scripts/`
 
-Operational helpers around the scheduler crate and the webapp. Each
+Operational helpers around the schedulers crate and the webapp. Each
 script is self-contained; together they cover the day-to-day research
 loop.
 
 | Script | Purpose |
 |---|---|
-| `qa-pipeline.sh` | Run `cargo fmt --check`, `cargo clippy --all-targets -D warnings`, `cargo test --all-features`. |
-| `ctao_adapter.rs` | Convert raw CTA dataset files into a `scheduling_problem.json`. |
+| `qa-pipeline.sh` | Run workspace `cargo fmt --check`, `cargo clippy --workspace --exclude tsi-rust --all-targets -D warnings`, `cargo test --workspace --exclude tsi-rust --all-features`. |
+| `lab-ctao-adapter` | Convert raw CTA dataset files into a `scheduling_problem.json`. |
 | `upload_results.sh` | Thin wrapper over `phd publish` (kept for shell-pipeline back-compat). |
-| `phd_tsi_server` | Local backend for the webapp (also lives at `webapp/scripts/`). Run with `cargo run --bin phd_tsi_server`. |
+| `webapp` | Local backend for the webapp. Run with `cargo run -p webapp --bin webapp`. |
 
 ---
 
@@ -26,14 +26,14 @@ Fails fast on the first unsuccessful step.
 
 ---
 
-## `ctao_adapter.rs`
+## `lab-ctao-adapter`
 
 Compiled binary that ingests `*_internalSDC.json` files produced by the
 CTA dataset pipeline and emits a `scheduling_problem.json` validated
 against `schemas/scheduling_problem/scheduling_problem.schema.json`.
 
 ```bash
-cargo run --bin ctao_adapter -- \
+cargo run -p lab --bin lab-ctao-adapter -- \
     --input  data/raw/cta_n_internalSDC.json \
     --output data/cta_n.json
 ```
@@ -48,7 +48,7 @@ Notes:
 ## `upload_results.sh`
 
 Back-compat wrapper around `phd publish`. New scripts and humans should
-prefer `cargo run --bin phd -- publish` directly. This wrapper exists
+prefer `cargo run -p lab --bin phd -- publish` directly. This wrapper exists
 so legacy CI pipelines and shell aliases keep working.
 
 ```bash
@@ -69,13 +69,13 @@ because all HTTP work now lives in the Rust client.
 
 ---
 
-## `phd_tsi_server`
+## `webapp`
 
 The webapp backend. Runs the workspaces API plus the TSI adapter
 endpoints. For local development:
 
 ```bash
-PHD_WORKSPACES_DIR=./workspaces cargo run --bin phd_tsi_server
+PHD_WORKSPACES_DIR=./workspaces cargo run -p webapp --bin webapp
 ```
 
 For production / Docker, see `webapp/setup.sh` and `webapp/docker/`.

@@ -1,0 +1,41 @@
+[package]
+name = "lab"
+version = "0.1.0"
+edition = "2024"
+description = "Experiment runner and PhD scheduling lab CLI for parameter sweeps, manifests, publishing, and dataset adapters."
+
+[lib]
+name = "lab"
+path = "src/lib.rs"
+
+[[bin]]
+name = "lab"
+path = "src/main.rs"
+
+[[bin]]
+name = "phd"
+path = "src/bin/phd.rs"
+
+[[bin]]
+name = "lab-ctao-adapter"
+path = "src/bin/lab-ctao-adapter.rs"
+
+[dependencies]
+schedulers     = { path = "../schedulers" }
+siderust       = { path = "../siderust" }
+chrono         = "0.4"
+clap           = { version = "4.5", features = ["derive"] }
+csv            = "1.3"
+env_logger     = "0.11"
+log            = "0.4"
+rayon          = "1.10"
+serde          = { version = "1.0", features = ["derive"] }
+serde_json     = "1.0"
+sha2           = "0.10"
+tempfile       = "3.15"
+ureq           = { version = "2.10", features = ["json"] }
+uuid           = { version = "1.10", features = ["v4", "serde"] }
+
+[dev-dependencies]
+csv            = "1.3"
+tempfile       = "3.15"

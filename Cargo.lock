@@ -3,41 +3,6 @@
 version = 4
 
 [[package]]
-name = "PhD"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-stream",
- "axum",
- "chrono",
- "clap",
- "csv",
- "env_logger",
- "futures",
- "http-body-util",
- "libc",
- "log",
- "petgraph",
- "qtty 0.4.1",
- "rand",
- "rayon",
- "serde",
- "serde_json",
- "sha2",
- "siderust 0.6.0",
- "tempfile",
- "tempoch",
- "thiserror",
- "tokio",
- "tower",
- "tracing",
- "tracing-subscriber",
- "tsi-rust",
- "ureq",
- "uuid",
-]
-
-[[package]]
 name = "adler2"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1268,6 +1233,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "lab"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "clap",
+ "csv",
+ "env_logger",
+ "log",
+ "rayon",
+ "schedulers",
+ "serde",
+ "serde_json",
+ "sha2",
+ "siderust 0.6.0",
+ "tempfile",
+ "ureq",
+ "uuid",
+]
+
+[[package]]
 name = "lazy_static"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1932,6 +1917,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "schedulers"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "env_logger",
+ "log",
+ "petgraph",
+ "qtty 0.4.1",
+ "rand",
+ "rayon",
+ "serde",
+ "serde_json",
+ "sha2",
+ "siderust 0.6.0",
+ "tempoch",
+ "thiserror",
+ "uuid",
+]
+
+[[package]]
 name = "scopeguard"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2503,6 +2508,7 @@ dependencies = [
  "rayon",
  "serde",
  "serde_json",
+ "serde_urlencoded",
  "sha2",
  "siderust 0.6.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "thiserror",
@@ -2722,6 +2728,31 @@ dependencies = [
  "hashbrown 0.15.5",
  "indexmap",
  "semver",
+]
+
+[[package]]
+name = "webapp"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-stream",
+ "axum",
+ "chrono",
+ "futures",
+ "http-body-util",
+ "rayon",
+ "schedulers",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tower",
+ "tracing",
+ "tracing-subscriber",
+ "tsi-rust",
+ "uuid",
 ]
 
 [[package]]

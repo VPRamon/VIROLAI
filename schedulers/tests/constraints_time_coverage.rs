@@ -1,5 +1,5 @@
 use qtty::Degrees;
-use scheduler::{
+use schedulers::{
     Period,
     constraints::{
         AltitudeConstraint, AzimuthConstraint, Constraint, ConstraintBlocks, ConstraintExpr,

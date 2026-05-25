@@ -4,7 +4,7 @@ TSI (Telescope Scheduling Intelligence) is intentionally **algorithm
 agnostic**: nothing in the `tsi-rust` backend or the TSI React frontend
 should know about EST, HAP, or any other scheduling algorithm. Algorithm
 specific code lives in *integrator packs* such as `webapp/phd-extensions/`
-(frontend) and `webapp/scripts/phd_tsi_*.rs` (backend), wired together
+(frontend) and `webapp/src/phd_tsi_*.rs` (backend), wired together
 through the public extension contracts described below.
 
 The PhD/EST integrator is the worked example used throughout this
@@ -51,7 +51,7 @@ Integrators may contribute:
 Extensions **may not** mutate the core repository contract or intercept
 built-in handlers. If you need that level of integration, fork TSI.
 
-The PhD integrator (see `webapp/scripts/phd_tsi_server.rs`) demonstrates
+The PhD integrator (see `webapp/src/webapp.rs`) demonstrates
 the full setup: build a `BackendExtensions` with
 `BackendExtensions::builder().with_trace_validator(EstTraceValidator).build()`
 and pass it to `create_router_with_extensions(state, extensions)`.

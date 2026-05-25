@@ -10,9 +10,9 @@ use std::fs;
 use std::io::{self, Write};
 use std::path::PathBuf;
 
-use scheduler::manifest::Horizon;
-use scheduler::time::{MJD, Period, Time};
-use scheduler::{SchedulingProblem, Telescope};
+use schedulers::manifest::Horizon;
+use schedulers::time::{MJD, Period, Time};
+use schedulers::{SchedulingProblem, Telescope};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -103,13 +103,13 @@ fn compute_entry(
         Time::<MJD>::new(horizon.start_mjd_utc),
         Time::<MJD>::new(horizon.end_mjd_utc),
     );
-    let task_periods = scheduler::preschedule(problem, &timeline, telescope)
+    let task_periods = schedulers::preschedule(problem, &timeline, telescope)
         .map_err(|e| format!("prescheduler failed: {e:?}"))?;
 
     let total_block_count = problem.block_count() as u64;
     let mut schedulable_block_ids: Vec<String> = Vec::new();
 
-    let task_has_window = |id: scheduler::time::TaskId| -> bool {
+    let task_has_window = |id: schedulers::time::TaskId| -> bool {
         task_periods
             .get(&id)
             .map(|p| !p.is_empty())
