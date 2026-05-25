@@ -20,6 +20,9 @@
 //! that lookup fails the CLI falls back to the binary name on `$PATH`
 //! so users can install only what they need.
 
+#[path = "phd/ranking.rs"]
+mod ranking;
+
 use clap::{Parser, Subcommand};
 use scheduler::manifest::{
     AlgorithmRef, ArtifactRef, DatasetRef, Horizon, Manifest, Producer, Provenance, RunInfo,
@@ -341,6 +344,7 @@ fn sweep(
     let schedules_dir = run_dir.join("schedules");
     let mut copied = 0usize;
     let mut manifests_written = 0usize;
+    let mut run_records = Vec::new();
 
     for cell in &exp.cells {
         let src = schedules_dir.join(format!("{}.json", cell.cell_id));
@@ -353,6 +357,7 @@ fn sweep(
             .map_err(|e| format!("failed to copy {} -> {}: {e}", src.display(), dst.display()))?;
         copied += 1;
 
+        let mut manifest_path_for_record = None;
         if emit_manifest {
             match build_cell_manifest(
                 &run_dir,
@@ -369,6 +374,7 @@ fn sweep(
                     fs::write(&manifest_path, &text)
                         .map_err(|e| format!("failed to write {}: {e}", manifest_path.display()))?;
                     manifests_written += 1;
+                    manifest_path_for_record = Some(manifest_path);
                 }
                 Err(e) => {
                     eprintln!(
@@ -378,7 +384,19 @@ fn sweep(
                 }
             }
         }
+
+        let record = ranking::record_from_schedule(
+            &cell.cell_id,
+            &cell.dataset_id,
+            &cell.algorithm,
+            &cell.run_config,
+            &dst,
+            manifest_path_for_record,
+        )?;
+        run_records.push(record);
     }
+
+    let artifacts = ranking::write_analysis_outputs(out_dir, &run_records)?;
 
     println!(
         "phd sweep: {} schedule(s) written to {}{}",
@@ -389,6 +407,14 @@ fn sweep(
         } else {
             String::new()
         }
+    );
+    println!(
+        "phd sweep: ranking outputs → {}, {}, {}, {}, {}",
+        artifacts.all_runs_csv.display(),
+        artifacts.rankings_by_dataset_csv.display(),
+        artifacts.summary_by_config_csv.display(),
+        artifacts.pareto_front_csv.display(),
+        artifacts.best_schedules_dir.display()
     );
     if emit_manifest && manifests_written > 0 {
         let summary_path = out_dir.join("summary.csv");

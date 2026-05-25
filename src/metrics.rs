@@ -269,6 +269,10 @@ pub struct ScheduleMetrics {
     pub total_horizon_sec: f64,
     pub available_time_sec: f64,
     pub scheduled_time_sec: f64,
+    /// Wall-clock runtime spent inside the scheduler, in milliseconds.
+    /// Optional so older payloads remain readable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scheduler_runtime_ms: Option<f64>,
     pub utilization: f64,
     pub per_resource: Vec<ResourceMetrics>,
     pub composite_rank_score: f64,
@@ -372,6 +376,7 @@ impl ScheduleMetrics {
             total_horizon_sec,
             available_time_sec,
             scheduled_time_sec,
+            scheduler_runtime_ms: None,
             utilization,
             per_resource,
             composite_rank_score,

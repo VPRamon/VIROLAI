@@ -28,6 +28,7 @@
     "total_horizon_sec": { "type": "number", "minimum": 0 },
     "available_time_sec": { "type": "number", "minimum": 0 },
     "scheduled_time_sec": { "type": "number", "minimum": 0 },
+    "scheduler_runtime_ms": { "type": "number", "minimum": 0 },
     "utilization": { "type": "number" },
     "per_resource": {
       "type": "array",

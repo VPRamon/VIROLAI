@@ -19,6 +19,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Instant;
 
 use crate::cell::MatrixCell;
 use crate::config::{HapSurvivorMode, RunConfig};
@@ -233,10 +234,10 @@ fn run_cell_inner(
 ) -> Result<CellPaths, String> {
     let schedule_path = output::schedule_path(run_dir, &cell.cell_id);
 
+    let scheduler_started = Instant::now();
     let (schedule,) = match cell.run_config {
         RunConfig::Est(config) => {
-            let mut scheduler = config.build_scheduler()?;
-            scheduler = scheduler.with_fom_label(config.fom.to_string());
+            let scheduler = config.build_scheduler()?;
             let schedule = scheduler
                 .run(
                     &prepared.problem,
@@ -258,13 +259,16 @@ fn run_cell_inner(
             (schedule,)
         }
     };
+    let scheduler_runtime_ms = scheduler_started.elapsed().as_secs_f64() * 1000.0;
 
     let metadata = build_schedule_metadata(&cell.run_config, cell, prepared);
     let mut ctx = MetricsContext::new();
     if let Some(r) = ranking {
         ctx = ctx.with_ranking(r);
     }
-    let metrics = ScheduleMetrics::compute(&schedule, &prepared.problem, &prepared.horizon, &ctx);
+    let mut metrics =
+        ScheduleMetrics::compute(&schedule, &prepared.problem, &prepared.horizon, &ctx);
+    metrics.scheduler_runtime_ms = Some(scheduler_runtime_ms);
     let metrics_value =
         serde_json::to_value(&metrics).map_err(|e| format!("failed to serialize metrics: {e}"))?;
     let output_obj = ScheduleOutput::new(prepared.raw_json.clone(), &schedule, Some(metadata))
