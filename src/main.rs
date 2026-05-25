@@ -1,4 +1,4 @@
-use scheduler::scheduler::{SchedulingAlgorithm, est, hap};
+use scheduler::scheduler::{SchedulingAlgorithm, est, hap, lst};
 use scheduler::telescope::Telescope;
 use scheduler::time::{MJD, Period, Time};
 use scheduler::{
@@ -14,6 +14,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 enum Algorithm {
     Est,
     Hap,
+    Lst,
 }
 
 impl Algorithm {
@@ -21,6 +22,7 @@ impl Algorithm {
         match self {
             Self::Est => "EST",
             Self::Hap => "HAP",
+            Self::Lst => "LST",
         }
     }
 }
@@ -145,15 +147,16 @@ fn run() -> Result<(), String> {
         preschedule_elapsed.as_secs_f64()
     );
     match cli.algorithm {
-        Algorithm::Est => {
+        Algorithm::Est | Algorithm::Lst => {
+            let label = cli.algorithm.label();
             println!(
-                "EST config: fom={}, endangered_threshold={}, k={}, b={}",
+                "{label} config: fom={}, endangered_threshold={}, k={}, b={}",
                 cli.est_fom,
                 cli.est_config.endangered_threshold,
                 cli.est_config.k_beams,
                 cli.est_config.branching_factor,
             );
-            println!("EST elapsed: {:.3}s", algo_elapsed.as_secs_f64());
+            println!("{label} elapsed: {:.3}s", algo_elapsed.as_secs_f64());
         }
         Algorithm::Hap => {
             println!(
@@ -212,16 +215,17 @@ fn parse_cli_args(program: &str, args: &[String]) -> Result<CliArgs, String> {
                 let Some(value) = args.get(i + 1) else {
                     print_usage(program);
                     return Err(format!(
-                        "missing value for {flag} (expected 'est' or 'hap')"
+                        "missing value for {flag} (expected 'est', 'hap', or 'lst')"
                     ));
                 };
                 algorithm = match value.as_str() {
                     "est" => Algorithm::Est,
                     "hap" => Algorithm::Hap,
+                    "lst" => Algorithm::Lst,
                     _ => {
                         print_usage(program);
                         return Err(format!(
-                            "invalid {flag} value '{value}': expected 'est' or 'hap'"
+                            "invalid {flag} value '{value}': expected 'est', 'hap', or 'lst'"
                         ));
                     }
                 };
@@ -375,11 +379,12 @@ fn parse_cli_args(program: &str, args: &[String]) -> Result<CliArgs, String> {
             est_flags_set.join(", ")
         ));
     }
-    if algorithm == Algorithm::Est && !hap_flags_set.is_empty() {
+    if (algorithm == Algorithm::Est || algorithm == Algorithm::Lst) && !hap_flags_set.is_empty() {
         print_usage(program);
         return Err(format!(
-            "HAP flags ({}) cannot be used with --algorithm est",
-            hap_flags_set.join(", ")
+            "HAP flags ({}) cannot be used with --algorithm {}",
+            hap_flags_set.join(", "),
+            cli_name(algorithm),
         ));
     }
 
@@ -408,12 +413,13 @@ fn parse_cli_args(program: &str, args: &[String]) -> Result<CliArgs, String> {
 
 fn print_usage(program: &str) {
     eprintln!(
-        "Usage: {program} <input_json> [horizon_start_mjd horizon_end_mjd] [-o <output_json>] [--algorithm est|hap] [EST options] [HAP options]\n\
+        "Usage: {program} <input_json> [horizon_start_mjd horizon_end_mjd] [-o <output_json>] [--algorithm est|hap|lst] [EST/LST options] [HAP options]\n\
          Output: [-o|--output <path>]  write schedule to this file (default: <input_stem>_schedule_<YYYYMMDD_HHMMSS>.json)\n\
-         EST options: [--est-fom <soft_constraint|future_flexibility>] [--est-e <u32>] [--est-k <usize>] [--est-b <usize>]\n\
+         EST/LST options: [--est-fom <soft_constraint|future_flexibility>] [--est-e <u32>] [--est-k <usize>] [--est-b <usize>]\n\
          HAP options: [--hap-num-crus <usize>] [--hap-cru-iterations <usize>] [--hap-rho <usize>] [--hap-seed <u64>]\n\
          Aliases: --est-endangered-threshold <u32> for --est-e, --est-schedule-states <usize> for --est-k, --est-branching-factor <usize> for --est-b\n\
          Example: {program} data/ctao_n.json --algorithm est --est-fom soft_constraint --est-e 2 --est-k 5 --est-b 3\n\
+         Example: {program} data/ctao_n.json --algorithm lst --est-fom soft_constraint --est-e 2 --est-k 5 --est-b 3\n\
          Example: {program} data/ctao_n.json --algorithm est --est-fom future_flexibility --est-k 5 --est-b 3\n\
          Example: {program} data/ctao_n.json -o out/my_schedule.json --algorithm hap --hap-num-crus 8 --hap-seed 42"
     );
@@ -580,14 +586,14 @@ fn build_schedule_metadata(
     };
 
     let (algorithm, algorithm_config) = match cli.algorithm {
-        Algorithm::Est => {
+        Algorithm::Est | Algorithm::Lst => {
             let config = serde_json::json!({
                 "k_beams": cli.est_config.k_beams,
                 "branching_factor": cli.est_config.branching_factor,
                 "endangered_threshold": cli.est_config.endangered_threshold,
                 "fom": cli.est_fom.to_string(),
             });
-            ("est".to_string(), config)
+            (cli_name(cli.algorithm).to_string(), config)
         }
         Algorithm::Hap => {
             let config = serde_json::json!({
@@ -617,9 +623,22 @@ fn build_scheduler(cli: &CliArgs) -> Result<Box<dyn SchedulingAlgorithm>, String
                 .map_err(|e| format!("invalid EST configuration: {e}"))?;
             Ok(Box::new(scheduler))
         }
+        Algorithm::Lst => {
+            let scheduler = lst::LstScheduler::with_fom(cli.est_config, cli.est_fom.into_fom())
+                .map_err(|e| format!("invalid LST configuration: {e}"))?;
+            Ok(Box::new(scheduler))
+        }
         Algorithm::Hap => Ok(Box::new(hap::HapScheduler::new(
             cli.hap_config.planner_config(),
         ))),
+    }
+}
+
+fn cli_name(algorithm: Algorithm) -> &'static str {
+    match algorithm {
+        Algorithm::Est => "est",
+        Algorithm::Hap => "hap",
+        Algorithm::Lst => "lst",
     }
 }
 
