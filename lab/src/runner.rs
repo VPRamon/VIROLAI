@@ -10,6 +10,14 @@
 //!    When `no_state_log` is true, prints per-cell progress to stderr instead.
 //! 5. Returns a [`RunSummary`] with counts of total / skipped / completed /
 //!    failed cells.
+//!
+//! Cache mode (enabled via [`RunOptions::cache`]) additionally:
+//! - Computes a stable `run_key` for each pending cell from dataset content,
+//!   algorithm, config, horizon, and version strings.
+//! - Looks up the SQLite registry for already-completed keys.
+//! - For registry hits, injects a synthetic `completed` state event (no
+//!   schedule file) and increments `RunSummary::registry_hits`.
+//! - For misses, runs the scheduler and inserts the result into the registry.
 
 use chrono::Utc;
 use rayon::prelude::*;
@@ -18,30 +26,48 @@ use schedulers::schedule::{LocationMeta, PeriodMeta, ScheduleMetadata, ScheduleO
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use crate::cell::MatrixCell;
 use crate::config::{HapSurvivorMode, RunConfig};
 use crate::output;
 use crate::problem::{PreparedProblem, prepare_problem};
+use crate::registry::{
+    METRICS_VERSION, Registry, RunIdentity, hash_file, registry_path, scheduler_version,
+};
 use crate::spec::ExperimentSpec;
 use crate::state::{CellStatus, StateEvent, StateWriter, completed_cells, read_events};
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
-/// Summary returned by [`execute`].
+/// Summary returned by [`execute`] / [`execute_with_options`].
 pub struct RunSummary {
     /// Total number of cells in the matrix (including already-completed ones).
     pub total: usize,
     /// Cells skipped because they were already completed (resume mode).
     pub already_done: usize,
+    /// Cells served from the SQLite registry cache (no scheduler was run).
+    pub registry_hits: usize,
     /// Cells that completed successfully in this run.
     pub completed: usize,
     /// Cells that terminated with an error in this run.
     pub failed: usize,
     /// Path to the run directory.
     pub run_dir: PathBuf,
+}
+
+/// Options for [`execute_with_options`].
+#[derive(Debug, Default, Clone)]
+pub struct RunOptions {
+    /// Resume mode: skip cells already marked `completed` in `state.jsonl`.
+    pub resume: bool,
+    /// Suppress `state.jsonl`; print progress to stderr instead.
+    pub no_state_log: bool,
+    /// Enable SQLite registry cache.
+    pub cache: bool,
+    /// Path to the registry SQLite file.  Defaults to `.lab/runs.sqlite`.
+    pub run_db: Option<PathBuf>,
 }
 
 /// Executes all pending cells in `cells` with optional resume support.
@@ -53,6 +79,9 @@ pub struct RunSummary {
 /// When `no_state_log` is `true`, no `state.jsonl` is written; per-cell
 /// progress is printed to `stderr` instead.  `resume` must be `false` when
 /// `no_state_log` is `true`.
+///
+/// This is a convenience wrapper around [`execute_with_options`] that keeps
+/// the existing API stable.
 pub fn execute(
     spec: &ExperimentSpec,
     cells: &[MatrixCell],
@@ -60,9 +89,33 @@ pub fn execute(
     resume: bool,
     no_state_log: bool,
 ) -> Result<RunSummary, String> {
+    execute_with_options(
+        spec,
+        cells,
+        run_dir,
+        RunOptions {
+            resume,
+            no_state_log,
+            cache: false,
+            run_db: None,
+        },
+    )
+}
+
+/// Executes all pending cells according to [`RunOptions`].
+pub fn execute_with_options(
+    spec: &ExperimentSpec,
+    cells: &[MatrixCell],
+    run_dir: &Path,
+    opts: RunOptions,
+) -> Result<RunSummary, String> {
+    if opts.no_state_log && opts.resume {
+        return Err("--no-state and --resume are mutually exclusive".to_string());
+    }
+
     output::init_subdirs(run_dir)?;
 
-    let already_done: HashSet<String> = if resume {
+    let already_done: HashSet<String> = if opts.resume {
         let events = read_events(&run_dir.join(output::STATE_FILE))?;
         completed_cells(&events)
     } else {
@@ -96,27 +149,93 @@ pub fn execute(
         prepared.insert(cell.dataset_id.clone(), Arc::new(p));
     }
 
-    let max_parallel = spec
-        .max_parallel
-        .map(|n| n.max(1))
-        .unwrap_or_else(|| std::cmp::max(1, std::cmp::min(num_cpus(), pending.len().max(1))));
-    let pool = rayon::ThreadPoolBuilder::new()
-        .num_threads(max_parallel)
-        .build()
-        .map_err(|e| format!("failed to build rayon pool: {e}"))?;
+    // ── Registry cache lookup ─────────────────────────────────────────────────
+    // Partition pending cells into registry hits and misses.
+    let (registry_hit_ids, cells_to_run): (HashSet<String>, Vec<&MatrixCell>) = if opts.cache {
+        let db_path = registry_path(opts.run_db.as_deref());
+        let registry = Registry::open(&db_path)?;
 
-    let state_writer: Option<Arc<StateWriter>> = if no_state_log {
+        let sched_ver = scheduler_version();
+        let mut hits = HashSet::new();
+        let mut misses = Vec::new();
+
+        for cell in &pending {
+            match build_identity(cell, &sched_ver) {
+                Ok(identity) => {
+                    let key = identity.run_key();
+                    if registry.contains(&key)? {
+                        hits.insert(cell.cell_id.clone());
+                    } else {
+                        misses.push(*cell);
+                    }
+                }
+                Err(_) => {
+                    // If identity computation fails (e.g. file unreadable),
+                    // fall through to normal execution.
+                    misses.push(*cell);
+                }
+            }
+        }
+
+        if !hits.is_empty() {
+            eprintln!("lab: {} registry cache hits", hits.len());
+        }
+        (hits, misses)
+    } else {
+        (HashSet::new(), pending.clone())
+    };
+
+    // Emit synthetic completed events for registry hits.
+    let state_writer: Option<Arc<StateWriter>> = if opts.no_state_log {
         None
     } else {
         Some(Arc::new(StateWriter::open_append(
             &run_dir.join(output::STATE_FILE),
         )?))
     };
+
+    for cell in cells
+        .iter()
+        .filter(|c| registry_hit_ids.contains(&c.cell_id))
+    {
+        let now = Utc::now().to_rfc3339();
+        if let Some(w) = &state_writer {
+            let _ = w.append(&StateEvent {
+                cell_id: cell.cell_id.clone(),
+                status: CellStatus::Completed,
+                schedule_path: None, // no schedule written for cache hits
+                error: None,
+                started_at: now.clone(),
+                finished_at: Some(now),
+            });
+        } else {
+            eprintln!("● {} (registry cache hit)", cell.cell_id);
+        }
+    }
+
+    let max_parallel = spec
+        .max_parallel
+        .map(|n| n.max(1))
+        .unwrap_or_else(|| std::cmp::max(1, std::cmp::min(num_cpus(), cells_to_run.len().max(1))));
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(max_parallel)
+        .build()
+        .map_err(|e| format!("failed to build rayon pool: {e}"))?;
+
     let ranking: Option<RankingWeights> = spec.ranking.map(Into::into);
     let run_dir_owned = run_dir.to_path_buf();
 
+    // Shared registry for miss-path inserts.
+    let registry_arc: Option<Arc<Mutex<Registry>>> = if opts.cache {
+        let db_path = registry_path(opts.run_db.as_deref());
+        Some(Arc::new(Mutex::new(Registry::open(&db_path)?)))
+    } else {
+        None
+    };
+    let sched_ver = scheduler_version();
+
     let outcomes: Vec<CellOutcome> = pool.install(|| {
-        pending
+        cells_to_run
             .par_iter()
             .map(|cell| {
                 let prepared = prepared
@@ -129,6 +248,8 @@ pub fn execute(
                     &run_dir_owned,
                     ranking,
                     state_writer.as_deref(),
+                    registry_arc.as_deref(),
+                    &sched_ver,
                 )
             })
             .collect()
@@ -146,6 +267,7 @@ pub fn execute(
     Ok(RunSummary {
         total: cells.len(),
         already_done: already_done.len(),
+        registry_hits: registry_hit_ids.len(),
         completed,
         failed,
         run_dir: run_dir.to_path_buf(),
@@ -168,6 +290,8 @@ fn run_one_cell(
     run_dir: &Path,
     ranking: Option<RankingWeights>,
     state_writer: Option<&StateWriter>,
+    registry: Option<&Mutex<Registry>>,
+    sched_ver: &str,
 ) -> CellOutcome {
     let started_at = Utc::now().to_rfc3339();
     if let Some(w) = state_writer {
@@ -183,7 +307,7 @@ fn run_one_cell(
         eprintln!("▶ {}", cell.cell_id);
     }
 
-    match run_cell_inner(cell, prepared, run_dir, ranking) {
+    match run_cell_inner(cell, prepared, run_dir, ranking, registry, sched_ver) {
         Ok(paths) => {
             if let Some(w) = state_writer {
                 let _ = w.append(&StateEvent {
@@ -231,6 +355,8 @@ fn run_cell_inner(
     prepared: &PreparedProblem,
     run_dir: &Path,
     ranking: Option<RankingWeights>,
+    registry: Option<&Mutex<Registry>>,
+    sched_ver: &str,
 ) -> Result<CellPaths, String> {
     let schedule_path = output::schedule_path(run_dir, &cell.cell_id);
 
@@ -278,7 +404,40 @@ fn run_cell_inner(
     fs::write(&schedule_path, text)
         .map_err(|e| format!("failed to write {}: {e}", schedule_path.display()))?;
 
+    // Insert into registry on success (cache mode only).
+    if let Some(reg_mutex) = registry
+        && let Ok(identity) = build_identity(cell, sched_ver)
+    {
+        let metrics_json = serde_json::to_string(&metrics).unwrap_or_else(|_| "{}".to_string());
+        if let Ok(reg) = reg_mutex.lock() {
+            let _ = reg.upsert(&identity, &metrics_json, Some(&cell.cell_id));
+        }
+    }
+
     Ok(CellPaths { schedule_path })
+}
+
+/// Builds a [`RunIdentity`] for a cell.
+pub(crate) fn build_identity(cell: &MatrixCell, sched_ver: &str) -> Result<RunIdentity, String> {
+    let dataset_hash = hash_file(&cell.dataset_path)?;
+    let config_json = serde_json::to_string(&cell.run_config)
+        .map_err(|e| format!("failed to serialize run config: {e}"))?;
+    let horizon_json = cell
+        .horizon_override
+        .map(|h| serde_json::to_string(&h))
+        .transpose()
+        .map_err(|e: serde_json::Error| format!("failed to serialize horizon: {e}"))?;
+    Ok(RunIdentity {
+        dataset_id: cell.dataset_id.clone(),
+        dataset_path: cell.dataset_path.display().to_string(),
+        dataset_hash,
+        algorithm: cell.algorithm.clone(),
+        config_slug: cell.run_config.slug(),
+        config_json,
+        horizon_json,
+        scheduler_version: sched_ver.to_string(),
+        metrics_version: METRICS_VERSION.to_string(),
+    })
 }
 
 fn build_schedule_metadata(

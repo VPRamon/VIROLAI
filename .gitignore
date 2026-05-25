@@ -3,6 +3,9 @@
 debug
 target
 
+# Lab run registry (SQLite cache)
+.lab/
+
 # data/local/ is tracked via Git LFS (data/**/*.json glob in .gitattributes).
 # Schedule output files and raw internalSDC source files are excluded.
 data/local/**/*_internalSDC.json
