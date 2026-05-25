@@ -88,14 +88,23 @@ pub enum AlgorithmSweep {
         #[serde(default)]
         axes: HapSweepAxes,
     },
+    /// LST sweep block.
+    ///
+    /// LST (Latest Start Time) uses the same parameter axes as EST.
+    Lst {
+        /// Parameter axes to expand.
+        #[serde(default)]
+        axes: EstSweepAxes,
+    },
 }
 
 impl AlgorithmSweep {
-    /// Returns `"est"` or `"hap"`.
+    /// Returns `"est"`, `"hap"`, or `"lst"`.
     pub const fn algorithm(&self) -> &'static str {
         match self {
             Self::Est { .. } => "est",
             Self::Hap { .. } => "hap",
+            Self::Lst { .. } => "lst",
         }
     }
 }
@@ -168,6 +177,23 @@ mod tests {
             "max_parallel": 4,
             "output_dir": "out/demo"
         }"#
+    }
+
+    #[test]
+    fn deserialize_spec_with_lst() {
+        let json = r#"{
+            "name": "fast-comparison",
+            "datasets": [{ "id": "isdc_n", "path": "data/isdc_n.json" }],
+            "algorithms": [
+                { "kind": "est", "axes": { "k_beams": [1, 4] } },
+                { "kind": "lst", "axes": { "k_beams": [1, 4], "branching_factors": [1, 2] } }
+            ],
+            "output_dir": "out/fast-comparison"
+        }"#;
+        let spec: ExperimentSpec = serde_json::from_str(json).expect("parse");
+        assert_eq!(spec.algorithms.len(), 2);
+        assert_eq!(spec.algorithms[0].algorithm(), "est");
+        assert_eq!(spec.algorithms[1].algorithm(), "lst");
     }
 
     #[test]

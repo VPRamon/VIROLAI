@@ -17,6 +17,7 @@ use schedulers::scheduler::fom::ScheduleFom;
 use schedulers::scheduler::hap::{
     HapScheduler, PlannerConfig, SurvivorSelector as HapSurvivorSelector,
 };
+use schedulers::scheduler::lst::LstScheduler;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -218,6 +219,69 @@ impl EstRunConfig {
     }
 }
 
+// ── LST run configuration ────────────────────────────────────────────────────
+
+/// Fully resolved, immutable configuration for a single LST scheduler run.
+///
+/// LST uses the same parameter axes as EST (figure of merit, endangered
+/// threshold, beam count, branching factor), but schedules tasks as *late* as
+/// possible by mirroring the horizon before running EST.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct LstRunConfig {
+    /// Figure-of-merit variant used to rank candidate placements.
+    pub fom: FomKind,
+    /// Minimum number of competing tasks required to trigger beam splitting.
+    pub endangered_threshold: u32,
+    /// Number of parallel beams maintained during the search.
+    pub k_beams: usize,
+    /// Maximum branching factor applied at each decision point.
+    pub branching_factor: usize,
+}
+
+impl Default for LstRunConfig {
+    fn default() -> Self {
+        Self {
+            fom: FomKind::SoftConstraint,
+            endangered_threshold: 1,
+            k_beams: 1,
+            branching_factor: 1,
+        }
+    }
+}
+
+impl LstRunConfig {
+    /// Returns the [`EstConfiguration`] struct used internally by the LST
+    /// scheduler (which drives EST on a mirrored problem).
+    pub const fn est_config(self) -> EstConfiguration {
+        EstConfiguration {
+            k_beams: self.k_beams,
+            branching_factor: self.branching_factor,
+            endangered_threshold: self.endangered_threshold,
+        }
+    }
+
+    /// Instantiates an [`LstScheduler`] for this configuration.
+    pub fn build_scheduler(self) -> Result<LstScheduler, String> {
+        LstScheduler::with_fom(self.est_config(), self.fom.into_fom())
+            .map_err(|e| format!("invalid LST configuration for {}: {e}", self.slug()))
+    }
+
+    /// Returns a short, filesystem-safe string that uniquely encodes all LST
+    /// configuration axes.  Uses the same format as [`EstRunConfig::slug`]
+    /// since the algorithm kind is already encoded in the cell ID.
+    pub fn slug(self) -> String {
+        let fom_suffix = if self.fom == FomKind::default() {
+            String::new()
+        } else {
+            format!("-{}", self.fom.as_str())
+        };
+        format!(
+            "e{}-k{}-b{}{}",
+            self.endangered_threshold, self.k_beams, self.branching_factor, fom_suffix
+        )
+    }
+}
+
 // ── HAP run configuration ────────────────────────────────────────────────────
 
 /// Fully resolved, immutable configuration for one HAP scheduler run.
@@ -312,7 +376,7 @@ impl HapRunConfig {
 
 // ── Unified run configuration ────────────────────────────────────────────────
 
-/// Fully resolved configuration for one scheduler run (EST or HAP).
+/// Fully resolved configuration for one scheduler run (EST, HAP, or LST).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(tag = "algorithm", rename_all = "snake_case")]
 pub enum RunConfig {
@@ -320,6 +384,8 @@ pub enum RunConfig {
     Est(EstRunConfig),
     /// A HAP (Heuristic Assignment Protocol) run.
     Hap(HapRunConfig),
+    /// An LST (Latest Start Time) run.
+    Lst(LstRunConfig),
 }
 
 impl Default for RunConfig {
@@ -329,20 +395,22 @@ impl Default for RunConfig {
 }
 
 impl RunConfig {
-    /// Returns `"est"` or `"hap"`.
+    /// Returns `"est"`, `"hap"`, or `"lst"`.
     pub const fn algorithm(self) -> &'static str {
         match self {
             Self::Est(_) => "est",
             Self::Hap(_) => "hap",
+            Self::Lst(_) => "lst",
         }
     }
 
-    /// Returns the unique configuration slug (see [`EstRunConfig::slug`] and
-    /// [`HapRunConfig::slug`]).
+    /// Returns the unique configuration slug (see [`EstRunConfig::slug`],
+    /// [`HapRunConfig::slug`], and [`LstRunConfig::slug`]).
     pub fn slug(self) -> String {
         match self {
             Self::Est(config) => config.slug(),
             Self::Hap(config) => config.slug(),
+            Self::Lst(config) => config.slug(),
         }
     }
 
@@ -357,6 +425,29 @@ impl RunConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lst_slug_matches_est_format() {
+        let run = RunConfig::Lst(LstRunConfig {
+            fom: FomKind::SoftConstraint,
+            endangered_threshold: 1,
+            k_beams: 4,
+            branching_factor: 2,
+        });
+        assert_eq!(run.slug(), "e1-k4-b2");
+        assert_eq!(run.algorithm(), "lst");
+    }
+
+    #[test]
+    fn lst_slug_includes_non_default_fom() {
+        let run = RunConfig::Lst(LstRunConfig {
+            fom: FomKind::FutureFlexibility,
+            endangered_threshold: 1,
+            k_beams: 4,
+            branching_factor: 2,
+        });
+        assert_eq!(run.slug(), "e1-k4-b2-future_flexibility");
+    }
 
     #[test]
     fn est_slug_encodes_all_configuration_axes() {

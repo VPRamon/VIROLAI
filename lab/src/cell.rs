@@ -25,7 +25,8 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use crate::config::{
-    EstRunConfig, EstSweepAxes, HapRunConfig, HapSweepAxes, HorizonOverride, RunConfig,
+    EstRunConfig, EstSweepAxes, HapRunConfig, HapSweepAxes, HorizonOverride, LstRunConfig,
+    RunConfig,
 };
 use crate::spec::{AlgorithmSweep, DatasetEntry, ExperimentSpec};
 
@@ -134,6 +135,7 @@ fn resolve_configs(sweep: &AlgorithmSweep) -> Result<Vec<RunConfig>, String> {
     match sweep {
         AlgorithmSweep::Est { axes } => insert_est_configs(axes, &mut set),
         AlgorithmSweep::Hap { axes } => insert_hap_configs(axes, &mut set),
+        AlgorithmSweep::Lst { axes } => insert_lst_configs(axes, &mut set),
     }
     let configs: Vec<_> = set.into_iter().collect();
     if configs.is_empty() {
@@ -206,6 +208,33 @@ fn insert_hap_configs(axes: &HapSweepAxes, set: &mut BTreeSet<RunConfig>) {
     }
 }
 
+fn insert_lst_configs(axes: &EstSweepAxes, set: &mut BTreeSet<RunConfig>) {
+    let def = LstRunConfig::default();
+    let endangered = pick_or_default(&axes.endangered_thresholds, def.endangered_threshold);
+    let k_beams = pick_or_default(&axes.k_beams, def.k_beams);
+    let branching = pick_or_default(&axes.branching_factors, def.branching_factor);
+    let foms = if axes.foms.is_empty() {
+        vec![def.fom]
+    } else {
+        axes.foms.clone()
+    };
+
+    for &e in &endangered {
+        for &k in &k_beams {
+            for &b in &branching {
+                for &fom in &foms {
+                    set.insert(RunConfig::Lst(LstRunConfig {
+                        fom,
+                        endangered_threshold: e,
+                        k_beams: k,
+                        branching_factor: b,
+                    }));
+                }
+            }
+        }
+    }
+}
+
 /// Returns `values` when non-empty, otherwise a single-element vec containing
 /// `default`.
 fn pick_or_default<T: Copy>(values: &[T], default: T) -> Vec<T> {
@@ -220,6 +249,7 @@ fn validate_config(cfg: RunConfig) -> Result<(), String> {
     match cfg {
         RunConfig::Est(c) => c.build_scheduler().map(|_| ()),
         RunConfig::Hap(c) => c.build_scheduler().map(|_| ()),
+        RunConfig::Lst(c) => c.build_scheduler().map(|_| ()),
     }
 }
 
@@ -327,6 +357,105 @@ mod tests {
         let mut spec = spec_two_datasets_two_algorithms();
         spec.algorithms.clear();
         assert!(resolve_cells(&spec).is_err());
+    }
+
+    #[test]
+    fn lst_cells_use_lst_in_cell_id() {
+        let spec = ExperimentSpec {
+            name: "x".into(),
+            datasets: vec![DatasetEntry {
+                id: "isdc_n".into(),
+                path: PathBuf::from("data/isdc_n.json"),
+                label: None,
+                horizon_override: None,
+            }],
+            algorithms: vec![AlgorithmSweep::Lst {
+                axes: EstSweepAxes {
+                    endangered_thresholds: vec![1],
+                    k_beams: vec![4],
+                    branching_factors: vec![2],
+                    foms: vec![],
+                },
+            }],
+            ranking: None,
+            max_parallel: None,
+            output_dir: PathBuf::from("out"),
+        };
+        let cells = resolve_cells(&spec).unwrap();
+        assert_eq!(cells.len(), 1);
+        assert!(
+            cells[0].cell_id.contains("__lst__"),
+            "cell_id: {}",
+            cells[0].cell_id
+        );
+        assert_eq!(cells[0].cell_id, "isdc_n__lst__e1-k4-b2");
+        assert_eq!(cells[0].algorithm, "lst");
+    }
+
+    #[test]
+    fn lst_cells_include_fom_suffix_when_non_default() {
+        let spec = ExperimentSpec {
+            name: "x".into(),
+            datasets: vec![DatasetEntry {
+                id: "d1".into(),
+                path: PathBuf::from("d1.json"),
+                label: None,
+                horizon_override: None,
+            }],
+            algorithms: vec![AlgorithmSweep::Lst {
+                axes: EstSweepAxes {
+                    endangered_thresholds: vec![1],
+                    k_beams: vec![4],
+                    branching_factors: vec![2],
+                    foms: vec![schedulers::scheduler::est::FomKind::FutureFlexibility],
+                },
+            }],
+            ranking: None,
+            max_parallel: None,
+            output_dir: PathBuf::from("out"),
+        };
+        let cells = resolve_cells(&spec).unwrap();
+        assert_eq!(cells.len(), 1);
+        assert_eq!(cells[0].cell_id, "d1__lst__e1-k4-b2-future_flexibility");
+    }
+
+    #[test]
+    fn lst_and_est_do_not_collide() {
+        let spec = ExperimentSpec {
+            name: "x".into(),
+            datasets: vec![DatasetEntry {
+                id: "d1".into(),
+                path: PathBuf::from("d1.json"),
+                label: None,
+                horizon_override: None,
+            }],
+            algorithms: vec![
+                AlgorithmSweep::Est {
+                    axes: EstSweepAxes {
+                        endangered_thresholds: vec![1],
+                        k_beams: vec![1],
+                        branching_factors: vec![1],
+                        foms: vec![],
+                    },
+                },
+                AlgorithmSweep::Lst {
+                    axes: EstSweepAxes {
+                        endangered_thresholds: vec![1],
+                        k_beams: vec![1],
+                        branching_factors: vec![1],
+                        foms: vec![],
+                    },
+                },
+            ],
+            ranking: None,
+            max_parallel: None,
+            output_dir: PathBuf::from("out"),
+        };
+        let cells = resolve_cells(&spec).unwrap();
+        assert_eq!(cells.len(), 2);
+        let ids: Vec<_> = cells.iter().map(|c| c.cell_id.as_str()).collect();
+        assert!(ids.contains(&"d1__est__e1-k1-b1"));
+        assert!(ids.contains(&"d1__lst__e1-k1-b1"));
     }
 
     #[test]

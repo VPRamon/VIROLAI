@@ -380,6 +380,17 @@ fn run_cell_inner(
                 .map_err(|e| format!("HAP run {} failed: {e}", cell.cell_id))?;
             (schedule,)
         }
+        RunConfig::Lst(config) => {
+            let scheduler = config.build_scheduler()?;
+            let schedule = scheduler
+                .run(
+                    &prepared.problem,
+                    &prepared.possible_periods,
+                    &prepared.horizon,
+                )
+                .map_err(|e| format!("LST run {} failed: {e}", cell.cell_id))?;
+            (schedule,)
+        }
     };
     let scheduler_runtime_ms = scheduler_started.elapsed().as_secs_f64() * 1000.0;
 
@@ -475,6 +486,12 @@ fn build_schedule_metadata(
                 "seed": c.seed,
             })
         }
+        RunConfig::Lst(c) => serde_json::json!({
+            "k_beams": c.k_beams,
+            "branching_factor": c.branching_factor,
+            "endangered_threshold": c.endangered_threshold,
+            "fom": c.fom.to_string(),
+        }),
     };
     ScheduleMetadata {
         algorithm: run.algorithm().to_string(),

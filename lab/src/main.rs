@@ -707,6 +707,16 @@ fn registry_regenerate(args: RegistryRegenerateArgs) -> Result<(), String> {
                 )
                 .map_err(|e| format!("HAP regenerate failed: {e}"))?
         }
+        lab::config::RunConfig::Lst(cfg) => {
+            let scheduler = cfg.build_scheduler()?;
+            scheduler
+                .run(
+                    &prepared.problem,
+                    &prepared.possible_periods,
+                    &prepared.horizon,
+                )
+                .map_err(|e| format!("LST regenerate failed: {e}"))?
+        }
     };
     let runtime_ms = started.elapsed().as_secs_f64() * 1000.0;
 
