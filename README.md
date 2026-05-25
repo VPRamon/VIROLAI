@@ -648,3 +648,13 @@ Auto-fix formatting:
 ```bash
 cargo fmt --all
 ```
+
+
+
+#### Generate schedule
+
+cargo run -p lab --bin lab -- registry regenerate \
+  --run-db .lab/runs.sqlite \
+  --run 9f3a7c \
+  --out out/best-density.json
+  

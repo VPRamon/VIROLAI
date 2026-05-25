@@ -1,0 +1,38 @@
+{
+  "name": "custom-comparison",
+  "output_dir": "out/custom-comparison",
+  "max_parallel": 16,
+
+  "datasets": [
+    {
+      "id": "isdc_n",
+      "path": "datasets/isdc_n.json",
+      "label": "ISDC North"
+    }
+  ],
+
+  "algorithms": [
+    {
+      "kind": "est",
+      "axes": {
+        "endangered_thresholds": [0, 1, 2, 4, 6, 8, 10],
+        "k_beams": [1, 2, 4],
+        "branching_factors": [1, 2, 4],
+        "foms": [
+            "soft_constraint"
+        ]
+      }
+    },
+    {
+      "kind": "lst",
+      "axes": {
+        "endangered_thresholds": [0, 1, 2, 4, 6, 8, 10],
+        "k_beams": [1, 2, 4],
+        "branching_factors": [1, 2, 4],
+        "foms": [
+            "soft_constraint"
+        ]
+      }
+    }
+  ]
+}

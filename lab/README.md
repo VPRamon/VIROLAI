@@ -167,3 +167,90 @@ idempotency. See `docs/architecture.md` for the end-to-end pipeline.
 - Do not edit generated cell JSONs by hand; they are the source of truth.
 - Do not maintain parallel `metrics/` or `traces/` directories for this flow.
 - Do not use the old `experiments/` path; this crate is now the `lab` workspace member.
+
+
+
+### Cheatsheet
+
+
+## Mejor `priority_density`
+
+```bash
+cargo run -p lab --bin lab -- registry sort \
+  --run-db .lab/runs.sqlite \
+  --dataset isdc_n \
+  --sort priority_density:desc \
+  --limit 1
+```
+
+Si quieres solo EST o LST:
+
+```bash
+cargo run -p lab --bin lab -- registry sort \
+  --run-db .lab/runs.sqlite \
+  --dataset isdc_n \
+  --algorithm lst \
+  --sort priority_density:desc \
+  --limit 1
+```
+
+## Mayor fitness sum / priority sum
+
+En el código la métrica soportada se llama:
+
+```text
+scheduled_priority_sum
+```
+
+`metric_value()` la reconoce explícitamente junto con `priority_density`, `scheduled_task_ratio`, `scheduled_priority_ratio`, etc. 
+
+Ejecuta:
+
+```bash
+cargo run -p lab --bin lab -- registry sort \
+  --run-db .lab/runs.sqlite \
+  --dataset isdc_n \
+  --sort scheduled_priority_sum:desc \
+  --limit 1
+```
+
+Filtrando por algoritmo:
+
+```bash
+cargo run -p lab --bin lab -- registry sort \
+  --run-db .lab/runs.sqlite \
+  --dataset isdc_n \
+  --algorithm est \
+  --sort scheduled_priority_sum:desc \
+  --limit 1
+```
+
+## Ver el resultado completo
+
+Cuando tengas el `run_key` prefix que aparece en la tabla:
+
+```bash
+cargo run -p lab --bin lab -- registry inspect \
+  --run-db .lab/runs.sqlite \
+  --run <run_key_prefix>
+```
+
+## Regenerar el schedule ganador
+
+```bash
+cargo run -p lab --bin lab -- registry regenerate \
+  --run-db .lab/runs.sqlite \
+  --run <run_key_prefix> \
+  --out out/best-density.json
+```
+
+```bash
+cargo run -p schedulers --bin schedulers -- \
+  data/isdc_n.json \
+  --algorithm lst \
+  --est-e 1 \
+  --est-k 4 \
+  --est-b 2 \
+  --est-fom future_flexibility \
+  --output out/schedule-lst.json
+```
