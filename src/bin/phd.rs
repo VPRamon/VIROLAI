@@ -146,6 +146,15 @@ enum ManifestCmd {
         /// Path to a `manifest.json` file.
         path: PathBuf,
     },
+    /// Read all `*.manifest.json` files in DIR and write a flat CSV to OUT.
+    Summarize {
+        /// Directory containing `*.manifest.json` files (searched recursively).
+        #[arg(long, value_name = "DIR")]
+        dir: PathBuf,
+        /// Output CSV file path (default: `<dir>/summary.csv`).
+        #[arg(long, value_name = "FILE")]
+        out: Option<PathBuf>,
+    },
 }
 
 #[derive(Parser, Debug)]
@@ -223,6 +232,9 @@ fn dispatch(cmd: Cmd) -> Result<ExitCode, String> {
         Cmd::Manifest {
             cmd: ManifestCmd::Validate { path },
         } => manifest_validate(&path),
+        Cmd::Manifest {
+            cmd: ManifestCmd::Summarize { dir, out },
+        } => manifest_summarize(&dir, out.as_deref()),
         Cmd::Publish(args) => publish(args),
     }
 }
@@ -378,6 +390,13 @@ fn sweep(
             String::new()
         }
     );
+    if emit_manifest && manifests_written > 0 {
+        let summary_path = out_dir.join("summary.csv");
+        match manifest_summarize(out_dir, Some(&summary_path)) {
+            Ok(_) => {}
+            Err(e) => eprintln!("phd sweep: warning: failed to write summary.csv: {e}"),
+        }
+    }
     Ok(ExitCode::SUCCESS)
 }
 
@@ -974,6 +993,139 @@ fn horizon_from_schedule_metadata(schedule_doc: &serde_json::Value) -> Option<Ho
         start_mjd_utc,
         end_mjd_utc,
     })
+}
+
+fn manifest_summarize(dir: &Path, out: Option<&Path>) -> Result<ExitCode, String> {
+    if !dir.is_dir() {
+        return Err(format!("directory `{}` does not exist", dir.display()));
+    }
+
+    let manifest_files = collect_manifest_files(dir)?;
+    if manifest_files.is_empty() {
+        return Err(format!(
+            "no *.manifest.json files found under `{}`",
+            dir.display()
+        ));
+    }
+
+    let out_path = out
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| dir.join("summary.csv"));
+
+    let header = "manifest_id,cell_id,dataset_id,algorithm_id,config_json,schedule_path,\
+horizon_start_mjd_utc,horizon_end_mjd_utc,scheduled_task_count,total_task_count,\
+scheduled_task_ratio,scheduled_priority_sum,total_priority_sum,scheduled_priority_ratio,\
+priority_density,scheduled_priority_mean,scheduled_priority_p50,scheduled_priority_p90,\
+scheduled_time_sec,utilization,fragmentation_index,composite_rank_score";
+
+    let mut rows: Vec<String> = Vec::new();
+
+    for mf_path in &manifest_files {
+        let text = match fs::read_to_string(mf_path) {
+            Ok(t) => t,
+            Err(e) => {
+                eprintln!(
+                    "phd manifest summarize: skipping {}: {e}",
+                    mf_path.display()
+                );
+                continue;
+            }
+        };
+        let m: Manifest = match serde_json::from_str(&text) {
+            Ok(m) => m,
+            Err(e) => {
+                eprintln!(
+                    "phd manifest summarize: skipping {}: {e}",
+                    mf_path.display()
+                );
+                continue;
+            }
+        };
+
+        let cell_id = m.provenance.cell_id.as_deref().unwrap_or("").to_string();
+        let schedule_path = m
+            .artifacts
+            .schedule
+            .as_ref()
+            .map(|a| a.uri.clone())
+            .unwrap_or_default();
+        let config_json =
+            serde_json::to_string(&m.algorithm.config).unwrap_or_else(|_| "{}".to_string());
+        let config_csv = csv_field(&config_json);
+
+        let mx = &m.metrics;
+        let row = format!(
+            "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+            csv_field(&m.manifest_id),
+            csv_field(&cell_id),
+            csv_field(&m.dataset.id),
+            csv_field(&m.algorithm.id),
+            config_csv,
+            csv_field(&schedule_path),
+            m.horizon.start_mjd_utc,
+            m.horizon.end_mjd_utc,
+            mx.scheduled_task_count,
+            mx.total_task_count,
+            mx.scheduled_task_ratio,
+            mx.scheduled_priority_sum,
+            mx.total_priority_sum,
+            mx.scheduled_priority_ratio,
+            mx.priority_density,
+            mx.scheduled_priority.mean,
+            mx.scheduled_priority.p50,
+            mx.scheduled_priority.p90,
+            mx.scheduled_time_sec,
+            mx.utilization,
+            mx.fragmentation.fragmentation_index,
+            mx.composite_rank_score,
+        );
+        rows.push(row);
+    }
+
+    let csv_content = format!("{}\n{}\n", header, rows.join("\n"));
+    fs::write(&out_path, &csv_content)
+        .map_err(|e| format!("failed to write {}: {e}", out_path.display()))?;
+
+    println!(
+        "phd manifest summarize: {} row(s) → {}",
+        rows.len(),
+        out_path.display()
+    );
+    Ok(ExitCode::SUCCESS)
+}
+
+fn csv_field(s: &str) -> String {
+    if s.contains(',') || s.contains('"') || s.contains('\n') {
+        format!("\"{}\"", s.replace('"', "\"\""))
+    } else {
+        s.to_string()
+    }
+}
+
+fn collect_manifest_files(dir: &Path) -> Result<Vec<PathBuf>, String> {
+    let mut result = Vec::new();
+    collect_manifest_files_inner(dir, &mut result)
+        .map_err(|e| format!("failed to read directory: {e}"))?;
+    result.sort();
+    Ok(result)
+}
+
+fn collect_manifest_files_inner(dir: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<()> {
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_dir() {
+            collect_manifest_files_inner(&path, out)?;
+        } else if path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .map(|n| n.ends_with(".manifest.json"))
+            .unwrap_or(false)
+        {
+            out.push(path);
+        }
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------

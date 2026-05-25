@@ -53,7 +53,7 @@ async fn json_call(
 
 fn sample_manifest(manifest_id: &str, algorithm: &str, dataset: &str) -> Value {
     json!({
-        "manifest_schema_version": "1.0.0",
+        "manifest_schema_version": "2.0.0",
         "manifest_id": manifest_id,
         "created_at": "2026-05-07T10:00:00Z",
         "producer": { "name": "phd", "version": "0.1.0" },
@@ -82,8 +82,12 @@ fn sample_manifest(manifest_id: &str, algorithm: &str, dataset: &str) -> Value {
         "metrics": {
             "scheduled_task_count": 5,
             "total_task_count": 10,
-            "completion_ratio": 0.5,
-            "priority": {"count":5,"sum":15.0,"min":1.0,"max":5.0,"mean":3.0,"std":1.0,"p25":2.0,"p50":3.0,"p75":4.0,"p90":4.5},
+            "scheduled_task_ratio": 0.5,
+            "scheduled_priority": {"count":5,"sum":15.0,"min":1.0,"max":5.0,"mean":3.0,"std":1.0,"p25":2.0,"p50":3.0,"p75":4.0,"p90":4.5},
+            "scheduled_priority_sum": 15.0,
+            "total_priority_sum": 30.0,
+            "scheduled_priority_ratio": 0.5,
+            "priority_density": 1.0,
             "fragmentation": {"gap_count":1,"gap_total_sec":300.0,"largest_gap_sec":300.0,"fragmentation_index":0.05},
             "total_horizon_sec": 86400.0,
             "available_time_sec": 86400.0,
@@ -91,7 +95,7 @@ fn sample_manifest(manifest_id: &str, algorithm: &str, dataset: &str) -> Value {
             "utilization": 0.58,
             "per_resource": [],
             "composite_rank_score": 0.7,
-            "ranking_weights": {"completion":1.0,"priority":1.0,"utilization":1.0,"fragmentation":1.0},
+            "ranking_weights": {"scheduled_task":1.0,"scheduled_priority":1.0,"utilization":1.0,"fragmentation":1.0},
             "scheduled_priority_stair": {
                 "metric": "scheduled_priority_stair",
                 "sort": "priority",
@@ -241,7 +245,7 @@ async fn batch_import_summary_counts() {
             // duplicate of the first → deduped:
             { "manifest": sample_manifest("a", "est", "d1") },
             // bogus payload → counted as failed but does not abort:
-            { "manifest": json!({"manifest_schema_version": "1.0.0"}) },
+            { "manifest": json!({"manifest_schema_version": "2.0.0"}) },
         ]
     });
     let (status, body) = json_call(
@@ -339,8 +343,12 @@ fn sample_schedule(algorithm: &str, dataset: &str, completion: f64) -> Value {
         "schedule_metrics": {
             "scheduled_task_count": 5,
             "total_task_count": 10,
-            "completion_ratio": completion,
-            "priority": {"count":5,"sum":15.0,"min":1.0,"max":5.0,"mean":3.0,"std":1.0,"p25":2.0,"p50":3.0,"p75":4.0,"p90":4.5},
+            "scheduled_task_ratio": completion,
+            "scheduled_priority": {"count":5,"sum":15.0,"min":1.0,"max":5.0,"mean":3.0,"std":1.0,"p25":2.0,"p50":3.0,"p75":4.0,"p90":4.5},
+            "scheduled_priority_sum": 15.0,
+            "total_priority_sum": 30.0,
+            "scheduled_priority_ratio": 0.5,
+            "priority_density": 1.0,
             "fragmentation": {"gap_count":1,"gap_total_sec":300.0,"largest_gap_sec":300.0,"fragmentation_index":0.05},
             "total_horizon_sec": 86400.0,
             "available_time_sec": 86400.0,
@@ -348,7 +356,7 @@ fn sample_schedule(algorithm: &str, dataset: &str, completion: f64) -> Value {
             "utilization": 0.58,
             "per_resource": [],
             "composite_rank_score": 0.7,
-            "ranking_weights": {"completion":1.0,"priority":1.0,"utilization":1.0,"fragmentation":1.0},
+            "ranking_weights": {"scheduled_task":1.0,"scheduled_priority":1.0,"utilization":1.0,"fragmentation":1.0},
             "scheduled_priority_stair": {
                 "metric": "scheduled_priority_stair",
                 "sort": "priority",

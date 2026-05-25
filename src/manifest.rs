@@ -28,7 +28,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 /// Current manifest schema version. Bump per the rules in the module docs.
-pub const MANIFEST_SCHEMA_VERSION: &str = "1.1.0";
+pub const MANIFEST_SCHEMA_VERSION: &str = "2.0.0";
 
 /// Where a heavy artifact lives and how to verify it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -394,8 +394,12 @@ mod tests {
         serde_json::from_value(serde_json::json!({
             "scheduled_task_count": 0,
             "total_task_count": 0,
-            "completion_ratio": 0.0,
-            "priority": {"count":0,"sum":0,"min":0,"max":0,"mean":0,"std":0,"p25":0,"p50":0,"p75":0,"p90":0},
+            "scheduled_task_ratio": 0.0,
+            "scheduled_priority": {"count":0,"sum":0,"min":0,"max":0,"mean":0,"std":0,"p25":0,"p50":0,"p75":0,"p90":0},
+            "scheduled_priority_sum": 0.0,
+            "total_priority_sum": 0.0,
+            "scheduled_priority_ratio": 0.0,
+            "priority_density": 0.0,
             "fragmentation": {"gap_count":0,"gap_total_sec":0,"largest_gap_sec":0,"fragmentation_index":0},
             "total_horizon_sec": 86400.0,
             "available_time_sec": 86400.0,
@@ -403,7 +407,7 @@ mod tests {
             "utilization": 0.0,
             "per_resource": [],
             "composite_rank_score": 0.0,
-            "ranking_weights": {"completion":1.0,"priority":1.0,"utilization":1.0,"fragmentation":1.0}
+            "ranking_weights": {"scheduled_task":1.0,"scheduled_priority":1.0,"utilization":1.0,"fragmentation":1.0}
         }))
         .unwrap()
     }
@@ -484,7 +488,7 @@ mod tests {
     #[test]
     fn validate_rejects_incompatible_major_version() {
         let mut m = sample_manifest();
-        m.manifest_schema_version = "2.0.0".to_string();
+        m.manifest_schema_version = "3.0.0".to_string();
         let report = m.validate();
         assert_eq!(report.status, ValidationStatus::Invalid);
         assert!(

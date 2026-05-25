@@ -74,8 +74,8 @@
     }
   ],
   "ranking": {
-    "completion": 1.0,
-    "priority": 1.0,
+    "scheduled_task": 1.0,
+    "scheduled_priority": 1.0,
     "utilization": 1.0,
     "fragmentation": 1.0
   }

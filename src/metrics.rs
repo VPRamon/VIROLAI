@@ -69,15 +69,17 @@ impl MetricsContext {
 ///
 /// The composite score is `Σ_t w_t · n_t` where `n_t ∈ [0, 1]` is the
 /// normalized value of the metric `t`. Metrics where higher is better
-/// (completion, priority, utilization) are normalized so that their best
+/// (scheduled_task, scheduled_priority, utilization) are normalized so that their best
 /// observed value is `1.0`; fragmentation is inverted so that lower is
 /// better. Because normalization is local to a single schedule, the
 /// returned absolute score is mainly useful for cross-cell comparisons in
 /// the experiment matrix (where the runner re-normalizes across cells).
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct RankingWeights {
-    pub completion: f64,
-    pub priority: f64,
+    #[serde(alias = "completion")]
+    pub scheduled_task: f64,
+    #[serde(alias = "priority")]
+    pub scheduled_priority: f64,
     pub utilization: f64,
     pub fragmentation: f64,
 }
@@ -85,8 +87,8 @@ pub struct RankingWeights {
 impl Default for RankingWeights {
     fn default() -> Self {
         Self {
-            completion: 1.0,
-            priority: 1.0,
+            scheduled_task: 1.0,
+            scheduled_priority: 1.0,
             utilization: 1.0,
             fragmentation: 1.0,
         }
@@ -97,7 +99,7 @@ impl RankingWeights {
     /// Sum of all weights, used as the denominator when normalizing the
     /// composite score.
     pub fn total(&self) -> f64 {
-        self.completion + self.priority + self.utilization + self.fragmentation
+        self.scheduled_task + self.scheduled_priority + self.utilization + self.fragmentation
     }
 }
 
@@ -237,7 +239,8 @@ pub struct ResourceMetrics {
     pub resource_id: String,
     pub scheduled_task_count: usize,
     pub scheduled_time_sec: f64,
-    pub priority_sum: f64,
+    #[serde(alias = "priority_sum")]
+    pub scheduled_priority_sum: f64,
     pub utilization: f64,
 }
 
@@ -246,8 +249,22 @@ pub struct ResourceMetrics {
 pub struct ScheduleMetrics {
     pub scheduled_task_count: usize,
     pub total_task_count: usize,
-    pub completion_ratio: f64,
-    pub priority: PriorityStats,
+    #[serde(alias = "completion_ratio")]
+    pub scheduled_task_ratio: f64,
+    #[serde(alias = "priority")]
+    pub scheduled_priority: PriorityStats,
+    /// Sum of priorities of scheduled tasks.
+    #[serde(default)]
+    pub scheduled_priority_sum: f64,
+    /// Sum of priorities of all tasks in the problem.
+    #[serde(default)]
+    pub total_priority_sum: f64,
+    /// `scheduled_priority_sum / total_priority_sum`; `0.0` when denominator ≤ 0.
+    #[serde(default)]
+    pub scheduled_priority_ratio: f64,
+    /// `scheduled_priority_ratio / scheduled_task_ratio`; `0.0` when no tasks scheduled.
+    #[serde(default)]
+    pub priority_density: f64,
     pub fragmentation: FragmentationStats,
     pub total_horizon_sec: f64,
     pub available_time_sec: f64,
@@ -272,6 +289,10 @@ impl ScheduleMetrics {
         context: &MetricsContext,
     ) -> Self {
         let priority_by_task = collect_task_priorities(problem, horizon.start);
+
+        // Total priority sum over ALL tasks in the problem.
+        let total_priority_sum: f64 = priority_by_task.values().copied().sum();
+
         let scheduled_priorities: Vec<f64> = schedule
             .placements()
             .map(|p| *priority_by_task.get(&p.task_id).unwrap_or(&0.0))
@@ -279,7 +300,7 @@ impl ScheduleMetrics {
 
         let scheduled_task_count = schedule.len();
         let total_task_count = problem.task_count();
-        let completion_ratio = if total_task_count == 0 {
+        let scheduled_task_ratio = if total_task_count == 0 {
             0.0
         } else {
             scheduled_task_count as f64 / total_task_count as f64
@@ -295,7 +316,21 @@ impl ScheduleMetrics {
 
         let utilization = ratio(scheduled_time_sec, available_time_sec);
 
-        let priority = PriorityStats::from_values(&scheduled_priorities);
+        let scheduled_priority = PriorityStats::from_values(&scheduled_priorities);
+        let scheduled_priority_sum = scheduled_priority.sum;
+
+        let scheduled_priority_ratio = if total_priority_sum <= 0.0 {
+            0.0
+        } else {
+            scheduled_priority_sum / total_priority_sum
+        };
+
+        let priority_density = if scheduled_task_ratio <= 0.0 {
+            0.0
+        } else {
+            scheduled_priority_ratio / scheduled_task_ratio
+        };
+
         let scheduled_priority_stair = ScheduledPriorityStair::from_priorities(
             &scheduled_priorities,
             StairDirection::default(),
@@ -311,14 +346,14 @@ impl ScheduleMetrics {
             resource_id: resource_label,
             scheduled_task_count,
             scheduled_time_sec,
-            priority_sum: priority.sum,
+            scheduled_priority_sum,
             utilization,
         }];
 
         let ranking_weights = context.ranking.unwrap_or_default();
         let composite_rank_score = composite_score(
-            completion_ratio,
-            &priority,
+            scheduled_task_ratio,
+            &scheduled_priority,
             utilization,
             &fragmentation,
             ranking_weights,
@@ -327,8 +362,12 @@ impl ScheduleMetrics {
         Self {
             scheduled_task_count,
             total_task_count,
-            completion_ratio,
-            priority,
+            scheduled_task_ratio,
+            scheduled_priority,
+            scheduled_priority_sum,
+            total_priority_sum,
+            scheduled_priority_ratio,
+            priority_density,
             fragmentation,
             total_horizon_sec,
             available_time_sec,
@@ -482,7 +521,7 @@ fn collect_task_priorities(
 }
 
 fn composite_score(
-    completion_ratio: f64,
+    scheduled_task_ratio: f64,
     priority: &PriorityStats,
     utilization: f64,
     fragmentation: &FragmentationStats,
@@ -493,8 +532,8 @@ fn composite_score(
         return 0.0;
     }
 
-    // For "higher is better" terms, completion and utilization are already
-    // in [0, 1]. Priority and fragmentation are normalized into [0, 1]
+    // For "higher is better" terms, scheduled_task_ratio and utilization are
+    // already in [0, 1]. Priority and fragmentation are normalized into [0, 1]
     // locally:
     //   - priority: divided by `count * max` to land in [0, 1]
     //   - fragmentation: 1 - clamp(fragmentation_index, 0.0, 1.0)
@@ -510,10 +549,10 @@ fn composite_score(
     };
     let fragmentation_term = (1.0 - fragmentation.fragmentation_index.clamp(0.0, 1.0)).max(0.0);
     let utilization_term = utilization.clamp(0.0, 1.0);
-    let completion_term = completion_ratio.clamp(0.0, 1.0);
+    let completion_term = scheduled_task_ratio.clamp(0.0, 1.0);
 
-    let weighted = weights.completion * completion_term
-        + weights.priority * priority_term
+    let weighted = weights.scheduled_task * completion_term
+        + weights.scheduled_priority * priority_term
         + weights.utilization * utilization_term
         + weights.fragmentation * fragmentation_term;
 
@@ -616,8 +655,8 @@ mod tests {
 
         assert_eq!(metrics.scheduled_task_count, 0);
         assert_eq!(metrics.total_task_count, 0);
-        assert_eq!(metrics.completion_ratio, 0.0);
-        assert_eq!(metrics.priority, PriorityStats::default());
+        assert_eq!(metrics.scheduled_task_ratio, 0.0);
+        assert_eq!(metrics.scheduled_priority, PriorityStats::default());
         assert_eq!(metrics.fragmentation, FragmentationStats::default());
         assert_eq!(metrics.scheduled_time_sec, 0.0);
         assert_eq!(metrics.utilization, 0.0);
@@ -639,18 +678,18 @@ mod tests {
 
         assert_eq!(metrics.scheduled_task_count, 4);
         assert_eq!(metrics.total_task_count, 4);
-        assert!((metrics.completion_ratio - 1.0).abs() < 1e-12);
-        assert_eq!(metrics.priority.count, 4);
-        assert!((metrics.priority.sum - 100.0).abs() < 1e-9);
-        assert!((metrics.priority.min - 10.0).abs() < 1e-9);
-        assert!((metrics.priority.max - 40.0).abs() < 1e-9);
-        assert!((metrics.priority.mean - 25.0).abs() < 1e-9);
+        assert!((metrics.scheduled_task_ratio - 1.0).abs() < 1e-12);
+        assert_eq!(metrics.scheduled_priority.count, 4);
+        assert!((metrics.scheduled_priority.sum - 100.0).abs() < 1e-9);
+        assert!((metrics.scheduled_priority.min - 10.0).abs() < 1e-9);
+        assert!((metrics.scheduled_priority.max - 40.0).abs() < 1e-9);
+        assert!((metrics.scheduled_priority.mean - 25.0).abs() < 1e-9);
         // Population stddev of [10,20,30,40] = sqrt(125) ≈ 11.1803
-        assert!((metrics.priority.std - 125.0_f64.sqrt()).abs() < 1e-9);
-        assert!((metrics.priority.p25 - 17.5).abs() < 1e-9);
-        assert!((metrics.priority.p50 - 25.0).abs() < 1e-9);
-        assert!((metrics.priority.p75 - 32.5).abs() < 1e-9);
-        assert!((metrics.priority.p90 - 37.0).abs() < 1e-9);
+        assert!((metrics.scheduled_priority.std - 125.0_f64.sqrt()).abs() < 1e-9);
+        assert!((metrics.scheduled_priority.p25 - 17.5).abs() < 1e-9);
+        assert!((metrics.scheduled_priority.p50 - 25.0).abs() < 1e-9);
+        assert!((metrics.scheduled_priority.p75 - 32.5).abs() < 1e-9);
+        assert!((metrics.scheduled_priority.p90 - 37.0).abs() < 1e-9);
     }
 
     #[test]
@@ -667,9 +706,9 @@ mod tests {
 
         let metrics = ScheduleMetrics::compute(&schedule, &problem, &h, &MetricsContext::default());
 
-        assert!((metrics.priority.sum - 10.0).abs() < 1e-9);
-        assert!((metrics.priority.min - 0.0).abs() < 1e-9);
-        assert!((metrics.priority.max - 10.0).abs() < 1e-9);
+        assert!((metrics.scheduled_priority.sum - 10.0).abs() < 1e-9);
+        assert!((metrics.scheduled_priority.min - 0.0).abs() < 1e-9);
+        assert!((metrics.scheduled_priority.max - 10.0).abs() < 1e-9);
     }
 
     #[test]
@@ -749,7 +788,7 @@ mod tests {
         let ctx = MetricsContext::default().with_ranking(RankingWeights::default());
         let metrics = ScheduleMetrics::compute(&schedule, &problem, &h, &ctx);
 
-        // completion=1, priority normalized to 1 (sum/count*max = 20/(2*10)=1),
+        // scheduled_task_ratio=1, scheduled_priority normalized to 1 (sum/count*max = 20/(2*10)=1),
         // utilization=1 (2 days/2 days), fragmentation index=0 -> term=1.
         // Weighted average with equal weights -> 1.0.
         assert!((metrics.composite_rank_score - 1.0).abs() < 1e-12);
@@ -763,8 +802,8 @@ mod tests {
         let h = horizon(0.0, 1.0);
 
         let ctx = MetricsContext::default().with_ranking(RankingWeights {
-            completion: 0.0,
-            priority: 0.0,
+            scheduled_task: 0.0,
+            scheduled_priority: 0.0,
             utilization: 0.0,
             fragmentation: 0.0,
         });
@@ -909,5 +948,188 @@ mod tests {
             restored.scheduled_priority_stair,
             ScheduledPriorityStair::default()
         );
+    }
+
+    #[test]
+    fn empty_schedule_has_zero_priority_ratios() {
+        let problem = empty_problem();
+        let schedule = Schedule::new();
+        let h = horizon(0.0, 1.0);
+        let metrics = ScheduleMetrics::compute(&schedule, &problem, &h, &MetricsContext::default());
+        assert_eq!(metrics.scheduled_priority_sum, 0.0);
+        assert_eq!(metrics.total_priority_sum, 0.0);
+        assert_eq!(metrics.scheduled_priority_ratio, 0.0);
+        assert_eq!(metrics.priority_density, 0.0);
+    }
+
+    #[test]
+    fn scheduled_priority_ratio_with_partial_schedule() {
+        // 4 tasks with priorities 10, 20, 30, 40. Schedule only 2.
+        let problem = problem_with_priorities(&[(1, 10.0), (2, 20.0), (3, 30.0), (4, 40.0)]);
+        let mut schedule = Schedule::new();
+        place(&mut schedule, 1, 0.0, 0.01);
+        place(&mut schedule, 2, 0.02, 0.03);
+        let h = horizon(0.0, 1.0);
+        let metrics = ScheduleMetrics::compute(&schedule, &problem, &h, &MetricsContext::default());
+        assert!((metrics.total_priority_sum - 100.0).abs() < 1e-9);
+        assert!((metrics.scheduled_priority_sum - 30.0).abs() < 1e-9);
+        // scheduled_priority_ratio = 30 / 100 = 0.3
+        assert!((metrics.scheduled_priority_ratio - 0.3).abs() < 1e-9);
+        // scheduled_task_ratio = 2/4 = 0.5 → density = 0.3 / 0.5 = 0.6
+        assert!((metrics.priority_density - 0.6).abs() < 1e-9);
+    }
+
+    #[test]
+    fn priority_density_greater_than_one_when_best_tasks_scheduled() {
+        // 4 tasks: 2 low-priority (1.0) and 2 high-priority (10.0).
+        // Schedule only the 2 high-priority ones.
+        let problem = problem_with_priorities(&[(1, 1.0), (2, 1.0), (3, 10.0), (4, 10.0)]);
+        let mut schedule = Schedule::new();
+        place(&mut schedule, 3, 0.0, 0.01);
+        place(&mut schedule, 4, 0.02, 0.03);
+        let h = horizon(0.0, 1.0);
+        let metrics = ScheduleMetrics::compute(&schedule, &problem, &h, &MetricsContext::default());
+        // total_priority_sum = 22, scheduled_priority_sum = 20
+        // scheduled_priority_ratio = 20/22 ≈ 0.909
+        // scheduled_task_ratio = 0.5
+        // priority_density ≈ 0.909 / 0.5 ≈ 1.818
+        assert!(metrics.priority_density > 1.0);
+    }
+
+    #[test]
+    fn zero_total_priority_gives_zero_priority_ratios() {
+        // All tasks have priority 0 (absent soft_constraints).
+        let tasks: Vec<crate::scheduling_block::task::Task> =
+            vec![build_task(1, 600.0, None), build_task(2, 600.0, None)];
+        let block = crate::scheduling_block::SchedulingBlock::from_tasks(
+            crate::time::SchedulingBlockId(1),
+            tasks,
+        )
+        .unwrap();
+        let problem = crate::schedule::SchedulingProblem::from_blocks(vec![block]).unwrap();
+        let mut schedule = Schedule::new();
+        place(&mut schedule, 1, 0.0, 0.01);
+        let h = horizon(0.0, 1.0);
+        let metrics = ScheduleMetrics::compute(&schedule, &problem, &h, &MetricsContext::default());
+        assert_eq!(metrics.total_priority_sum, 0.0);
+        assert_eq!(metrics.scheduled_priority_ratio, 0.0);
+        // priority_density = scheduled_priority_ratio / scheduled_task_ratio = 0 / 0.5 = 0
+        assert_eq!(metrics.priority_density, 0.0);
+    }
+
+    #[test]
+    fn priority_density_zero_when_no_tasks_scheduled() {
+        let problem = problem_with_priorities(&[(1, 5.0), (2, 10.0)]);
+        let schedule = Schedule::new(); // empty
+        let h = horizon(0.0, 1.0);
+        let metrics = ScheduleMetrics::compute(&schedule, &problem, &h, &MetricsContext::default());
+        assert_eq!(metrics.scheduled_task_ratio, 0.0);
+        assert_eq!(metrics.priority_density, 0.0);
+    }
+
+    // ── new v2 metric tests ──────────────────────────────────────────────────
+
+    #[test]
+    fn empty_schedule_has_zero_priority_sums_and_ratios() {
+        let problem = problem_with_priorities(&[(1, 5.0), (2, 3.0)]);
+        let schedule = Schedule::new();
+        let h = horizon(0.0, 1.0);
+        let m = ScheduleMetrics::compute(&schedule, &problem, &h, &MetricsContext::default());
+
+        assert_eq!(m.scheduled_priority_sum, 0.0);
+        assert!((m.total_priority_sum - 8.0).abs() < 1e-9);
+        assert_eq!(m.scheduled_priority_ratio, 0.0);
+        assert_eq!(m.priority_density, 0.0);
+    }
+
+    #[test]
+    fn scheduled_priority_ratio_with_mixed_priorities() {
+        // Schedule 1 of 2 tasks; task 1 has priority 6, task 2 has priority 4.
+        let problem = problem_with_priorities(&[(1, 6.0), (2, 4.0)]);
+        let mut schedule = Schedule::new();
+        place(&mut schedule, 1, 0.0, 0.01); // schedule only the higher-priority task
+        let h = horizon(0.0, 1.0);
+        let m = ScheduleMetrics::compute(&schedule, &problem, &h, &MetricsContext::default());
+
+        assert!((m.total_priority_sum - 10.0).abs() < 1e-9);
+        assert!((m.scheduled_priority_sum - 6.0).abs() < 1e-9);
+        assert!((m.scheduled_priority_ratio - 0.6).abs() < 1e-9);
+        assert!((m.scheduled_task_ratio - 0.5).abs() < 1e-9);
+        // priority_density = 0.6 / 0.5 = 1.2  (concentrating high-priority)
+        assert!((m.priority_density - 1.2).abs() < 1e-9);
+    }
+
+    #[test]
+    fn priority_density_exceeds_one_for_high_priority_selection() {
+        // 1 of 3 tasks scheduled; it carries 80% of priority mass.
+        let problem = problem_with_priorities(&[(1, 8.0), (2, 1.0), (3, 1.0)]);
+        let mut schedule = Schedule::new();
+        place(&mut schedule, 1, 0.0, 0.01);
+        let h = horizon(0.0, 1.0);
+        let m = ScheduleMetrics::compute(&schedule, &problem, &h, &MetricsContext::default());
+
+        // scheduled_priority_ratio = 8/10 = 0.8; task_ratio = 1/3
+        assert!((m.scheduled_priority_ratio - 0.8).abs() < 1e-9);
+        assert!((m.scheduled_task_ratio - 1.0 / 3.0).abs() < 1e-9);
+        assert!(m.priority_density > 1.0, "density {}", m.priority_density);
+    }
+
+    #[test]
+    fn zero_total_priority_sum_yields_zero_ratios() {
+        // Tasks with zero priority.
+        let problem = problem_with_priorities(&[(1, 0.0), (2, 0.0)]);
+        let mut schedule = Schedule::new();
+        place(&mut schedule, 1, 0.0, 0.01);
+        let h = horizon(0.0, 1.0);
+        let m = ScheduleMetrics::compute(&schedule, &problem, &h, &MetricsContext::default());
+
+        assert_eq!(m.total_priority_sum, 0.0);
+        assert_eq!(m.scheduled_priority_ratio, 0.0);
+        // density: scheduled_task_ratio > 0 but scheduled_priority_ratio = 0 → 0
+        assert_eq!(m.priority_density, 0.0);
+    }
+
+    #[test]
+    fn scheduled_priority_stats_distribution() {
+        let problem = problem_with_priorities(&[(1, 10.0), (2, 20.0), (3, 30.0), (4, 40.0)]);
+        let mut schedule = Schedule::new();
+        place(&mut schedule, 1, 0.0, 0.01);
+        place(&mut schedule, 2, 0.02, 0.03);
+        place(&mut schedule, 3, 0.04, 0.05);
+        place(&mut schedule, 4, 0.06, 0.07);
+        let h = horizon(0.0, 1.0);
+        let m = ScheduleMetrics::compute(&schedule, &problem, &h, &MetricsContext::default());
+
+        assert_eq!(m.scheduled_priority.count, 4);
+        assert!((m.scheduled_priority.sum - 100.0).abs() < 1e-9);
+        assert!((m.scheduled_priority.min - 10.0).abs() < 1e-9);
+        assert!((m.scheduled_priority.max - 40.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn backward_compat_alias_completion_ratio() {
+        let json = r#"{
+            "scheduled_task_count": 1,
+            "total_task_count": 2,
+            "completion_ratio": 0.5,
+            "priority": { "count": 1, "sum": 5.0, "min": 5.0, "max": 5.0, "mean": 5.0, "std": 0.0, "p25": 5.0, "p50": 5.0, "p75": 5.0, "p90": 5.0 },
+            "scheduled_priority_sum": 5.0,
+            "total_priority_sum": 10.0,
+            "scheduled_priority_ratio": 0.5,
+            "priority_density": 1.0,
+            "fragmentation": { "gap_count": 0, "gap_total_sec": 0.0, "largest_gap_sec": 0.0, "fragmentation_index": 0.0 },
+            "total_horizon_sec": 86400.0,
+            "available_time_sec": 86400.0,
+            "scheduled_time_sec": 600.0,
+            "utilization": 0.00694,
+            "per_resource": [],
+            "composite_rank_score": 0.5,
+            "ranking_weights": { "completion": 1.0, "priority": 1.0, "utilization": 1.0, "fragmentation": 1.0 }
+        }"#;
+        let m: ScheduleMetrics = serde_json::from_str(json).unwrap();
+        assert!((m.scheduled_task_ratio - 0.5).abs() < 1e-9);
+        assert!((m.scheduled_priority.sum - 5.0).abs() < 1e-9);
+        assert!((m.ranking_weights.scheduled_task - 1.0).abs() < 1e-9);
+        assert!((m.ranking_weights.scheduled_priority - 1.0).abs() < 1e-9);
     }
 }

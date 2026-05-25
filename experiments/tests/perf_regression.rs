@@ -128,7 +128,7 @@ const FAST_SPEC_JSON: &str = r#"{
       }
     }
   ],
-  "ranking": { "completion": 1.0, "priority": 1.0, "utilization": 1.0, "fragmentation": 1.0 }
+  "ranking": { "scheduled_task": 1.0, "scheduled_priority": 1.0, "utilization": 1.0, "fragmentation": 1.0 }
 }"#;
 
 /// Spec for the slow (HAP-only, 10-day horizon) regression cells.
@@ -169,7 +169,7 @@ const SLOW_SPEC_JSON: &str = r#"{
       }
     }
   ],
-  "ranking": { "completion": 1.0, "priority": 1.0, "utilization": 1.0, "fragmentation": 1.0 }
+  "ranking": { "scheduled_task": 1.0, "scheduled_priority": 1.0, "utilization": 1.0, "fragmentation": 1.0 }
 }"#;
 
 // ─── Shared run infrastructure ─────────────────────────────────────────────
@@ -312,30 +312,30 @@ fn assert_within_golden(cell_id: &str, actual: &Value) {
         &mut failures,
     );
     check_metric_rel(
-        "completion_ratio",
-        get_f64(g, &["completion_ratio"]),
-        get_f64(actual, &["completion_ratio"]),
+        "scheduled_task_ratio",
+        get_f64(g, &["scheduled_task_ratio"]),
+        get_f64(actual, &["scheduled_task_ratio"]),
         t.completion_ratio_rel,
         &mut failures,
     );
     check_metric_rel(
-        "priority.sum",
-        get_f64(g, &["priority", "sum"]),
-        get_f64(actual, &["priority", "sum"]),
+        "scheduled_priority.sum",
+        get_f64(g, &["scheduled_priority", "sum"]),
+        get_f64(actual, &["scheduled_priority", "sum"]),
         t.priority_sum_rel,
         &mut failures,
     );
     check_metric_rel(
-        "priority.p50",
-        get_f64(g, &["priority", "p50"]),
-        get_f64(actual, &["priority", "p50"]),
+        "scheduled_priority.p50",
+        get_f64(g, &["scheduled_priority", "p50"]),
+        get_f64(actual, &["scheduled_priority", "p50"]),
         t.priority_p50_rel,
         &mut failures,
     );
     check_metric_rel(
-        "priority.p90",
-        get_f64(g, &["priority", "p90"]),
-        get_f64(actual, &["priority", "p90"]),
+        "scheduled_priority.p90",
+        get_f64(g, &["scheduled_priority", "p90"]),
+        get_f64(actual, &["scheduled_priority", "p90"]),
         t.priority_p90_rel,
         &mut failures,
     );

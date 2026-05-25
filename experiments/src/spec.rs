@@ -104,12 +104,12 @@ impl AlgorithmSweep {
 /// crate.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct RankingWeightsSpec {
-    /// Weight for the task-completion ratio term (default: 1.0).
-    #[serde(default = "one")]
-    pub completion: f64,
-    /// Weight for the priority satisfaction term (default: 1.0).
-    #[serde(default = "one")]
-    pub priority: f64,
+    /// Weight for the scheduled-task ratio term (default: 1.0).
+    #[serde(default = "one", alias = "completion")]
+    pub scheduled_task: f64,
+    /// Weight for the scheduled-priority term (default: 1.0).
+    #[serde(default = "one", alias = "priority")]
+    pub scheduled_priority: f64,
     /// Weight for the time-utilisation term (default: 1.0).
     #[serde(default = "one")]
     pub utilization: f64,
@@ -125,8 +125,8 @@ fn one() -> f64 {
 impl From<RankingWeightsSpec> for RankingWeights {
     fn from(s: RankingWeightsSpec) -> Self {
         Self {
-            completion: s.completion,
-            priority: s.priority,
+            scheduled_task: s.scheduled_task,
+            scheduled_priority: s.scheduled_priority,
             utilization: s.utilization,
             fragmentation: s.fragmentation,
         }
@@ -136,8 +136,8 @@ impl From<RankingWeightsSpec> for RankingWeights {
 impl From<RankingWeights> for RankingWeightsSpec {
     fn from(w: RankingWeights) -> Self {
         Self {
-            completion: w.completion,
-            priority: w.priority,
+            scheduled_task: w.scheduled_task,
+            scheduled_priority: w.scheduled_priority,
             utilization: w.utilization,
             fragmentation: w.fragmentation,
         }
@@ -178,7 +178,7 @@ mod tests {
         assert_eq!(spec.algorithms[0].algorithm(), "est");
         assert_eq!(spec.algorithms[1].algorithm(), "hap");
         let weights: RankingWeights = spec.ranking.unwrap().into();
-        assert_eq!(weights.completion, 2.0);
+        assert_eq!(weights.scheduled_task, 2.0);
         assert_eq!(spec.max_parallel, Some(4));
     }
 
@@ -194,11 +194,19 @@ mod tests {
 
     #[test]
     fn ranking_defaults_to_ones_when_field_missing() {
-        let json = r#"{ "completion": 2.0, "priority": 0.0 }"#;
+        let json = r#"{ "scheduled_task": 2.0, "scheduled_priority": 0.0 }"#;
         let r: RankingWeightsSpec = serde_json::from_str(json).expect("parse");
-        assert_eq!(r.completion, 2.0);
-        assert_eq!(r.priority, 0.0);
+        assert_eq!(r.scheduled_task, 2.0);
+        assert_eq!(r.scheduled_priority, 0.0);
         assert_eq!(r.utilization, 1.0);
         assert_eq!(r.fragmentation, 1.0);
+    }
+
+    #[test]
+    fn ranking_old_field_names_accepted_as_aliases() {
+        let json = r#"{ "completion": 2.0, "priority": 0.5 }"#;
+        let r: RankingWeightsSpec = serde_json::from_str(json).expect("parse");
+        assert_eq!(r.scheduled_task, 2.0);
+        assert_eq!(r.scheduled_priority, 0.5);
     }
 }

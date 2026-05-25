@@ -3,8 +3,8 @@
   "metrics": {
     "scheduled_task_count": 83,
     "total_task_count": 3239,
-    "completion_ratio": 0.02562519296079037,
-    "priority": {
+    "scheduled_task_ratio": 0.02562519296079037,
+    "scheduled_priority": {
       "count": 83,
       "sum": 914.85,
       "min": 6.375,
@@ -31,16 +31,16 @@
         "resource_id": "CTA-S",
         "scheduled_task_count": 83,
         "scheduled_time_sec": 152452.0000060089,
-        "priority_sum": 914.85,
-        "utilization": 0.1764490740810288
+        "utilization": 0.1764490740810288,
+        "scheduled_priority_sum": 914.85
       }
     ],
     "composite_rank_score": 0.2559909133086443,
     "ranking_weights": {
-      "completion": 1.0,
-      "priority": 1.0,
       "utilization": 1.0,
-      "fragmentation": 1.0
+      "fragmentation": 1.0,
+      "scheduled_task": 1.0,
+      "scheduled_priority": 1.0
     }
   },
   "tolerances": {

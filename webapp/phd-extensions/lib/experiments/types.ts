@@ -66,13 +66,13 @@ export interface ResourceMetrics {
   resource_id: string;
   scheduled_task_count: number;
   scheduled_time_sec: number;
-  priority_sum: number;
+  scheduled_priority_sum: number;
   utilization: number;
 }
 
 export interface RankingWeights {
-  completion: number;
-  priority: number;
+  scheduled_task: number;
+  scheduled_priority: number;
   utilization: number;
   fragmentation: number;
 }
@@ -80,8 +80,12 @@ export interface RankingWeights {
 export interface ScheduleMetrics {
   scheduled_task_count: number;
   total_task_count: number;
-  completion_ratio: number;
-  priority: PriorityStats;
+  scheduled_task_ratio: number;
+  scheduled_priority: PriorityStats;
+  scheduled_priority_sum: number;
+  total_priority_sum: number;
+  scheduled_priority_ratio: number;
+  priority_density: number;
   fragmentation: FragmentationStats;
   total_horizon_sec: number;
   available_time_sec: number;
@@ -90,6 +94,7 @@ export interface ScheduleMetrics {
   per_resource: ResourceMetrics[];
   composite_rank_score: number;
   ranking_weights: RankingWeights;
+  scheduled_priority_stair?: unknown;
 }
 
 export interface CellDetail {
