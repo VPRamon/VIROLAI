@@ -6,7 +6,7 @@
   "datasets": [
     {
       "id": "isdc_n",
-      "path": "data/isdc_n.json",
+      "path": "datasets/isdc_n.json",
       "label": "ISDC North"
     }
   ],
@@ -15,24 +15,22 @@
     {
       "kind": "est",
       "axes": {
-        "endangered_thresholds": [0, 1, 2],
-        "k_beams": [1, 2, 4],
+        "endangered_thresholds": [0, 1],
+        "k_beams": [1, 2],
         "branching_factors": [1, 2],
         "foms": [
-            "soft_constraint",
-            "future_flexibility"
+            "soft_constraint"
         ]
       }
     },
     {
       "kind": "lst",
       "axes": {
-        "endangered_thresholds": [0, 1, 2],
-        "k_beams": [1, 2, 4],
+        "endangered_thresholds": [0, 1],
+        "k_beams": [1, 2],
         "branching_factors": [1, 2],
         "foms": [
-            "soft_constraint",
-            "future_flexibility"
+            "soft_constraint"
         ]
       }
     }
