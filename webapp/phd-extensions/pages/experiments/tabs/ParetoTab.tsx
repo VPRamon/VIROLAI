@@ -41,8 +41,8 @@ function metricValue(m: ScheduleMetrics | undefined, key: MetricKey): number | n
   if (!m) return null;
   switch (key) {
     case 'composite_rank_score': return m.composite_rank_score;
-    case 'completion_ratio': return m.completion_ratio;
-    case 'priority_sum': return m.priority.sum;
+    case 'completion_ratio': return m.scheduled_task_ratio;
+    case 'priority_sum': return m.scheduled_priority.sum;
     case 'utilization': return m.utilization;
     case 'fragmentation_index': return m.fragmentation.fragmentation_index;
     case 'scheduled_task_count': return m.scheduled_task_count;

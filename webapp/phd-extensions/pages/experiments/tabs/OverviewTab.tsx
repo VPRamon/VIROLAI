@@ -45,7 +45,7 @@ export default function OverviewTab() {
     [completed],
   );
 
-  const prioritySums = completed.map((c) => c.m.priority.sum);
+  const prioritySums = completed.map((c) => c.m.scheduled_priority.sum);
   const fragIndices = completed.map((c) => c.m.fragmentation.fragmentation_index);
 
   if (!data) {
@@ -101,7 +101,7 @@ export default function OverviewTab() {
                   <div>
                     <div className="text-sm font-medium text-white">{c.id}</div>
                     <div className="text-xs text-slate-400">
-                      completion {fmtPercent(c.m.completion_ratio)} · util {fmtPercent(c.m.utilization)}
+                      completion {fmtPercent(c.m.scheduled_task_ratio)} · util {fmtPercent(c.m.utilization)}
                     </div>
                   </div>
                 </div>

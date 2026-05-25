@@ -24,10 +24,17 @@ import {
 } from '../_ui';
 
 const DEFAULT_WEIGHTS: RankingWeights = {
-  completion: 1.0,
-  priority: 1.0,
+  scheduled_task: 1.0,
+  scheduled_priority: 1.0,
   utilization: 1.0,
   fragmentation: 1.0,
+};
+
+const WEIGHT_LABELS: Record<keyof RankingWeights, string> = {
+  scheduled_task: 'Completion',
+  scheduled_priority: 'Priority',
+  utilization: 'Utilization',
+  fragmentation: 'Fragmentation',
 };
 
 export default function PerDatasetTab() {
@@ -36,7 +43,7 @@ export default function PerDatasetTab() {
 
   const { data, error, loading, reload } = useAsync(
     () => getRanking(slug, runId, { by: 'dataset', weights }),
-    [slug, runId, weights.completion, weights.priority, weights.utilization, weights.fragmentation],
+    [slug, runId, weights.scheduled_task, weights.scheduled_priority, weights.utilization, weights.fragmentation],
   );
 
   const max = useMemo(() => {
@@ -56,10 +63,10 @@ export default function PerDatasetTab() {
           Composite weights
         </h3>
         <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-          {(['completion', 'priority', 'utilization', 'fragmentation'] as const).map((k) => (
+          {(['scheduled_task', 'scheduled_priority', 'utilization', 'fragmentation'] as const).map((k) => (
             <TextField
               key={k}
-              label={k}
+              label={WEIGHT_LABELS[k]}
               type="number"
               step="0.1"
               min="0"

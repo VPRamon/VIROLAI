@@ -46,13 +46,21 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/app/target \
     cargo chef cook --release --recipe-path recipe.json -p webapp --bin webapp
 
+COPY siderust /app/siderust
+COPY Cargo.toml Cargo.lock* /app/
+COPY schedulers/Cargo.toml /app/schedulers/Cargo.toml
+COPY lab/Cargo.toml /app/lab/Cargo.toml
+COPY webapp/Cargo.toml /app/webapp/Cargo.toml
+COPY webapp/TSI/backend/Cargo.toml webapp/TSI/backend/Cargo.lock* webapp/TSI/backend/
 COPY schedulers/src /app/schedulers/src
 COPY lab/src /app/lab/src
 COPY webapp/src /app/webapp/src
+COPY webapp/TSI/backend/src webapp/TSI/backend/src
 COPY schemas /app/schemas
 
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/app/target \
+    cargo clean -p siderust -p schedulers -p tsi-rust -p webapp && \
     cargo build --release -p webapp --bin webapp \
     && cp target/release/webapp /usr/local/bin/webapp
 

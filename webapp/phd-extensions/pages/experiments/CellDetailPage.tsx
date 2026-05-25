@@ -91,7 +91,7 @@ function MetricsPanels({ metrics }: { metrics: ScheduleMetrics }) {
         />
         <MetricBadge
           label="Completion"
-          value={fmtPercent(metrics.completion_ratio)}
+          value={fmtPercent(metrics.scheduled_task_ratio)}
           hint={`${metrics.scheduled_task_count} / ${metrics.total_task_count} tasks`}
         />
         <MetricBadge
@@ -114,16 +114,16 @@ function MetricsPanels({ metrics }: { metrics: ScheduleMetrics }) {
           </h3>
           <KvTable
             rows={[
-              ['count', fmtNumber(metrics.priority.count, 0)],
-              ['sum', fmtNumber(metrics.priority.sum)],
-              ['mean', fmtNumber(metrics.priority.mean)],
-              ['std', fmtNumber(metrics.priority.std)],
-              ['min', fmtNumber(metrics.priority.min)],
-              ['p25', fmtNumber(metrics.priority.p25)],
-              ['p50', fmtNumber(metrics.priority.p50)],
-              ['p75', fmtNumber(metrics.priority.p75)],
-              ['p90', fmtNumber(metrics.priority.p90)],
-              ['max', fmtNumber(metrics.priority.max)],
+              ['count', fmtNumber(metrics.scheduled_priority.count, 0)],
+              ['sum', fmtNumber(metrics.scheduled_priority.sum)],
+              ['mean', fmtNumber(metrics.scheduled_priority.mean)],
+              ['std', fmtNumber(metrics.scheduled_priority.std)],
+              ['min', fmtNumber(metrics.scheduled_priority.min)],
+              ['p25', fmtNumber(metrics.scheduled_priority.p25)],
+              ['p50', fmtNumber(metrics.scheduled_priority.p50)],
+              ['p75', fmtNumber(metrics.scheduled_priority.p75)],
+              ['p90', fmtNumber(metrics.scheduled_priority.p90)],
+              ['max', fmtNumber(metrics.scheduled_priority.max)],
             ]}
           />
         </Card>
@@ -164,7 +164,7 @@ function MetricsPanels({ metrics }: { metrics: ScheduleMetrics }) {
                     <td className="px-2 py-2 font-medium">{r.resource_id}</td>
                     <td className="px-2 py-2 text-right tabular-nums">{r.scheduled_task_count}</td>
                     <td className="px-2 py-2 text-right tabular-nums">{fmtDuration(r.scheduled_time_sec)}</td>
-                    <td className="px-2 py-2 text-right tabular-nums">{fmtNumber(r.priority_sum)}</td>
+                    <td className="px-2 py-2 text-right tabular-nums">{fmtNumber(r.scheduled_priority_sum)}</td>
                     <td className="px-2 py-2 text-right tabular-nums">{fmtPercent(r.utilization)}</td>
                   </tr>
                 ))}

@@ -42,9 +42,9 @@ function extractMetric(metrics: ScheduleMetrics | undefined, key: MetricKey): nu
     case 'composite_rank_score':
       return metrics.composite_rank_score;
     case 'completion_ratio':
-      return metrics.completion_ratio;
+      return metrics.scheduled_task_ratio;
     case 'priority_sum':
-      return metrics.priority.sum;
+      return metrics.scheduled_priority.sum;
     case 'utilization':
       return metrics.utilization;
     case 'fragmentation_index':
