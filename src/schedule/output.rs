@@ -65,8 +65,7 @@ pub struct ScheduleMetadata {
 
 /// The scheduling result expressed in the same JSON envelope as the input.
 ///
-/// Each task inside `scheduling_blocks` (or the legacy top-level array) is
-/// annotated with three extra fields:
+/// Each task inside `scheduling_blocks` is annotated with three extra fields:
 /// - `scheduled`: `true` when the task was placed, `false` otherwise.
 /// - `scheduled_start_mjd_utc`: placement start in MJD UTC (only when `scheduled` is `true`).
 /// - `scheduled_end_mjd_utc`: placement end in MJD UTC (only when `scheduled` is `true`).
@@ -146,11 +145,6 @@ fn annotate_blocks(json: &mut Value, placements: &HashMap<u64, (f64, f64)>) {
         .get_mut("scheduling_blocks")
         .and_then(Value::as_array_mut)
     {
-        for block in blocks {
-            annotate_tasks_in_block(block, placements);
-        }
-    // Legacy format: top-level array of blocks
-    } else if let Some(blocks) = json.as_array_mut() {
         for block in blocks {
             annotate_tasks_in_block(block, placements);
         }

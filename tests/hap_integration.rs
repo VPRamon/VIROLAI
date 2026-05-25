@@ -215,7 +215,6 @@ fn hap_default_config() {
     let cfg = default_planner_config();
     assert_eq!(cfg.population_size, 4);
     assert_eq!(cfg.cru.max_iter, 128);
-    assert_eq!(cfg.cru.stochastic_range, 3);
     assert_eq!(cfg.seed, 0);
     assert!(matches!(cfg.cru.selector, Selector::Stochastic { rho: 3 }));
     assert!(matches!(

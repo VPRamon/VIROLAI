@@ -20,9 +20,7 @@ mod ordering;
 mod queue;
 mod schedule_state;
 
-pub use crate::scheduler::fom::{
-    CompositeFom, EstFomKind, FomKind, ScheduleFom, SoftConstraintFom,
-};
+pub use crate::scheduler::fom::{CompositeFom, FomKind, ScheduleFom, SoftConstraintFom};
 pub use algorithm::{EstScheduler, run_scheduler};
 pub use candidate::{Candidate, IntoTaskPlacement};
 pub use configuration::Configuration;

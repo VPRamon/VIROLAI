@@ -24,10 +24,6 @@ pub enum Selector {
 pub struct Configuration {
     /// Selector strategy applied by the inner Task Scheduling Cycle.
     pub selector: Selector,
-    /// Legacy field: number of cheapest candidates offered to the stochastic
-    /// picker. Used as a fallback when [`Selector::Stochastic`] is configured
-    /// with `rho == 0`.
-    pub stochastic_range: usize,
     /// Maximum iterations of the inner Task Scheduling Cycle (ι_max in the
     /// CRU description). Caps the lobby-drain loop per block task.
     pub max_iter: usize,
@@ -37,7 +33,6 @@ impl Default for Configuration {
     fn default() -> Self {
         Self {
             selector: Selector::Deterministic,
-            stochastic_range: 3,
             max_iter: 100,
         }
     }
@@ -103,7 +98,6 @@ impl PlannerConfig {
         Self {
             cru: Configuration {
                 selector: Selector::Deterministic,
-                stochastic_range: 3,
                 max_iter: iota_max,
             },
             population_size: 1,
@@ -125,7 +119,6 @@ impl PlannerConfig {
         Self {
             cru: Configuration {
                 selector: Selector::Stochastic { rho },
-                stochastic_range: rho.max(1),
                 max_iter: iota_max,
             },
             population_size: population_size.max(1),

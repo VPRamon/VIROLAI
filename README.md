@@ -310,7 +310,7 @@ Each EST cell is the cartesian product of all three axes.
 | Axis | Key | Description |
 |---|---|---|
 | Iota max | `iota_max_values` | Max repair iterations per CRU run (`--hap-cru-iterations`) |
-| Rho | `rho_values` | Stochastic window range (`--hap-stochastic-range`) |
+| Rho | `rho_values` | Stochastic window range (`--hap-rho`) |
 | Population size | `population_sizes` | Number of CRU attempts and survivor cap (`--hap-num-crus`) |
 | Survivor mode | `survivor_modes` | `"elitist_top_k"` or `"pareto_front"` |
 | Survivor cap | `survivor_caps` | Hard cap on the survivor pool between rounds |
@@ -348,7 +348,7 @@ Short flags `-e`, `-k`, and `-b` are not supported; use `--est-e`, `--est-k`, an
 |---|---|---|
 | `--hap-num-crus <usize>` | `4` | CRU attempts and survivor cap |
 | `--hap-cru-iterations <usize>` | `128` | Max repair iterations per CRU |
-| `--hap-stochastic-range <usize>` | `3` | Candidate window pool size |
+| `--hap-rho <usize>` | `3` | Candidate window pool size |
 | `--hap-seed <u64>` | `0` | Master RNG seed |
 
 ---

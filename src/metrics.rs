@@ -5,8 +5,7 @@
 //! environment. It is computed from a [`Schedule`] together with the source
 //! [`SchedulingProblem`] and the scheduling horizon.
 //!
-//! The metric set is intentionally broader than the `est_experiment` legacy
-//! `RunMetrics`: it includes completion ratios, full priority statistics,
+//! The metric set includes completion ratios, full priority statistics,
 //! schedule fragmentation (gap analysis), horizon utilization, per-resource
 //! breakdown, and a configurable composite ranking score.
 //!
@@ -530,8 +529,7 @@ fn ratio(numerator: f64, denominator: f64) -> f64 {
 }
 
 /// Linear-interpolation percentile over `[0.0, 1.0]`. Returns `0.0` for an
-/// empty slice. Matches the percentile defined in `est_experiment` so the
-/// new metric module is a strict superset of the legacy one.
+/// empty slice.
 fn percentile(values: &[f64], quantile: f64) -> f64 {
     if values.is_empty() {
         return 0.0;
@@ -895,8 +893,7 @@ mod tests {
         let text = serde_json::to_string(&s).unwrap();
         let back: ScheduledPriorityStair = serde_json::from_str(&text).unwrap();
         assert_eq!(s, back);
-        // Backwards-compat: a payload missing scheduled_priority_stair on
-        // ScheduleMetrics still deserializes thanks to serde(default).
+
         let problem = problem_with_priorities(&[(1, 1.0)]);
         let mut schedule = Schedule::new();
         place(&mut schedule, 1, 0.0, 0.01);

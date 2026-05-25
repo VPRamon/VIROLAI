@@ -42,7 +42,7 @@ impl EstScheduler<SoftConstraintFom> {
 }
 
 impl<F: ScheduleFom> EstScheduler<F> {
-    fn from_parts(mut config: Configuration, fom: F) -> Result<Self, ScheduleError> {
+    pub fn from_parts(mut config: Configuration, fom: F) -> Result<Self, ScheduleError> {
         config.k_beams = config.k_beams.max(1);
         config.branching_factor = config.branching_factor.max(1);
 
@@ -52,16 +52,6 @@ impl<F: ScheduleFom> EstScheduler<F> {
             _phantom: PhantomData,
         };
         Ok(scheduler)
-    }
-
-    /// Backward-compatible constructor for callers that already have a FOM.
-    pub fn with_fom(config: Configuration, fom: F) -> Result<Self, ScheduleError> {
-        Self::from_parts(config, fom)
-    }
-
-    /// Preserve the legacy API used by the experiment runners.
-    pub fn with_fom_label(self, _label: String) -> Self {
-        self
     }
 
     /// Run beam-search EST on a full scheduling problem.

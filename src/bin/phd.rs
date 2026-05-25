@@ -154,17 +154,13 @@ struct PublishArgs {
     #[arg(long)]
     workspace: String,
     /// Publish a single manifest file.
-    #[arg(long, value_name = "FILE", conflicts_with_all = ["manifest_dir", "dir"])]
-    manifest: Option<PathBuf>,
-    /// Publish every `*.manifest.json` found under DIR (recursive).
-    /// Deprecated alias of `--dir`; kept for back-compat.
-    #[arg(long = "manifest-dir", value_name = "DIR", conflicts_with = "dir")]
-    manifest_dir: Option<PathBuf>,
+    #[arg(long, value_name = "FILE", conflicts_with = "dir")]
+    pub manifest: Option<PathBuf>,
     /// Publish every artifact under DIR (recursive). Files are
     /// classified by content: manifests go to the manifests/batch
     /// endpoint and self-contained schedules to schedules/batch.
     #[arg(long, value_name = "DIR")]
-    dir: Option<PathBuf>,
+    pub dir: Option<PathBuf>,
     /// When publishing from a directory, also upload self-contained
     /// schedules so the webapp persists them for drill-down.
     /// Set to `false` to upload manifests only.
@@ -1028,10 +1024,8 @@ fn current_rfc3339() -> String {
 // ---------------------------------------------------------------------------
 
 fn publish(args: PublishArgs) -> Result<ExitCode, String> {
-    if args.manifest.is_none() && args.manifest_dir.is_none() && args.dir.is_none() {
-        return Err(
-            "either --manifest <FILE>, --dir <DIR> or --manifest-dir <DIR> is required".into(),
-        );
+    if args.manifest.is_none() && args.dir.is_none() {
+        return Err("either --manifest <FILE> or --dir <DIR> is required".into());
     }
     let base = args
         .url
@@ -1089,11 +1083,7 @@ fn publish(args: PublishArgs) -> Result<ExitCode, String> {
     }
 
     // Directory path: classify each .json as manifest or schedule.
-    let dir = args
-        .dir
-        .as_deref()
-        .or(args.manifest_dir.as_deref())
-        .unwrap();
+    let dir = args.dir.as_deref().unwrap();
     let (manifest_paths, schedule_paths) = collect_dir_paths(dir, args.include_schedules)?;
     if manifest_paths.is_empty() && schedule_paths.is_empty() {
         return Err(format!(

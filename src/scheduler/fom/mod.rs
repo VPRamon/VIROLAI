@@ -5,7 +5,7 @@ pub mod soft_constraint;
 
 pub use self::composite::CompositeFom;
 pub use self::future_flexibility::FutureFlexibilityFom;
-pub use self::kind::{EstFomKind, FomKind};
+pub use self::kind::FomKind;
 pub use self::soft_constraint::SoftConstraintFom;
 
 use crate::prescheduler::TaskPeriodMap;

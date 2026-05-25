@@ -137,12 +137,7 @@ fn build_candidates(
 ///
 /// Zero-cost candidates always win, regardless of the selector — this
 /// implements the spec's "prefer zero-conflict insertion" requirement.
-fn choose_candidate_idx(
-    candidates: &[Candidate],
-    selector: Selector,
-    fallback_range: usize,
-    rng: &mut impl Rng,
-) -> usize {
+fn choose_candidate_idx(candidates: &[Candidate], selector: Selector, rng: &mut impl Rng) -> usize {
     debug_assert!(!candidates.is_empty());
 
     let zero_count = candidates.partition_point(|c| c.cost == 0);
@@ -153,8 +148,7 @@ fn choose_candidate_idx(
     match selector {
         Selector::Deterministic => 0,
         Selector::Stochastic { rho } => {
-            let span = if rho == 0 { fallback_range } else { rho };
-            let range = span.max(1).min(candidates.len());
+            let range = rho.max(1).min(candidates.len());
             rng.gen_range(0..range)
         }
         Selector::Random => weighted_random_pick(candidates, rng),
@@ -218,8 +212,7 @@ pub fn schedule_task(
         return Err(TaskSchedulerError::NoValidCandidates);
     }
 
-    let chosen_idx =
-        choose_candidate_idx(&candidates, config.selector, config.stochastic_range, rng);
+    let chosen_idx = choose_candidate_idx(&candidates, config.selector, rng);
     let chosen = &candidates[chosen_idx];
 
     for &conflict_id in &chosen.conflicts {

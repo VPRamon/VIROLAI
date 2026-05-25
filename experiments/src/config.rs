@@ -196,7 +196,7 @@ impl EstRunConfig {
 
     /// Instantiates an [`EstScheduler`] for this configuration.
     pub fn build_scheduler(self) -> Result<EstScheduler<Arc<dyn ScheduleFom>>, String> {
-        EstScheduler::with_fom(self.est_config(), self.fom.into_fom())
+        EstScheduler::from_parts(self.est_config(), self.fom.into_fom())
             .map_err(|e| format!("invalid EST configuration for {}: {e}", self.slug()))
     }
 

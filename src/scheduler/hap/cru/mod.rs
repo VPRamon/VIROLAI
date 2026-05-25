@@ -11,9 +11,7 @@
 //!    schedule (`s_low`) and restoring it on exit.
 //!
 //! [`run_branches`] returns every completed schedule produced by a satisfied
-//! branch (deduplicated by canonical placement fingerprint). The legacy
-//! [`run`] entry point picks the best of those branches and applies it
-//! in place.
+//! branch (deduplicated by canonical placement fingerprint).
 
 pub mod lobby;
 pub mod task_scheduler;
@@ -88,30 +86,6 @@ pub fn run_branches(
     out
 }
 
-/// Backward-compatible entry point: place tasks from `block` into `schedule`
-/// in place, picking the best schedule produced by [`run_branches`].
-///
-/// "Best" = most placements; ties broken lexicographically on the
-/// canonical placement fingerprint to keep results deterministic for the
-/// [`Selector::Deterministic`](super::configuration::Selector::Deterministic)
-/// selector.
-///
-/// When no branch produces a completed schedule, `schedule` is left
-/// untouched.
-pub fn run(
-    schedule: &mut Schedule,
-    block: &SchedulingBlock,
-    all_blocks: &[SchedulingBlock],
-    periods_map: &TaskPeriodMap,
-    config: &Configuration,
-    rng: &mut impl Rng,
-) {
-    let candidates = run_branches(schedule, block, all_blocks, periods_map, config, rng);
-    if let Some(best) = pick_best(candidates) {
-        *schedule = best;
-    }
-}
-
 fn fingerprint(schedule: &Schedule) -> Vec<(u64, u64, u64)> {
     let mut v: Vec<(u64, u64, u64)> = schedule
         .placements()
@@ -125,23 +99,6 @@ fn fingerprint(schedule: &Schedule) -> Vec<(u64, u64, u64)> {
         .collect();
     v.sort();
     v
-}
-
-fn pick_best(mut candidates: Vec<Schedule>) -> Option<Schedule> {
-    if candidates.is_empty() {
-        return None;
-    }
-    let best_idx = candidates
-        .iter()
-        .enumerate()
-        .max_by(|(_, a), (_, b)| {
-            a.len()
-                .cmp(&b.len())
-                .then_with(|| fingerprint(b).cmp(&fingerprint(a)))
-        })
-        .map(|(i, _)| i)
-        .unwrap_or(0);
-    Some(candidates.swap_remove(best_idx))
 }
 
 #[cfg(test)]

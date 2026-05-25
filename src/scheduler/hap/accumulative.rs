@@ -222,7 +222,6 @@ mod tests {
         let hap_cfg = PlannerConfig {
             cru: super::super::configuration::Configuration {
                 selector: Selector::Deterministic,
-                stochastic_range: 3,
                 max_iter: 50,
             },
             population_size: 1,
@@ -254,7 +253,6 @@ mod tests {
         let hap_cfg = PlannerConfig {
             cru: super::super::configuration::Configuration {
                 selector: Selector::Deterministic,
-                stochastic_range: 3,
                 max_iter: 50,
             },
             population_size: 4,

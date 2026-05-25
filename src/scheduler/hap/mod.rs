@@ -52,12 +52,12 @@ impl HapScheduler {
         horizon: &Period<MJD>,
     ) -> Result<Schedule, ScheduleError> {
         log::info!(
-            "hap: starting scheduler — blocks={}, tasks={}, population_size={}, max_iter={}, stochastic_range={}, horizon=[{:.4}, {:.4}]",
+            "hap: starting scheduler — blocks={}, tasks={}, population_size={}, max_iter={}, selector={}, horizon=[{:.4}, {:.4}]",
             problem.block_count(),
             problem.task_count(),
             self.config.population_size,
             self.config.cru.max_iter,
-            self.config.cru.stochastic_range,
+            selector_label(self.config.cru.selector),
             horizon.start.value(),
             horizon.end.value(),
         );
@@ -92,4 +92,12 @@ impl SchedulingAlgorithm for HapScheduler {
 
 pub fn default_planner_config() -> PlannerConfig {
     PlannerConfig::hap(128, 3, 4, SurvivorSelector::ElitistTopK { k: 4 }, 0)
+}
+
+fn selector_label(selector: Selector) -> String {
+    match selector {
+        Selector::Deterministic => "deterministic".to_string(),
+        Selector::Stochastic { rho } => format!("stochastic(rho={rho})"),
+        Selector::Random => "random".to_string(),
+    }
 }

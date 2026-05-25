@@ -56,6 +56,3 @@ impl FromStr for FomKind {
         }
     }
 }
-
-// Backward compatibility alias
-pub type EstFomKind = FomKind;

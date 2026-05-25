@@ -54,7 +54,7 @@
     "HapConfig": {
       "type": "object",
       "description": "Configuration parameters for the Hybrid Adaptive metaheuristic scheduler.",
-      "required": ["num_crus", "cru_max_iterations", "stochastic_range", "random_seed", "impatience_alpha"],
+      "required": ["num_crus", "cru_max_iterations", "rho", "random_seed", "impatience_alpha"],
       "additionalProperties": false,
       "properties": {
         "num_crus": {
@@ -68,7 +68,7 @@
           "type": "integer",
           "minimum": 1
         },
-        "stochastic_range": {
+        "rho": {
           "description": "Window selection stochasticity: pick uniformly from the best N windows.",
           "type": "integer",
           "minimum": 1

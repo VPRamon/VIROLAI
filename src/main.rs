@@ -40,7 +40,7 @@ struct CliArgs {
 struct HapCliConfig {
     num_crus: usize,
     cru_max_iterations: usize,
-    stochastic_range: usize,
+    rho: usize,
     random_seed: u64,
 }
 
@@ -50,7 +50,7 @@ impl Default for HapCliConfig {
         Self {
             num_crus: config.population_size,
             cru_max_iterations: config.cru.max_iter,
-            stochastic_range: config.cru.stochastic_range,
+            rho: selector_rho(config.cru.selector).unwrap_or(3),
             random_seed: config.seed,
         }
     }
@@ -61,11 +61,18 @@ impl HapCliConfig {
         let num_crus = self.num_crus.max(1);
         hap::PlannerConfig::hap(
             self.cru_max_iterations,
-            self.stochastic_range,
+            self.rho,
             num_crus,
             hap::SurvivorSelector::ElitistTopK { k: num_crus },
             self.random_seed,
         )
+    }
+}
+
+fn selector_rho(selector: hap::Selector) -> Option<usize> {
+    match selector {
+        hap::Selector::Stochastic { rho } => Some(rho),
+        hap::Selector::Deterministic | hap::Selector::Random => None,
     }
 }
 
@@ -101,9 +108,10 @@ fn run() -> Result<(), String> {
     }
 
     let horizon = build_horizon(problem.detected_horizon, horizon_override)?;
-    let telescope = problem.telescope.as_ref().ok_or_else(|| {
-        "missing observing site in input; expected resources[0] or legacy location".to_string()
-    })?;
+    let telescope = problem
+        .telescope
+        .as_ref()
+        .ok_or_else(|| "missing observing site in input; expected resources[0]".to_string())?;
     let total_tasks = problem.task_count();
 
     let preschedule_start = Instant::now();
@@ -149,10 +157,10 @@ fn run() -> Result<(), String> {
         }
         Algorithm::Hap => {
             println!(
-                "HAP config: num_crus={}, cru_iterations={}, stochastic_range={}, seed={}",
+                "HAP config: num_crus={}, cru_iterations={}, rho={}, seed={}",
                 cli.hap_config.num_crus,
                 cli.hap_config.cru_max_iterations,
-                cli.hap_config.stochastic_range,
+                cli.hap_config.rho,
                 cli.hap_config.random_seed,
             );
             println!("HAP elapsed: {:.3}s", algo_elapsed.as_secs_f64());
@@ -303,7 +311,7 @@ fn parse_cli_args(program: &str, args: &[String]) -> Result<CliArgs, String> {
                 hap_flags_set.push("--hap-cru-iterations");
                 i += 2;
             }
-            "--hap-stochastic-range" => {
+            "--hap-rho" => {
                 let flag = args[i].as_str();
                 let Some(value) = args.get(i + 1) else {
                     print_usage(program);
@@ -311,10 +319,10 @@ fn parse_cli_args(program: &str, args: &[String]) -> Result<CliArgs, String> {
                         "missing value for {flag} (expected an unsigned integer)"
                     ));
                 };
-                hap_config.stochastic_range = value
+                hap_config.rho = value
                     .parse::<usize>()
                     .map_err(|e| format!("invalid {flag} value '{value}': {e}"))?;
-                hap_flags_set.push("--hap-stochastic-range");
+                hap_flags_set.push("--hap-rho");
                 i += 2;
             }
             "--hap-seed" => {
@@ -403,7 +411,7 @@ fn print_usage(program: &str) {
         "Usage: {program} <input_json> [horizon_start_mjd horizon_end_mjd] [-o <output_json>] [--algorithm est|hap] [EST options] [HAP options]\n\
          Output: [-o|--output <path>]  write schedule to this file (default: <input_stem>_schedule_<YYYYMMDD_HHMMSS>.json)\n\
          EST options: [--est-fom <soft_constraint|future_flexibility>] [--est-e <u32>] [--est-k <usize>] [--est-b <usize>]\n\
-         HAP options: [--hap-num-crus <usize>] [--hap-cru-iterations <usize>] [--hap-stochastic-range <usize>] [--hap-seed <u64>]\n\
+         HAP options: [--hap-num-crus <usize>] [--hap-cru-iterations <usize>] [--hap-rho <usize>] [--hap-seed <u64>]\n\
          Aliases: --est-endangered-threshold <u32> for --est-e, --est-schedule-states <usize> for --est-k, --est-branching-factor <usize> for --est-b\n\
          Example: {program} data/ctao_n.json --algorithm est --est-fom soft_constraint --est-e 2 --est-k 5 --est-b 3\n\
          Example: {program} data/ctao_n.json --algorithm est --est-fom future_flexibility --est-k 5 --est-b 3\n\
@@ -585,7 +593,7 @@ fn build_schedule_metadata(
             let config = serde_json::json!({
                 "num_crus": cli.hap_config.num_crus,
                 "cru_max_iterations": cli.hap_config.cru_max_iterations,
-                "stochastic_range": cli.hap_config.stochastic_range,
+                "rho": cli.hap_config.rho,
                 "random_seed": cli.hap_config.random_seed,
             });
             ("hap".to_string(), config)
@@ -605,7 +613,7 @@ fn build_schedule_metadata(
 fn build_scheduler(cli: &CliArgs) -> Result<Box<dyn SchedulingAlgorithm>, String> {
     match cli.algorithm {
         Algorithm::Est => {
-            let scheduler = est::EstScheduler::with_fom(cli.est_config, cli.est_fom.into_fom())
+            let scheduler = est::EstScheduler::from_parts(cli.est_config, cli.est_fom.into_fom())
                 .map_err(|e| format!("invalid EST configuration: {e}"))?;
             Ok(Box::new(scheduler))
         }

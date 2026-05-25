@@ -545,9 +545,9 @@ fn default_config_is_valid() {
 }
 
 #[test]
-fn with_fom_builds_soft_constraint_scheduler() {
+fn from_parts_builds_soft_constraint_scheduler() {
     let scheduler =
-        EstScheduler::with_fom(Configuration::default(), FomKind::SoftConstraint.into_fom())
+        EstScheduler::from_parts(Configuration::default(), FomKind::SoftConstraint.into_fom())
             .expect("config should be valid");
 
     assert!(format!("{:?}", scheduler.fom).contains("SoftConstraintFom"));
@@ -737,7 +737,7 @@ fn beam_search_soft_constraint_fom_prefers_high_priority() {
         branching_factor: 2,
         endangered_threshold: 1,
     };
-    let schedule = EstScheduler::with_fom(config, Arc::new(SoftConstraintFom))
+    let schedule = EstScheduler::from_parts(config, Arc::new(SoftConstraintFom))
         .expect("config should be valid")
         .run_scheduler(tasks, &possible, &horizon)
         .expect("run should pass");

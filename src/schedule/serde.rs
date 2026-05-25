@@ -1,35 +1,8 @@
 //! Deserialize [`SchedulingProblem`] from scheduler JSON formats.
 //!
 //! Accepted inputs:
-//! - Legacy: an array of scheduling blocks, each containing full task objects.
 //! - Envelope: an object with `resources`, optional `schedule_time_window`, and
 //!   `scheduling_blocks`.
-//! - Backward-compatible envelope: an object with legacy top-level `location`
-//!   instead of `resources`.
-//!
-//! Legacy array example:
-//!
-//! ```json
-//! [
-//!   {
-//!     "id": 1,
-//!     "tasks": [
-//!       {
-//!         "id": 101,
-//!         "name": "my-task",
-//!         "requested_duration_sec": 1200.0,
-//!         "target": { "ra_deg": 83.8, "dec_deg": 22.0 },
-//!         "hard_constraints": {
-//!           "altitude_min_deg": 20.0,
-//!           "time_window": { "start_mjd_utc": 62000.0, "end_mjd_utc": 62001.0 }
-//!         },
-//!         "soft_constraints": { "priority": 5.0 }
-//!       }
-//!     ],
-//!     "dependencies": []
-//!   }
-//! ]
-//! ```
 //!
 //! `detected_horizon` on the returned [`SchedulingProblem`] is:
 //! - `schedule_time_window` when provided by the envelope format.
@@ -44,11 +17,9 @@ use super::SchedulingProblem;
 use crate::constraints::{PrioritySoftConstraint, SoftConstraintExpr};
 use crate::scheduling_block::{Dependency, SchedulingBlock};
 use crate::serde_repr::{
-    HardConstraintsRepr, LocationRepr, TimeWindowRepr, geodetic_location_from_repr,
-    hard_constraint_blocks_from_repr, mjd_period,
+    HardConstraintsRepr, TimeWindowRepr, hard_constraint_blocks_from_repr, mjd_period,
 };
 use crate::task::Task;
-use crate::telescope::Telescope;
 use crate::telescope::serde_impl::TelescopeRepr;
 use crate::time::{SchedulingBlockId, TaskId};
 use qtty::{Degrees, Seconds};
@@ -67,16 +38,7 @@ struct BlockRepr {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(untagged)]
-enum ProblemRepr {
-    BlockList(Vec<BlockRepr>),
-    Envelope(ProblemEnvelopeRepr),
-}
-
-#[derive(Debug, Deserialize)]
 struct ProblemEnvelopeRepr {
-    #[serde(default)]
-    location: Option<LocationRepr>,
     #[serde(default)]
     resources: Vec<TelescopeRepr>,
     #[serde(default)]
@@ -153,44 +115,29 @@ fn task_from_repr(repr: TaskRepr) -> Result<Task, String> {
 
 impl<'de> Deserialize<'de> for SchedulingProblem {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let (block_reprs, explicit_horizon, telescope) = match ProblemRepr::deserialize(
-            deserializer,
-        )? {
-            ProblemRepr::BlockList(blocks) => (blocks, None, None),
-            ProblemRepr::Envelope(envelope) => {
-                let horizon = envelope
-                    .schedule_time_window
-                    .map(|tw| mjd_period(tw.start_mjd_utc, tw.end_mjd_utc))
-                    .transpose()
-                    .map_err(serde::de::Error::custom)?;
+        let envelope = ProblemEnvelopeRepr::deserialize(deserializer)?;
 
-                let mut resources = envelope.resources.into_iter();
-                let telescope = if let Some(primary) = resources.next() {
-                    if resources.next().is_some() {
-                        return Err(serde::de::Error::custom(
-                            "multiple resources are not supported yet; expected exactly one telescope resource",
-                        ));
-                    }
-                    Some(primary.into_telescope().map_err(serde::de::Error::custom)?)
-                } else if let Some(location) = envelope.location {
-                    let location =
-                        geodetic_location_from_repr(location).map_err(serde::de::Error::custom)?;
-                    Some(Telescope::new(
-                        0,
-                        "telescope-0",
-                        location,
-                        Default::default(),
-                    ))
-                } else {
-                    return Err(serde::de::Error::custom(
-                        "missing observing site; expected resources[0].location or legacy location",
-                    ));
-                };
+        let horizon = envelope
+            .schedule_time_window
+            .map(|tw| mjd_period(tw.start_mjd_utc, tw.end_mjd_utc))
+            .transpose()
+            .map_err(serde::de::Error::custom)?;
 
-                (envelope.scheduling_blocks, horizon, telescope)
+        let mut resources = envelope.resources.into_iter();
+        let telescope = if let Some(primary) = resources.next() {
+            if resources.next().is_some() {
+                return Err(serde::de::Error::custom(
+                    "multiple resources are not supported yet; expected exactly one telescope resource",
+                ));
             }
+            Some(primary.into_telescope().map_err(serde::de::Error::custom)?)
+        } else {
+            return Err(serde::de::Error::custom(
+                "missing observing site; expected resources[0].location",
+            ));
         };
 
+        let block_reprs = envelope.scheduling_blocks;
         let mut blocks = Vec::with_capacity(block_reprs.len());
         let mut min_start = f64::INFINITY;
         let mut max_end = f64::NEG_INFINITY;
@@ -235,9 +182,9 @@ impl<'de> Deserialize<'de> for SchedulingProblem {
 
         let mut problem =
             SchedulingProblem::from_blocks(blocks).map_err(serde::de::Error::custom)?;
-        problem.telescope = telescope;
+        problem.telescope = Some(telescope.unwrap()); // In this version, telescope is required
 
-        if let Some(horizon) = explicit_horizon {
+        if let Some(horizon) = horizon {
             problem.detected_horizon = Some(horizon);
         } else if min_start.is_finite() && max_end.is_finite() {
             problem.detected_horizon = mjd_period(min_start, max_end).ok();
