@@ -104,7 +104,6 @@ CREATE TABLE IF NOT EXISTS schedules (
 CREATE INDEX IF NOT EXISTS idx_runs_dataset   ON runs (dataset_id);
 CREATE INDEX IF NOT EXISTS idx_runs_algorithm ON runs (algorithm);
 CREATE INDEX IF NOT EXISTS idx_runs_config    ON runs (config_slug);
-CREATE INDEX IF NOT EXISTS idx_runs_schedule_hash ON runs(schedule_hash);
 CREATE INDEX IF NOT EXISTS idx_runs_priority_ratio ON runs (priority_ratio DESC);
 CREATE INDEX IF NOT EXISTS idx_runs_task_ratio ON runs (task_ratio DESC);
 CREATE INDEX IF NOT EXISTS idx_runs_utilization ON runs (utilization DESC);

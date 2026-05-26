@@ -1,9 +1,9 @@
 //! `phd sweep` wrapper around `lab run`.
 
-use super::process::locate_sibling;
+use super::process::sibling_command;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitCode};
+use std::process::ExitCode;
 
 pub(crate) fn sweep(
     spec_path: &Path,
@@ -25,7 +25,7 @@ pub(crate) fn sweep(
             (spec_path.to_path_buf(), None)
         };
 
-    let mut cmd = Command::new(locate_sibling("lab"));
+    let mut cmd = sibling_command("lab");
     cmd.arg("run").arg("--spec").arg(&effective_spec);
     if let Some(db) = run_db {
         cmd.arg("--run-db").arg(db);

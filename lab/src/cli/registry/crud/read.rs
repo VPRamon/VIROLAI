@@ -298,11 +298,11 @@ pub(in crate::cli::registry) fn export(args: RegistryExportArgs) -> Result<(), S
 // ── Private helpers ────────────────────────────────────────────────────────────
 
 /// Resolves the schedule JSON for a row, with actionable error messages for
-/// rows that predate the deduplicated schedule storage.
+/// rows that are missing deduplicated schedule storage.
 fn schedule_json_for_row(row: &RunRow) -> Result<String, String> {
     let Some(schedule_hash) = &row.schedule_hash else {
         return Err(format!(
-            "run '{}' has no schedule_hash; migrate the registry with migrate_schedule_dedup",
+            "run '{}' has no schedule_hash; registry is inconsistent",
             &row.run_key[..row.run_key.len().min(16)]
         ));
     };
