@@ -1,261 +1,263 @@
-# `lab` crate
+# Lab
 
-The `lab` crate runs parameter-sweep experiments against the
-`scheduler` library. Its only CLI entrypoint is `lab run`,
-which expands an `ExperimentSpec` into a matrix of cells and executes
-them in parallel.
+`lab` is the experiment runner for the PhD scheduling workspace. It expands
+JSON sweep specifications into scheduler runs, executes the resulting matrix in
+parallel, and stores each run's schedule JSON and metrics in a SQLite registry.
 
-Most users should still drive experiments through `phd sweep`, but this
-crate is the source of truth for the spec format, raw output layout,
-checkpointing, and resume semantics.
+The crate provides three binaries:
 
-## Entry points
+| Binary | Purpose |
+| --- | --- |
+| `phd` | User-facing workflow CLI for sweeps, publishing, and dispatch to sibling tools. |
+| `lab` | Lower-level matrix runner and registry query CLI. |
+| `lab-ctao-adapter` | Dataset adapter used by `phd dataset adapt`. |
 
-### Recommended: `phd sweep`
+For routine experiments, use `phd sweep`. Use `lab run` directly when you need
+fine-grained control over the DB path or override semantics.
+
+## Common Workflows
+
+### Run a Sweep
 
 ```bash
 cargo run -p lab --bin phd -- sweep \
-    --spec lab/hap_sweep.json \
-    --out out/hap-sweep \
-    --manifest
+  --spec lab/sweep-fast.json
 ```
 
-`phd sweep` invokes the sibling `lab` binary, then flattens the
-raw `run-<timestamp>/schedules/*.json` tree into:
-
-```text
-out/hap-sweep/
-    <cell_id>.json
-    <cell_id>.manifest.json
-```
-
-This flat layout is the canonical input for `phd publish`.
-
-`phd sweep` expects the `lab` binary at
-`target/debug/lab` or `target/release/lab`. Build it
-explicitly when needed:
-
-```bash
-cargo build -p lab --bin lab
-cargo build --release -p lab --bin lab
-```
-
-### Direct crate invocation: `lab run`
-
-```bash
-cargo run -p lab --bin lab -- run \
-    --spec lab/hap_sweep.json
-```
-
-Supported flags:
+Results are stored in `.lab/runs.sqlite` (default). Pass `--run-db <PATH>` to
+use a different database. Cells already present in the DB are skipped
+automatically; add `--override` to re-execute them and update their stored row.
 
 | Flag | Description |
 | --- | --- |
-| `--spec <FILE>` | Required experiment spec JSON |
-| `--resume <DIR>` | Reuse an existing `run-<timestamp>/` directory and skip completed cells |
-| `--output-dir <DIR>` | Override `spec.output_dir` for `--dry-run` |
-| `--dry-run` | Resolve cells and write `experiment.json` without executing runs |
-| `--no-state` | Do not write `state.jsonl`; incompatible with `--resume` |
+| `--spec <FILE>` | Experiment specification JSON. |
+| `--run-db <PATH>` | Registry database path. Defaults to `.lab/runs.sqlite`. |
+| `--parallel <N>` | Override `max_parallel` from the spec. |
+| `--override` | Re-execute cells that are already in the DB. |
 
-Use direct invocation when you need the raw run directory, checkpoint
-stream, or explicit resume control.
+### Run the Matrix Directly
 
-## Output layout
-
-Raw crate output:
-
-```text
-<output_dir>/<experiment_slug>/run-<timestamp>/
-    experiment.json
-    schedules/
-        <cell_id>.json
-    state.jsonl
+```bash
+cargo run -p lab --bin lab -- run \
+  --spec lab/sweep-fast.json
 ```
 
-`state.jsonl` is omitted with `--no-state`.
+`lab run` resolves the cell matrix, skips DB hits, executes the rest in
+parallel, and upserts each result (schedule JSON + metrics) into the registry.
+No filesystem artifacts are written — no `schedules/` dir, no `state.jsonl`,
+no `experiment.json`.
 
-Each schedule JSON is self-contained and embeds:
-
-- `schedule_metadata` for dataset, algorithm, resolved parameters, and horizon
-- `schedule_metrics` with objective/descriptive run metrics for downstream
-  query-time ranking and comparison
-
-There are no separate `metrics/` or `traces/` directories in this
-workflow.
-
-## Spec format
-
-The JSON schema is defined by `lab::spec::ExperimentSpec`.
-Paths in `datasets[*].path` and `output_dir` may be relative to the
-spec file.
-
-Minimal shape:
-
-```json
-{
-  "name": "paper-sweep",
-  "datasets": [
-    { "id": "ctao_n", "path": "../data/ctao_n.json" }
-  ],
-  "algorithms": [
-    { "kind": "est", "axes": { "k_beams": [1, 4], "branching_factors": [1, 2] } },
-    { "kind": "hap", "axes": { "iota_max_values": [64, 128], "seeds": [0, 1] } }
-  ],
-  "max_parallel": 4,
-  "output_dir": "../out/paper"
-}
-```
-
-Key fields:
-
-| Field | Meaning |
+| Flag | Description |
 | --- | --- |
-| `name` | Human-readable experiment name; used to derive the output slug |
-| `datasets` | Input scheduling problems to evaluate |
-| `algorithms` | One or more `est` / `hap` sweep blocks |
-| `max_parallel` | Optional concurrency cap |
-| `output_dir` | Root directory for raw run artifacts |
+| `--spec <FILE>` | Required experiment spec JSON. |
+| `--run-db <PATH>` | Registry database path. Defaults to `.lab/runs.sqlite`. |
+| `--override` | Re-execute cells that are already in the DB. |
 
-`ranking` is accepted only as a legacy field. `lab run` records objective
-metrics; scientific interpretation lives in registry/query commands such as
-`lab registry sort`, `lab registry rank`, and `lab registry pareto`.
-
-Working examples live next to this README:
-
-- `lab/hap_sweep.json`
-- `lab/paper_sweep.json`
-
-## Sweep operations
-
-### Planning
-
-A sweep is the Cartesian product of `datasets × algorithms × axes`. Tune:
-
-- `max_parallel` to match available CPU
-- `seeds` high enough for the statistics you intend to compare
-- axis breadth carefully, because output size grows linearly with cell count
-
-### Resume and checkpoints
-
-When `state.jsonl` is enabled, re-running with `--resume <run-dir>`
-skips cells already recorded as completed. For checkpoint-free runs with
-lower IO, use `--no-state` and accept that resume is unavailable.
-
-### Dry runs
-
-Use `--dry-run` to validate a spec, resolve the full cell list, and
-write `experiment.json` without running the scheduler.
-
-## Publishing
-
-After a sweep completes, publish the flattened output with `phd
-publish`:
+### Publish Results
 
 ```bash
 cargo run -p lab --bin phd -- publish \
-    --workspace paper \
-    --dir out/hap-sweep \
-    --create-workspace \
-    --include-schedules
+  --workspace paper \
+  --dir out/schedules \
+  --create-workspace
 ```
 
-`phd publish` uploads manifests and schedules in batches and handles
-idempotency. See `docs/architecture.md` for the end-to-end pipeline.
+`phd publish` walks a directory for self-contained schedule JSON files and
+uploads them to the webapp in batches. Use `--url` or `PHD_WEBAPP_URL` to
+target a non-default backend, and `--token` or `PHD_WEBAPP_TOKEN` when
+authentication is required.
 
-## Anti-patterns
+Export schedule files from the registry before publishing:
 
-- Do not edit generated cell JSONs by hand; they are the source of truth.
-- Do not maintain parallel `metrics/` or `traces/` directories for this flow.
-- Do not use the old `experiments/` path; this crate is now the `lab` workspace member.
+```bash
+cargo run -p lab --bin lab -- registry export \
+  --dataset isdc_n \
+  --out-dir out/schedules
+```
 
+## Experiment Specifications
 
+An experiment specification describes a Cartesian product of datasets,
+algorithms, and per-algorithm parameter axes. The `output_dir` field is
+accepted for backward compatibility but ignored by the runner.
 
-### Cheatsheet
+```json
+{
+  "name": "fast-comparison",
+  "max_parallel": 16,
+  "datasets": [
+    {
+      "id": "isdc_n",
+      "path": "datasets/isdc_n.json",
+      "label": "ISDC North"
+    }
+  ],
+  "algorithms": [
+    {
+      "kind": "est",
+      "axes": {
+        "endangered_thresholds": [0, 1],
+        "k_beams": [1, 2],
+        "branching_factors": [1, 2],
+        "foms": ["soft_constraint"]
+      }
+    },
+    {
+      "kind": "lst",
+      "axes": {
+        "endangered_thresholds": [0, 1],
+        "k_beams": [1, 2],
+        "branching_factors": [1, 2],
+        "foms": ["soft_constraint"]
+      }
+    }
+  ]
+}
+```
 
+Top-level fields:
 
-## Mejor `priority_density`
+| Field | Description |
+| --- | --- |
+| `name` | Human-readable experiment name. |
+| `max_parallel` | Optional concurrency cap. Defaults to available logical CPU capacity. |
+| `datasets` | Input scheduling problems to evaluate. |
+| `algorithms` | One or more `est`, `lst`, or `hap` sweep blocks. |
+| `output_dir` | Ignored — present only for backward compatibility with old specs. |
+
+Dataset entries support:
+
+| Field | Description |
+| --- | --- |
+| `id` | Filesystem-safe dataset identifier used in cell IDs. |
+| `path` | Scheduling problem JSON. Relative paths are resolved from the spec file's directory. |
+| `label` | Optional human-readable label stored in schedule metadata. |
+| `horizon_override` | Optional `{ "start_mjd": <f64>, "end_mjd": <f64> }` observing window override. |
+
+Current runnable examples live in this directory:
+
+| Spec | Purpose |
+| --- | --- |
+| `lab/sweep-fast.json` | Small EST/LST comparison suitable for smoke tests and iteration. |
+| `lab/sweep-custom.json` | Broader EST/LST comparison over both ISDC datasets. |
+| `lab/sweep-full.json` | Larger EST/HAP comparison template. Review dataset paths and cell count before running. |
+
+## Algorithm Axes
+
+`est` and `lst` use the same sweep axes:
+
+| Axis | Description |
+| --- | --- |
+| `endangered_thresholds` | Values for the endangered-task threshold. |
+| `k_beams` | Beam counts to evaluate. |
+| `branching_factors` | Branching factors to evaluate. |
+| `foms` | Figure-of-merit variants, such as `soft_constraint` or `future_flexibility`. |
+
+`hap` supports:
+
+| Axis | Description |
+| --- | --- |
+| `iota_max_values` | CRU task-scheduling iteration caps. |
+| `rho_values` | CRU-S stochastic candidate ranges. |
+| `population_sizes` | Multi-start population sizes per block. |
+| `survivor_modes` | Survivor strategies: `greedy_one`, `elitist_top_k`, or `pareto_front`. |
+| `survivor_caps` | Capacity limits for the selected survivor mode. |
+| `seeds` | Deterministic master RNG seeds. |
+
+Empty axis lists use algorithm defaults, so a block with omitted axes still
+produces at least one run.
+
+## Registry
+
+The registry is a SQLite database that stores each successful run's identity,
+metrics, and full schedule JSON. Runs are keyed by a SHA-256 hash of the inputs,
+so the same cell is naturally idempotent across reruns.
+
+Registry query commands:
+
+| Command | Purpose |
+| --- | --- |
+| `lab registry list` | List stored runs with optional filters and metric ranges. |
+| `lab registry sort` | Sort runs by one or more `metric:asc` or `metric:desc` keys. |
+| `lab registry best` | Show best runs for a required dataset. |
+| `lab registry rank` | Compute a weighted query-time score from `--weight metric=value` inputs. |
+| `lab registry pareto` | Compute a Pareto front over maximize/minimize objectives. |
+| `lab registry inspect` | Print the full stored record for a run key or unique prefix. |
+| `lab registry export` | Export stored schedule JSON(s) to files. |
+
+Example:
 
 ```bash
 cargo run -p lab --bin lab -- registry sort \
   --run-db .lab/runs.sqlite \
   --dataset isdc_n \
   --sort priority_density:desc \
-  --limit 1
+  --limit 10
 ```
 
-Si quieres solo EST o LST:
+Most registry commands accept `--dataset`, `--algorithm`, `--limit`, and
+`--format table|json`. Commands that return ordered results accept repeatable
+`--sort <metric:asc|desc>` arguments.
+
+### `registry export`
+
+Export one run by key:
 
 ```bash
-cargo run -p lab --bin lab -- registry sort \
-  --run-db .lab/runs.sqlite \
+lab registry export \
+  --run b50d151629d65018 \
+  --out schedule.json
+```
+
+Export filtered runs to a directory:
+
+```bash
+lab registry export \
   --dataset isdc_n \
-  --algorithm lst \
   --sort priority_density:desc \
-  --limit 1
+  --limit 20 \
+  --out-dir out/top20
 ```
 
-## Mayor fitness sum / priority sum
+Exported files are named `<dataset>__<algorithm>__<config>.json`. On filename
+collision the run key prefix is appended. Use `--force` to overwrite existing
+files. Rows without a stored schedule (pre-migration rows) print a guidance
+message directing you to rerun with `--override`.
 
-En el código la métrica soportada se llama:
+## CLI Reference
 
-```text
-scheduled_priority_sum
-```
+### `lab run`
 
-`metric_value()` la reconoce explícitamente junto con `priority_density`, `scheduled_task_ratio`, `scheduled_priority_ratio`, etc. 
+| Flag | Description |
+| --- | --- |
+| `--spec <FILE>` | Required experiment spec JSON. |
+| `--run-db <PATH>` | Registry database path. Defaults to `.lab/runs.sqlite`. |
+| `--override` | Re-execute cells already in the DB and update their stored row. |
 
-Ejecuta:
+### `phd`
 
-```bash
-cargo run -p lab --bin lab -- registry sort \
-  --run-db .lab/runs.sqlite \
-  --dataset isdc_n \
-  --sort scheduled_priority_sum:desc \
-  --limit 1
-```
+| Command | Description |
+| --- | --- |
+| `phd run` | Dispatch to the `schedulers` binary for a single scheduling problem. |
+| `phd matrix` | Dispatch raw arguments to the `lab` binary. |
+| `phd sweep` | Run a sweep via `lab run` and store results in SQLite. |
+| `phd dataset adapt` | Dispatch to `lab-ctao-adapter`. |
+| `phd publish` | Upload schedule JSON files from a directory to the webapp. |
 
-Filtrando por algoritmo:
+## Operational Notes
 
-```bash
-cargo run -p lab --bin lab -- registry sort \
-  --run-db .lab/runs.sqlite \
-  --dataset isdc_n \
-  --algorithm est \
-  --sort scheduled_priority_sum:desc \
-  --limit 1
-```
+- Build sibling binaries explicitly when invoking `phd` outside `cargo run`:
 
-## Ver el resultado completo
+  ```bash
+  cargo build -p lab --bin lab --bin phd --bin lab-ctao-adapter
+  cargo build --release -p lab --bin lab --bin phd --bin lab-ctao-adapter
+  ```
 
-Cuando tengas el `run_key` prefix que aparece en la tabla:
-
-```bash
-cargo run -p lab --bin lab -- registry inspect \
-  --run-db .lab/runs.sqlite \
-  --run <run_key_prefix>
-```
-
-## Regenerar el schedule ganador
-
-```bash
-cargo run -p lab --bin lab -- registry regenerate \
-  --run-db .lab/runs.sqlite \
-  --run <run_key_prefix> \
-  --out out/best-density.json
-```
-
-```bash
-cargo run -p schedulers --bin schedulers -- \
-  data/isdc_n.json \
-  --algorithm lst \
-  --est-e 1 \
-  --est-k 4 \
-  --est-b 2 \
-  --est-fom future_flexibility \
-  --output out/schedule-lst.json
-```
-
-
-run sweep
-
-cargo run -p lab --bin lab --release -- run   --spec lab/sweep-custom.json   --cache   --run-db .lab/runs-new.sqlite
+- No filesystem artifacts are written by `lab run`. All outputs (schedule JSON
+  and metrics) are stored in the registry database. Use `registry export` to
+  extract schedule files.
+- Size sweeps deliberately. Cell count grows as
+  `datasets × algorithms × axis-products`.
+- Use `max_parallel` or `phd sweep --parallel` to control CPU pressure.
+- Prefer registry queries for ranking and comparison. The legacy `ranking` spec
+  field is accepted only for backward compatibility.

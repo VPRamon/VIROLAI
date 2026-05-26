@@ -13,23 +13,19 @@
 //! | [`spec`] | `ExperimentSpec` JSON format for the matrix runner |
 //! | [`cell`] | `MatrixCell` and `resolve_cells` — Cartesian-product expansion |
 //! | [`problem`] | `PreparedProblem` — dataset loading and prescheduling |
-//! | [`runner`] | `execute` — parallel matrix runner with checkpointing; embeds metrics into each schedule |
-//! | [`output`] | Run-directory layout helpers |
-//! | [`state`] | `state.jsonl` append-only checkpoint stream |
+//! | [`runner`] | `execute` — DB-only parallel matrix runner; upserts metrics + schedule JSON into SQLite |
+//! | [`output`] | Run-directory layout helpers (kept for any residual tooling) |
+//! | [`state`] | `state.jsonl` append-only checkpoint stream (legacy; not used by runner) |
 //!
 //! # Usage
 //!
 //! The `lab` binary exposes a single sub-command:
 //!
 //! ```text
-//! lab run --spec <experiment.json>
-//!                 [--resume <existing_run_dir>]
-//!                 [--output-dir <dir>]
-//!                 [--dry-run] [--no-state]
+//! lab run --spec <experiment.json> [--run-db <path>] [--override]
 //! ```
 //!
-//! It is also wired as the target of `phd matrix` and `phd sweep` in
-//! the `phd` unified CLI.
+//! It is also wired as the target of `phd sweep` in the `phd` unified CLI.
 
 pub mod cell;
 pub mod config;
@@ -45,5 +41,5 @@ pub mod state;
 pub use cell::{MatrixCell, resolve_cells};
 pub use config::{EstRunConfig, HapRunConfig, HapSurvivorMode, RunConfig};
 pub use problem::{PreparedProblem, prepare_problem};
-pub use runner::{RunOptions, RunSummary, execute, execute_with_options};
+pub use runner::{RunOptions, RunSummary, execute};
 pub use spec::ExperimentSpec;

@@ -301,7 +301,7 @@ mod tests {
             ],
             ranking: None,
             max_parallel: None,
-            output_dir: PathBuf::from("out"),
+            output_dir: Some(PathBuf::from("out")),
         }
     }
 
@@ -379,7 +379,7 @@ mod tests {
             }],
             ranking: None,
             max_parallel: None,
-            output_dir: PathBuf::from("out"),
+            output_dir: Some(PathBuf::from("out")),
         };
         let cells = resolve_cells(&spec).unwrap();
         assert_eq!(cells.len(), 1);
@@ -412,7 +412,7 @@ mod tests {
             }],
             ranking: None,
             max_parallel: None,
-            output_dir: PathBuf::from("out"),
+            output_dir: Some(PathBuf::from("out")),
         };
         let cells = resolve_cells(&spec).unwrap();
         assert_eq!(cells.len(), 1);
@@ -449,7 +449,7 @@ mod tests {
             ],
             ranking: None,
             max_parallel: None,
-            output_dir: PathBuf::from("out"),
+            output_dir: Some(PathBuf::from("out")),
         };
         let cells = resolve_cells(&spec).unwrap();
         assert_eq!(cells.len(), 2);

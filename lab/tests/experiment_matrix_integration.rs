@@ -1,5 +1,8 @@
-use serde_json::Value;
-use std::collections::HashSet;
+//! Integration tests for the DB-only `lab run` pipeline.
+//!
+//! Every run stores results in SQLite — no filesystem artifacts are produced
+//! (`experiment.json`, `state.jsonl`, `schedules/` are all gone).
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -77,242 +80,284 @@ fn write_spec(base: &Path) -> PathBuf {
   "algorithms": [
     { "kind": "est", "axes": { "endangered_thresholds": [1], "k_beams": [1], "branching_factors": [1] } }
   ],
-  "max_parallel": 1,
-  "output_dir": "out"
+  "max_parallel": 1
 }"#;
     let p = base.join("spec.json");
     fs::write(&p, spec).unwrap();
     p
 }
 
-fn find_run_dir(out_root: &Path) -> PathBuf {
-    let exp_dir = out_root.join("matrix-smoke");
-    let entries: Vec<_> = fs::read_dir(&exp_dir)
-        .expect("experiment dir should exist")
-        .filter_map(|e| e.ok())
-        .filter(|e| e.path().is_dir())
-        .collect();
-    assert_eq!(entries.len(), 1, "expected exactly one run dir");
-    entries[0].path()
-}
-
+/// First run executes the cell and inserts a DB row with schedule_json and metrics.
 #[test]
-fn experiment_matrix_pipeline_writes_expected_artifacts() {
+fn run_creates_db_row_with_metrics_and_schedule_json() {
     let tmp = TempDir::new().unwrap();
     write_input(tmp.path());
     let spec_path = write_spec(tmp.path());
-
-    let status = Command::new(BIN)
-        .args(["run", "--spec", spec_path.to_str().unwrap()])
-        .status()
-        .expect("binary should run");
-    assert!(status.success(), "lab exited with failure");
-
-    let run_dir = find_run_dir(&tmp.path().join("out"));
-
-    // Every expected artefact exists.
-    assert!(run_dir.join("experiment.json").is_file());
-    assert!(run_dir.join("state.jsonl").is_file());
-    let cell_id = "ds1__est__e1-k1-b1";
-    assert!(
-        run_dir
-            .join("schedules")
-            .join(format!("{cell_id}.json"))
-            .is_file(),
-        "schedule json missing"
-    );
-    // Metrics are embedded in the schedule JSON; no separate metrics/ dir.
-    assert!(
-        !run_dir.join("metrics").exists(),
-        "metrics dir should not exist"
-    );
-    assert!(
-        !run_dir.join("summary.csv").exists(),
-        "summary.csv should not be written"
-    );
-    assert!(
-        !run_dir.join("traces").exists(),
-        "traces dir should not exist"
-    );
-
-    // The schedule JSON carries embedded schedule_metrics.
-    let schedule_val: Value = serde_json::from_str(
-        &fs::read_to_string(run_dir.join("schedules").join(format!("{cell_id}.json"))).unwrap(),
-    )
-    .unwrap();
-    assert!(
-        schedule_val.get("schedule_metrics").is_some(),
-        "schedule JSON must carry embedded schedule_metrics"
-    );
-
-    // experiment.json round-trips and lists the cell.
-    let manifest: Value =
-        serde_json::from_str(&fs::read_to_string(run_dir.join("experiment.json")).unwrap())
-            .unwrap();
-    assert_eq!(
-        manifest
-            .get("spec")
-            .and_then(|s| s.get("name"))
-            .and_then(Value::as_str),
-        Some("matrix-smoke")
-    );
-    let cells = manifest.get("cells").and_then(Value::as_array).unwrap();
-    assert_eq!(cells.len(), 1);
-    assert_eq!(
-        cells[0].get("cell_id").and_then(Value::as_str),
-        Some(cell_id)
-    );
-}
-
-#[test]
-fn experiment_matrix_resume_skips_completed_cells() {
-    let tmp = TempDir::new().unwrap();
-    write_input(tmp.path());
-    let spec_path = write_spec(tmp.path());
-
-    // First run: populate everything.
-    let status = Command::new(BIN)
-        .args(["run", "--spec", spec_path.to_str().unwrap()])
-        .status()
-        .unwrap();
-    assert!(status.success());
-    let run_dir = find_run_dir(&tmp.path().join("out"));
-
-    let cell_id = "ds1__est__e1-k1-b1";
-    let schedule_file = run_dir.join("schedules").join(format!("{cell_id}.json"));
-    let mtime_before = fs::metadata(&schedule_file).unwrap().modified().unwrap();
-
-    // Sleep a bit so any rewrite would change mtime.
-    std::thread::sleep(std::time::Duration::from_millis(1100));
-
-    // Resume into the same run dir; nothing should be re-scheduled.
-    let status = Command::new(BIN)
-        .args([
-            "run",
-            "--spec",
-            spec_path.to_str().unwrap(),
-            "--resume",
-            run_dir.to_str().unwrap(),
-        ])
-        .status()
-        .unwrap();
-    assert!(status.success());
-
-    let mtime_after = fs::metadata(&schedule_file).unwrap().modified().unwrap();
-    assert_eq!(
-        mtime_before, mtime_after,
-        "schedule file should not have been rewritten on resume"
-    );
-
-    // state.jsonl should still contain a single completed event for the cell
-    // (no second `started`/`completed` pair appended).
-    let state_text = fs::read_to_string(run_dir.join("state.jsonl")).unwrap();
-    let lines: Vec<_> = state_text
-        .lines()
-        .filter(|l| !l.trim().is_empty())
-        .collect();
-    let completed: HashSet<&str> = lines
-        .iter()
-        .filter(|l| l.contains("\"status\":\"completed\""))
-        .copied()
-        .collect();
-    assert_eq!(
-        completed.len(),
-        1,
-        "exactly one completed event expected after resume; got {lines:?}"
-    );
-}
-
-#[test]
-fn experiment_matrix_dry_run_emits_manifest_only() {
-    let tmp = TempDir::new().unwrap();
-    write_input(tmp.path());
-    let spec_path = write_spec(tmp.path());
-
-    let status = Command::new(BIN)
-        .args(["run", "--spec", spec_path.to_str().unwrap(), "--dry-run"])
-        .status()
-        .unwrap();
-    assert!(status.success());
-
-    let run_dir = find_run_dir(&tmp.path().join("out"));
-    assert!(run_dir.join("experiment.json").is_file());
-    assert!(
-        !run_dir.join("state.jsonl").exists(),
-        "dry-run should not write state.jsonl"
-    );
-    let schedules = run_dir.join("schedules");
-    if schedules.exists() {
-        assert_eq!(fs::read_dir(&schedules).unwrap().count(), 0);
-    }
-}
-
-#[test]
-fn experiment_matrix_no_state_skips_state_file_and_emits_progress() {
-    let tmp = TempDir::new().unwrap();
-    write_input(tmp.path());
-    let spec_path = write_spec(tmp.path());
+    let db_path = tmp.path().join("runs.sqlite");
 
     let output = Command::new(BIN)
-        .args(["run", "--spec", spec_path.to_str().unwrap(), "--no-state"])
+        .args([
+            "run",
+            "--spec",
+            spec_path.to_str().unwrap(),
+            "--run-db",
+            db_path.to_str().unwrap(),
+        ])
         .output()
-        .expect("binary should run");
-    assert!(output.status.success(), "lab exited with failure");
+        .expect("lab binary should run");
 
-    let run_dir = find_run_dir(&tmp.path().join("out"));
-
-    // With --no-state no state.jsonl is written.
     assert!(
-        !run_dir.join("state.jsonl").exists(),
-        "state.jsonl must not be written when --no-state is set"
+        output.status.success(),
+        "lab exited with failure:\n{}",
+        String::from_utf8_lossy(&output.stderr)
     );
 
-    // Schedules are still produced.
-    let cell_id = "ds1__est__e1-k1-b1";
+    // SQLite registry was created.
+    assert!(db_path.exists(), "registry database must exist after run");
+
+    // Summary line reports 1 completed.
+    let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        run_dir
-            .join("schedules")
-            .join(format!("{cell_id}.json"))
-            .is_file(),
-        "schedule json missing under --no-state"
+        stdout.contains("1 completed"),
+        "expected '1 completed' in stdout; got: {stdout}"
+    );
+    assert!(
+        stdout.contains("0 failed"),
+        "expected '0 failed' in stdout; got: {stdout}"
     );
 
-    // Progress lines appear on stderr.
-    let stderr = String::from_utf8_lossy(&output.stderr);
+    // The DB row has schedule_json — verify via `registry list --format json`.
+    let list_out = Command::new(BIN)
+        .args([
+            "registry",
+            "list",
+            "--run-db",
+            db_path.to_str().unwrap(),
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("registry list should succeed");
     assert!(
-        stderr.contains('✓') || stderr.contains("✗") || stderr.contains('▶'),
-        "expected progress characters on stderr; got: {stderr}"
+        list_out.status.success(),
+        "registry list failed: {}",
+        String::from_utf8_lossy(&list_out.stderr)
+    );
+
+    let rows: serde_json::Value =
+        serde_json::from_slice(&list_out.stdout).expect("registry list must produce JSON");
+    assert_eq!(rows.as_array().map(|a| a.len()).unwrap_or(0), 1);
+    let row = &rows[0];
+    assert_eq!(row["dataset_id"].as_str(), Some("ds1"));
+    assert_eq!(row["algorithm"].as_str(), Some("est"));
+
+    // Verify schedule_json was stored by exporting the run.
+    let run_key = row["run_key"].as_str().expect("run_key must be a string");
+    let export_file = tmp.path().join("verify.json");
+    let export_status = Command::new(BIN)
+        .args([
+            "registry",
+            "export",
+            "--run",
+            run_key,
+            "--out",
+            export_file.to_str().unwrap(),
+            "--run-db",
+            db_path.to_str().unwrap(),
+        ])
+        .status()
+        .expect("registry export should succeed");
+    assert!(
+        export_status.success(),
+        "registry export failed — schedule_json was not stored"
+    );
+    assert!(export_file.exists(), "exported schedule file must exist");
+    let exported_val: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&export_file).unwrap())
+            .expect("exported file must be valid JSON");
+    assert!(
+        exported_val.get("schedule_metadata").is_some(),
+        "exported schedule must contain schedule_metadata"
     );
 }
 
+/// No filesystem artifacts are produced by `lab run`.
 #[test]
-fn experiment_matrix_no_state_and_resume_is_an_error() {
+fn run_produces_no_filesystem_artifacts() {
     let tmp = TempDir::new().unwrap();
     write_input(tmp.path());
     let spec_path = write_spec(tmp.path());
+    let db_path = tmp.path().join("runs.sqlite");
 
-    // First run to create a run_dir.
-    let status = Command::new(BIN)
-        .args(["run", "--spec", spec_path.to_str().unwrap()])
-        .status()
-        .unwrap();
-    assert!(status.success());
-    let run_dir = find_run_dir(&tmp.path().join("out"));
-
-    // --no-state + --resume must fail.
     let status = Command::new(BIN)
         .args([
             "run",
             "--spec",
             spec_path.to_str().unwrap(),
-            "--resume",
-            run_dir.to_str().unwrap(),
-            "--no-state",
+            "--run-db",
+            db_path.to_str().unwrap(),
+        ])
+        .status()
+        .expect("lab binary should run");
+    assert!(status.success());
+
+    // None of the old filesystem artifacts should exist.
+    let entries: Vec<_> = fs::read_dir(tmp.path())
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .collect();
+
+    assert!(
+        !entries.iter().any(|n| n.ends_with(".jsonl")),
+        "state.jsonl must not be written; found: {entries:?}"
+    );
+    assert!(
+        !entries.contains(&"schedules".to_string()),
+        "schedules/ directory must not be created; found: {entries:?}"
+    );
+    assert!(
+        !entries.iter().any(|n| n == "experiment.json"),
+        "experiment.json must not be created; found: {entries:?}"
+    );
+}
+
+/// Second run with the same spec skips already-present DB rows.
+#[test]
+fn run_second_time_skips_existing_rows() {
+    let tmp = TempDir::new().unwrap();
+    write_input(tmp.path());
+    let spec_path = write_spec(tmp.path());
+    let db_path = tmp.path().join("runs.sqlite");
+
+    // First run — populates registry.
+    let s1 = Command::new(BIN)
+        .args([
+            "run",
+            "--spec",
+            spec_path.to_str().unwrap(),
+            "--run-db",
+            db_path.to_str().unwrap(),
+        ])
+        .status()
+        .expect("first run should succeed");
+    assert!(s1.success(), "first run failed");
+
+    // Second run — should skip.
+    let out2 = Command::new(BIN)
+        .args([
+            "run",
+            "--spec",
+            spec_path.to_str().unwrap(),
+            "--run-db",
+            db_path.to_str().unwrap(),
+        ])
+        .output()
+        .expect("second run should succeed");
+    assert!(
+        out2.status.success(),
+        "second run failed: {}",
+        String::from_utf8_lossy(&out2.stderr)
+    );
+
+    let stdout2 = String::from_utf8_lossy(&out2.stdout);
+    assert!(
+        stdout2.contains("1 skipped"),
+        "expected '1 skipped' on second run; got: {stdout2}"
+    );
+    assert!(
+        stdout2.contains("0 completed"),
+        "expected '0 completed' on second run; got: {stdout2}"
+    );
+}
+
+/// `--override` re-executes cells that are already in the DB and updates them.
+#[test]
+fn run_override_reruns_and_updates_row() {
+    let tmp = TempDir::new().unwrap();
+    write_input(tmp.path());
+    let spec_path = write_spec(tmp.path());
+    let db_path = tmp.path().join("runs.sqlite");
+
+    // First run.
+    let s1 = Command::new(BIN)
+        .args([
+            "run",
+            "--spec",
+            spec_path.to_str().unwrap(),
+            "--run-db",
+            db_path.to_str().unwrap(),
         ])
         .status()
         .unwrap();
+    assert!(s1.success(), "first run failed");
+
+    // Sleep a bit to ensure last_seen_at changes.
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+
+    // Second run with --override.
+    let out2 = Command::new(BIN)
+        .args([
+            "run",
+            "--spec",
+            spec_path.to_str().unwrap(),
+            "--run-db",
+            db_path.to_str().unwrap(),
+            "--override",
+        ])
+        .output()
+        .expect("override run should succeed");
     assert!(
-        !status.success(),
-        "--no-state and --resume together should exit non-zero"
+        out2.status.success(),
+        "override run failed: {}",
+        String::from_utf8_lossy(&out2.stderr)
+    );
+
+    let stdout2 = String::from_utf8_lossy(&out2.stdout);
+    assert!(
+        stdout2.contains("1 overridden") || stdout2.contains("1 completed"),
+        "expected overridden or completed count > 0 on --override run; got: {stdout2}"
+    );
+    assert!(
+        stdout2.contains("0 skipped"),
+        "expected '0 skipped' on --override run; got: {stdout2}"
+    );
+}
+
+/// Spec that still carries an `output_dir` field parses without error.
+#[test]
+fn spec_with_output_dir_field_is_accepted() {
+    let tmp = TempDir::new().unwrap();
+    write_input(tmp.path());
+    let db_path = tmp.path().join("runs.sqlite");
+
+    // Old-style spec with output_dir still present.
+    let spec = r#"{
+  "name": "compat-smoke",
+  "datasets": [
+    { "id": "ds1", "path": "input.json" }
+  ],
+  "algorithms": [
+    { "kind": "est", "axes": { "endangered_thresholds": [1], "k_beams": [1], "branching_factors": [1] } }
+  ],
+  "max_parallel": 1,
+  "output_dir": "some_old_dir"
+}"#;
+    let spec_path = tmp.path().join("spec_compat.json");
+    fs::write(&spec_path, spec).unwrap();
+
+    let status = Command::new(BIN)
+        .args([
+            "run",
+            "--spec",
+            spec_path.to_str().unwrap(),
+            "--run-db",
+            db_path.to_str().unwrap(),
+        ])
+        .status()
+        .expect("lab binary should run");
+    assert!(
+        status.success(),
+        "spec with output_dir field must still be accepted"
     );
 }

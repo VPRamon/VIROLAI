@@ -1,146 +1,114 @@
-//! Parallel matrix experiment runner.
+//! Parallel matrix experiment runner — DB-only mode.
 //!
 //! [`execute`] is the main entry point for running an experiment matrix.  It:
 //!
-//! 1. Prepares each unique dataset once (loading JSON + running the prescheduler).
-//! 2. Skips cells already marked `completed` in `state.jsonl` (resume mode).
-//! 3. Dispatches pending cells to a bounded Rayon thread pool.
-//! 4. When `no_state_log` is false, appends `started` / `completed` / `failed`
-//!    events to `state.jsonl` as each cell executes.
-//!    When `no_state_log` is true, prints per-cell progress to stderr instead.
-//! 5. Returns a [`RunSummary`] with counts of total / skipped / completed /
-//!    failed cells.
+//! 1. Prepares each unique dataset once (loading JSON + running the
+//!    prescheduler).
+//! 2. Opens (or creates) the SQLite registry and checks each cell's
+//!    [`RunIdentity`] hash against existing rows.
+//! 3. Skips DB hits unless [`RunOptions::override_existing`] is set.
+//! 4. Dispatches pending cells to a bounded Rayon thread pool.
+//! 5. After each successful run, upserts metrics **and** the full schedule
+//!    JSON into the registry.
+//! 6. Refreshes a single-line progress indicator on stderr (TTY) or prints
+//!    compact summaries (non-TTY).
 //!
-//! Cache mode (enabled via [`RunOptions::cache`]) additionally:
-//! - Computes a stable `run_key` for each pending cell from dataset content,
-//!   algorithm, config, horizon, and version strings.
-//! - Looks up the SQLite registry for already-completed keys.
-//! - For registry hits, injects a synthetic `completed` state event (no
-//!   schedule file) and increments `RunSummary::registry_hits`.
-//! - For misses, runs the scheduler and inserts the result into the registry.
+//! No filesystem artifacts (schedules directory, state.jsonl, manifests) are
+//! written.  All persistent state lives in SQLite.
 
-use chrono::Utc;
 use rayon::prelude::*;
 use schedulers::metrics::{MetricsContext, ScheduleMetrics};
 use schedulers::schedule::{LocationMeta, PeriodMeta, ScheduleMetadata, ScheduleOutput};
-use std::collections::{HashMap, HashSet};
-use std::fs;
-use std::path::{Path, PathBuf};
+use std::collections::HashMap;
+use std::io::IsTerminal as _;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use crate::cell::MatrixCell;
 use crate::config::{HapSurvivorMode, RunConfig};
-use crate::output;
 use crate::problem::{PreparedProblem, prepare_problem};
 use crate::registry::{
     METRICS_VERSION, Registry, RunIdentity, hash_file, registry_path, scheduler_version,
 };
 use crate::spec::ExperimentSpec;
-use crate::state::{CellStatus, StateEvent, StateWriter, completed_cells, read_events};
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
-/// Summary returned by [`execute`] / [`execute_with_options`].
+/// Summary returned by [`execute`].
 pub struct RunSummary {
-    /// Total number of cells in the matrix (including already-completed ones).
+    /// Total number of cells in the matrix.
     pub total: usize,
-    /// Cells skipped because they were already completed (resume mode).
-    pub already_done: usize,
-    /// Cells served from the SQLite registry cache (no scheduler was run).
-    pub registry_hits: usize,
-    /// Cells that completed successfully in this run.
+    /// Cells skipped because a matching row already existed in the registry
+    /// and `override_existing` was false.
+    pub skipped: usize,
+    /// Cells that were re-executed because `override_existing` was true and a
+    /// matching row already existed.
+    pub overridden: usize,
+    /// Cells that completed successfully and were upserted into the registry.
     pub completed: usize,
-    /// Cells that terminated with an error in this run.
+    /// Cells that terminated with an error.
     pub failed: usize,
-    /// Path to the run directory.
-    pub run_dir: PathBuf,
 }
 
-/// Options for [`execute_with_options`].
+/// Options for [`execute`].
 #[derive(Debug, Default, Clone)]
 pub struct RunOptions {
-    /// Resume mode: skip cells already marked `completed` in `state.jsonl`.
-    pub resume: bool,
-    /// Suppress `state.jsonl`; print progress to stderr instead.
-    pub no_state_log: bool,
-    /// Enable SQLite registry cache.
-    pub cache: bool,
     /// Path to the registry SQLite file.  Defaults to `.lab/runs.sqlite`.
     pub run_db: Option<PathBuf>,
-    /// When true, do not create or write any filesystem artifacts (manifest,
-    /// schedules, state). Results should still be stored in the registry DB.
-    pub suppress_artifacts: bool,
+    /// When true, re-execute cells that already have a row in the registry and
+    /// overwrite their stored metrics and schedule JSON.
+    pub override_existing: bool,
 }
 
-/// Executes all pending cells in `cells` with optional resume support.
-///
-/// When `resume` is `true`, cells already marked `completed` in `state.jsonl`
-/// are skipped.  All other cells are dispatched to a Rayon thread pool sized
-/// by `spec.max_parallel` (defaulting to the number of logical CPU cores).
-///
-/// When `no_state_log` is `true`, no `state.jsonl` is written; per-cell
-/// progress is printed to `stderr` instead.  `resume` must be `false` when
-/// `no_state_log` is `true`.
-///
-/// This is a convenience wrapper around [`execute_with_options`] that keeps
-/// the existing API stable.
+/// Executes the experiment matrix described by `cells`, storing results in the
+/// SQLite registry identified by `opts.run_db`.
 pub fn execute(
     spec: &ExperimentSpec,
     cells: &[MatrixCell],
-    run_dir: &Path,
-    resume: bool,
-    no_state_log: bool,
-) -> Result<RunSummary, String> {
-    execute_with_options(
-        spec,
-        cells,
-        run_dir,
-        RunOptions {
-            resume,
-            no_state_log,
-            cache: false,
-            run_db: None,
-        },
-    )
-}
-
-/// Executes all pending cells according to [`RunOptions`].
-pub fn execute_with_options(
-    spec: &ExperimentSpec,
-    cells: &[MatrixCell],
-    run_dir: &Path,
     opts: RunOptions,
 ) -> Result<RunSummary, String> {
-    if opts.no_state_log && opts.resume {
-        return Err("--no-state and --resume are mutually exclusive".to_string());
-    }
+    let db_path = registry_path(opts.run_db.as_deref());
+    let registry = Registry::open(&db_path)?;
+    let sched_ver = scheduler_version();
 
-    if !opts.suppress_artifacts {
-        output::init_subdirs(run_dir)?;
-    }
-
-    let already_done: HashSet<String> = if opts.resume {
-        let events = read_events(&run_dir.join(output::STATE_FILE))?;
-        completed_cells(&events)
-    } else {
-        HashSet::new()
-    };
-    let pending: Vec<&MatrixCell> = cells
+    // ── Classify each cell as skip, override, or fresh run ───────────────────
+    let mut skip_count = 0usize;
+    let mut override_count_pre = 0usize;
+    let cells_to_run: Vec<&MatrixCell> = cells
         .iter()
-        .filter(|c| !already_done.contains(&c.cell_id))
+        .filter(|c| match build_identity(c, &sched_ver) {
+            Ok(identity) => {
+                let key = identity.run_key();
+                match registry.contains(&key) {
+                    Ok(true) => {
+                        if opts.override_existing {
+                            override_count_pre += 1;
+                            true
+                        } else {
+                            skip_count += 1;
+                            false
+                        }
+                    }
+                    _ => true, // registry miss (or error) → run it
+                }
+            }
+            Err(_) => true, // identity failure → attempt execution
+        })
         .collect();
 
+    let total = cells.len();
     eprintln!(
-        "lab: {} total cells, {} already completed, {} to run",
-        cells.len(),
-        already_done.len(),
-        pending.len()
+        "lab: {} total, {} skipped, {} to run",
+        total,
+        skip_count,
+        cells_to_run.len()
     );
 
-    // Prepare each unique dataset exactly once.
+    // ── Prepare each unique dataset exactly once ──────────────────────────────
     let mut prepared: HashMap<String, Arc<PreparedProblem>> = HashMap::new();
-    for cell in &pending {
+    for cell in &cells_to_run {
         if prepared.contains_key(&cell.dataset_id) {
             continue;
         }
@@ -154,70 +122,7 @@ pub fn execute_with_options(
         prepared.insert(cell.dataset_id.clone(), Arc::new(p));
     }
 
-    // ── Registry cache lookup ─────────────────────────────────────────────────
-    // Partition pending cells into registry hits and misses.
-    let (registry_hit_ids, cells_to_run): (HashSet<String>, Vec<&MatrixCell>) = if opts.cache {
-        let db_path = registry_path(opts.run_db.as_deref());
-        let registry = Registry::open(&db_path)?;
-
-        let sched_ver = scheduler_version();
-        let mut hits = HashSet::new();
-        let mut misses = Vec::new();
-
-        for cell in &pending {
-            match build_identity(cell, &sched_ver) {
-                Ok(identity) => {
-                    let key = identity.run_key();
-                    if registry.contains(&key)? {
-                        hits.insert(cell.cell_id.clone());
-                    } else {
-                        misses.push(*cell);
-                    }
-                }
-                Err(_) => {
-                    // If identity computation fails (e.g. file unreadable),
-                    // fall through to normal execution.
-                    misses.push(*cell);
-                }
-            }
-        }
-
-        if !hits.is_empty() {
-            eprintln!("lab: {} registry cache hits", hits.len());
-        }
-        (hits, misses)
-    } else {
-        (HashSet::new(), pending.clone())
-    };
-
-    // Emit synthetic completed events for registry hits.
-    let state_writer: Option<Arc<StateWriter>> = if opts.no_state_log || opts.suppress_artifacts {
-        None
-    } else {
-        Some(Arc::new(StateWriter::open_append(
-            &run_dir.join(output::STATE_FILE),
-        )?))
-    };
-
-    for cell in cells
-        .iter()
-        .filter(|c| registry_hit_ids.contains(&c.cell_id))
-    {
-        let now = Utc::now().to_rfc3339();
-        if let Some(w) = &state_writer {
-            let _ = w.append(&StateEvent {
-                cell_id: cell.cell_id.clone(),
-                status: CellStatus::Completed,
-                schedule_path: None, // no schedule written for cache hits
-                error: None,
-                started_at: now.clone(),
-                finished_at: Some(now),
-            });
-        } else {
-            eprintln!("● {} (registry cache hit)", cell.cell_id);
-        }
-    }
-
+    // ── Rayon pool ────────────────────────────────────────────────────────────
     let max_parallel = spec
         .max_parallel
         .map(|n| n.max(1))
@@ -227,18 +132,12 @@ pub fn execute_with_options(
         .build()
         .map_err(|e| format!("failed to build rayon pool: {e}"))?;
 
-    let run_dir_owned = run_dir.to_path_buf();
+    let registry_arc = Arc::new(Mutex::new(registry));
+    let done = Arc::new(AtomicUsize::new(0));
+    let fail = Arc::new(AtomicUsize::new(0));
+    let is_tty = std::io::stderr().is_terminal();
+    let run_total = cells_to_run.len();
 
-    // Shared registry for miss-path inserts.
-    let registry_arc: Option<Arc<Mutex<Registry>>> = if opts.cache {
-        let db_path = registry_path(opts.run_db.as_deref());
-        Some(Arc::new(Mutex::new(Registry::open(&db_path)?)))
-    } else {
-        None
-    };
-    let sched_ver = scheduler_version();
-
-    let suppress = opts.suppress_artifacts;
     let outcomes: Vec<CellOutcome> = pool.install(|| {
         cells_to_run
             .par_iter()
@@ -247,43 +146,64 @@ pub fn execute_with_options(
                     .get(&cell.dataset_id)
                     .expect("prepared dataset must exist")
                     .clone();
-                run_one_cell(
-                    cell,
-                    &prepared,
-                    &run_dir_owned,
-                    state_writer.as_deref(),
-                    registry_arc.as_deref(),
-                    &sched_ver,
-                    suppress,
-                )
+                let outcome = run_one_cell(cell, &prepared, &registry_arc, &sched_ver);
+                // Update progress counters and refresh the stderr line.
+                let (d, f) = match &outcome {
+                    CellOutcome::Done => {
+                        let d = done.fetch_add(1, Ordering::Relaxed) + 1;
+                        let f = fail.load(Ordering::Relaxed);
+                        (d, f)
+                    }
+                    CellOutcome::Failed { .. } => {
+                        let f = fail.fetch_add(1, Ordering::Relaxed) + 1;
+                        let d = done.load(Ordering::Relaxed);
+                        (d, f)
+                    }
+                };
+                let finished = d + f;
+                let pct = if run_total == 0 {
+                    100.0_f64
+                } else {
+                    finished as f64 / run_total as f64 * 100.0
+                };
+                if is_tty {
+                    eprint!("\r[{pct:>5.1}%] done={d} fail={f} / {run_total}   ");
+                } else {
+                    eprintln!("[{pct:>5.1}%] done={d} fail={f} / {run_total}");
+                }
+                outcome
             })
             .collect()
     });
+    if is_tty && run_total > 0 {
+        eprintln!(); // end progress line
+    }
 
     let mut completed = 0usize;
     let mut failed = 0usize;
     for o in &outcomes {
         match o {
-            CellOutcome::Done { .. } => completed += 1,
-            CellOutcome::Failed { .. } => failed += 1,
+            CellOutcome::Done => completed += 1,
+            CellOutcome::Failed { error, cell_id } => {
+                failed += 1;
+                eprintln!("  ✗ {cell_id}: {error}");
+            }
         }
     }
 
     Ok(RunSummary {
-        total: cells.len(),
-        already_done: already_done.len(),
-        registry_hits: registry_hit_ids.len(),
+        total,
+        skipped: skip_count,
+        overridden: override_count_pre,
         completed,
         failed,
-        run_dir: run_dir.to_path_buf(),
     })
 }
 
 // ── Internal types ────────────────────────────────────────────────────────────
 
-#[allow(dead_code)]
 enum CellOutcome {
-    Done { cell_id: String },
+    Done,
     Failed { cell_id: String, error: String },
 }
 
@@ -292,125 +212,55 @@ enum CellOutcome {
 fn run_one_cell(
     cell: &MatrixCell,
     prepared: &PreparedProblem,
-    run_dir: &Path,
-    state_writer: Option<&StateWriter>,
-    registry: Option<&Mutex<Registry>>,
+    registry: &Arc<Mutex<Registry>>,
     sched_ver: &str,
-    suppress_artifacts: bool,
 ) -> CellOutcome {
-    let started_at = Utc::now().to_rfc3339();
-    if let Some(w) = state_writer {
-        let _ = w.append(&StateEvent {
+    match run_cell_inner(cell, prepared, registry, sched_ver) {
+        Ok(()) => CellOutcome::Done,
+        Err(error) => CellOutcome::Failed {
             cell_id: cell.cell_id.clone(),
-            status: CellStatus::Started,
-            schedule_path: None,
-            error: None,
-            started_at: started_at.clone(),
-            finished_at: None,
-        });
-    } else {
-        eprintln!("▶ {}", cell.cell_id);
+            error,
+        },
     }
-
-    match run_cell_inner_impl(cell, prepared, run_dir, registry, sched_ver, suppress_artifacts) {
-        Ok(paths) => {
-            if let Some(w) = state_writer {
-                let _ = w.append(&StateEvent {
-                    cell_id: cell.cell_id.clone(),
-                    status: CellStatus::Completed,
-                    schedule_path: Some(paths.schedule_path.display().to_string()),
-                    error: None,
-                    started_at,
-                    finished_at: Some(Utc::now().to_rfc3339()),
-                });
-            } else {
-                eprintln!("✓ {}", cell.cell_id);
-            }
-            CellOutcome::Done {
-                cell_id: cell.cell_id.clone(),
-            }
-        }
-        Err(error) => {
-            if let Some(w) = state_writer {
-                let _ = w.append(&StateEvent {
-                    cell_id: cell.cell_id.clone(),
-                    status: CellStatus::Failed,
-                    schedule_path: None,
-                    error: Some(error.clone()),
-                    started_at,
-                    finished_at: Some(Utc::now().to_rfc3339()),
-                });
-            } else {
-                eprintln!("✗ {}: {error}", cell.cell_id);
-            }
-            CellOutcome::Failed {
-                cell_id: cell.cell_id.clone(),
-                error,
-            }
-        }
-    }
-}
-
-struct CellPaths {
-    schedule_path: PathBuf,
 }
 
 fn run_cell_inner(
     cell: &MatrixCell,
     prepared: &PreparedProblem,
-    run_dir: &Path,
-    registry: Option<&Mutex<Registry>>,
+    registry: &Arc<Mutex<Registry>>,
     sched_ver: &str,
-) -> Result<CellPaths, String> {
-    // shim kept for compatibility; this function now forwards to the
-    // inner implementation below that takes the suppress flag.
-    run_cell_inner_impl(cell, prepared, run_dir, registry, sched_ver, false)
-}
-
-fn run_cell_inner_impl(
-    cell: &MatrixCell,
-    prepared: &PreparedProblem,
-    run_dir: &Path,
-    registry: Option<&Mutex<Registry>>,
-    sched_ver: &str,
-    suppress_artifacts: bool,
-) -> Result<CellPaths, String> {
-    let schedule_path = output::schedule_path(run_dir, &cell.cell_id);
-
+) -> Result<(), String> {
     let scheduler_started = Instant::now();
-    let (schedule,) = match cell.run_config {
+    let schedule = match cell.run_config {
         RunConfig::Est(config) => {
             let scheduler = config.build_scheduler()?;
-            let schedule = scheduler
+            scheduler
                 .run(
                     &prepared.problem,
                     &prepared.possible_periods,
                     &prepared.horizon,
                 )
-                .map_err(|e| format!("EST run {} failed: {e}", cell.cell_id))?;
-            (schedule,)
+                .map_err(|e| format!("EST run {} failed: {e}", cell.cell_id))?
         }
         RunConfig::Hap(config) => {
             let scheduler = config.build_scheduler()?;
-            let schedule = scheduler
+            scheduler
                 .run(
                     &prepared.problem,
                     &prepared.possible_periods,
                     &prepared.horizon,
                 )
-                .map_err(|e| format!("HAP run {} failed: {e}", cell.cell_id))?;
-            (schedule,)
+                .map_err(|e| format!("HAP run {} failed: {e}", cell.cell_id))?
         }
         RunConfig::Lst(config) => {
             let scheduler = config.build_scheduler()?;
-            let schedule = scheduler
+            scheduler
                 .run(
                     &prepared.problem,
                     &prepared.possible_periods,
                     &prepared.horizon,
                 )
-                .map_err(|e| format!("LST run {} failed: {e}", cell.cell_id))?;
-            (schedule,)
+                .map_err(|e| format!("LST run {} failed: {e}", cell.cell_id))?
         }
     };
     let scheduler_runtime_ms = scheduler_started.elapsed().as_secs_f64() * 1000.0;
@@ -420,26 +270,26 @@ fn run_cell_inner_impl(
     let mut metrics =
         ScheduleMetrics::compute(&schedule, &prepared.problem, &prepared.horizon, &ctx);
     metrics.scheduler_runtime_ms = Some(scheduler_runtime_ms);
+
     let metrics_value =
         serde_json::to_value(&metrics).map_err(|e| format!("failed to serialize metrics: {e}"))?;
     let output_obj = ScheduleOutput::new(prepared.raw_json.clone(), &schedule, Some(metadata))
         .with_metrics(metrics_value);
-    let text = serde_json::to_string_pretty(&output_obj)
+    let schedule_json = serde_json::to_string_pretty(&output_obj)
         .map_err(|e| format!("failed to serialize schedule {}: {e}", cell.cell_id))?;
-    if !suppress_artifacts {
-        fs::write(&schedule_path, text)
-            .map_err(|e| format!("failed to write {}: {e}", schedule_path.display()))?;
+    let metrics_json = serde_json::to_string(&metrics).unwrap_or_else(|_| "{}".to_string());
+
+    let identity = build_identity(cell, sched_ver)?;
+    if let Ok(reg) = registry.lock() {
+        reg.upsert(
+            &identity,
+            &metrics_json,
+            Some(schedule_json.as_str()),
+            Some(cell.cell_id.as_str()),
+        )?;
     }
 
-    // Insert into registry on success (cache mode only).
-    if let Some(reg_mutex) = registry && let Ok(identity) = build_identity(cell, sched_ver) {
-        let metrics_json = serde_json::to_string(&metrics).unwrap_or_else(|_| "{}".to_string());
-        if let Ok(reg) = reg_mutex.lock() {
-            let _ = reg.upsert(&identity, &metrics_json, Some(&cell.cell_id));
-        }
-    }
-
-    Ok(CellPaths { schedule_path })
+    Ok(())
 }
 
 /// Builds a [`RunIdentity`] for a cell.

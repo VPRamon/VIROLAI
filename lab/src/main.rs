@@ -9,18 +9,14 @@
 //!
 //! ```text
 //! lab run --spec <experiment.json>
-//!                 [--resume <existing_run_dir>]
-//!                 [--output-dir <dir>]
-//!                 [--dry-run]
-//!                 [--cache] [--run-db <PATH>]
+//!                 [--run-db <PATH>]
+//!                 [--override]
 //! ```
 //!
 //! Loads an experiment spec, resolves the Cartesian product of cells,
-//! and executes them in parallel.  With `--resume` it skips cells
-//! already marked `completed` in the existing run's `state.jsonl`.
-//! With `--dry-run` it only resolves cells and writes
-//! `experiment.json` without running any scheduler.
-//! With `--cache` it enables the SQLite registry cache.
+//! skips cells already in the registry, and runs the rest in parallel.
+//! With `--override`, existing registry rows are re-executed and updated.
+//! All results (metrics and schedule JSON) are stored in SQLite.
 //!
 //! ## `registry`
 //!
@@ -37,21 +33,22 @@
 //! lab registry pareto [--dataset <ID>] [--algorithm <NAME>]
 //!                     [--maximize <METRIC>]... [--minimize <METRIC>]...
 //! lab registry inspect --run <KEY_OR_PREFIX> [--run-db <PATH>]
-//! lab registry regenerate --run <KEY_OR_PREFIX> --out <FILE>
-//!                         [--run-db <PATH>] [--force]
+//! lab registry export  --run <KEY_OR_PREFIX> --out <FILE> [--force]
+//!                      [--run-db <PATH>]
+//! lab registry export  --out-dir <DIR>
+//!                      [--dataset <ID>] [--algorithm <NAME>]
+//!                      [--metric <NAME> --min <VAL> --max <VAL>]
+//!                      [--sort <METRIC:DIR>]... [--limit <N>]
+//!                      [--force] [--run-db <PATH>]
 //! ```
 
 use clap::{Parser, Subcommand};
 use lab::cell::resolve_cells;
-use lab::output;
 use lab::registry::{
-    BestOpts, ListOpts, Registry, RunIdentity, RunRow, SortKey, default_sort_keys, parse_sort_key,
-    registry_path,
+    BestOpts, ListOpts, Registry, RunRow, SortKey, default_sort_keys, parse_sort_key, registry_path,
 };
-use lab::runner::{RunOptions, execute_with_options};
+use lab::runner::{RunOptions, execute};
 use lab::spec::ExperimentSpec;
-use schedulers::metrics::{MetricsContext, ScheduleMetrics};
-use schedulers::schedule::{LocationMeta, PeriodMeta, ScheduleMetadata, ScheduleOutput};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -85,39 +82,15 @@ struct RunArgs {
     #[arg(long, value_name = "FILE")]
     spec: PathBuf,
 
-    /// Resume an existing run directory, skipping already-completed cells.
-    #[arg(long, value_name = "DIR")]
-    resume: Option<PathBuf>,
-
-    /// Override the output directory declared in the spec (only meaningful
-    /// with `--dry-run`).
-    #[arg(long, value_name = "DIR")]
-    output_dir: Option<PathBuf>,
-
-    /// Resolve cells and write `experiment.json` without executing any
-    /// scheduler runs.
-    #[arg(long)]
-    dry_run: bool,
-
-    /// Skip writing `state.jsonl` entirely; print per-cell progress to stderr
-    /// instead.  Incompatible with `--resume`.
-    #[arg(long)]
-    no_state: bool,
-
-    /// Do not write any filesystem artifacts (experiment.json, schedules, state).
-    /// Results will only be recorded in the registry DB. Implies `--cache`.
-    #[arg(long)]
-    db_only: bool,
-
-    /// Enable SQLite registry cache: skip cells whose identity already exists
-    /// in the registry and insert successful runs after execution.
-    #[arg(long)]
-    cache: bool,
-
     /// Path to the SQLite registry file.
-    /// Defaults to `.lab/runs.sqlite` when `--cache` is enabled.
+    /// Defaults to `.lab/runs.sqlite`.
     #[arg(long, value_name = "PATH")]
     run_db: Option<PathBuf>,
+
+    /// Re-execute cells that already have a row in the registry and update
+    /// their stored metrics and schedule JSON.
+    #[arg(long = "override")]
+    override_existing: bool,
 }
 
 // ── `registry` sub-command ────────────────────────────────────────────────────
@@ -142,8 +115,8 @@ enum RegistryCmd {
     Pareto(RegistryParetoArgs),
     /// Inspect a single run record.
     Inspect(RegistryInspectArgs),
-    /// Regenerate a schedule JSON from a stored registry record.
-    Regenerate(RegistryRegenerateArgs),
+    /// Export stored schedule JSON from the registry.
+    Export(RegistryExportArgs),
 }
 
 #[derive(Parser, Debug)]
@@ -312,16 +285,49 @@ struct RegistryInspectArgs {
 }
 
 #[derive(Parser, Debug)]
-struct RegistryRegenerateArgs {
-    /// Full run key or unique prefix.
+struct RegistryExportArgs {
+    /// Full run key or unique prefix for single-run export. Requires `--out`.
     #[arg(long, value_name = "KEY")]
-    run: String,
+    run: Option<String>,
 
-    /// Output schedule JSON file.
+    /// Output file for single-run export. Requires `--run`.
     #[arg(long, value_name = "FILE")]
-    out: PathBuf,
+    out: Option<PathBuf>,
 
-    /// Overwrite the output file if it already exists.
+    /// Output directory for filtered multi-run export.
+    #[arg(long, value_name = "DIR")]
+    out_dir: Option<PathBuf>,
+
+    /// Filter by dataset ID (filtered export).
+    #[arg(long, value_name = "ID")]
+    dataset: Option<String>,
+
+    /// Filter by algorithm name (filtered export).
+    #[arg(long, value_name = "NAME")]
+    algorithm: Option<String>,
+
+    /// Metric column for `--min` / `--max` filtering (filtered export).
+    #[arg(long, value_name = "NAME")]
+    metric: Option<String>,
+
+    /// Minimum metric value (inclusive, filtered export).
+    #[arg(long, value_name = "VAL")]
+    min: Option<f64>,
+
+    /// Maximum metric value (inclusive, filtered export).
+    #[arg(long, value_name = "VAL")]
+    max: Option<f64>,
+
+    /// Sort key in `metric:asc` or `metric:desc` form (filtered export).
+    /// Alias: `--by`.
+    #[arg(long = "sort", alias = "by", value_name = "METRIC:DIR")]
+    sort: Vec<String>,
+
+    /// Maximum number of rows to export (filtered export, default: 100).
+    #[arg(long, value_name = "N")]
+    limit: Option<usize>,
+
+    /// Overwrite output file(s) if they already exist.
     #[arg(long)]
     force: bool,
 
@@ -354,76 +360,19 @@ fn dispatch(cmd: Cmd) -> Result<(), String> {
 // ── `run` implementation ──────────────────────────────────────────────────────
 
 fn run(args: RunArgs) -> Result<(), String> {
-    if args.no_state && args.resume.is_some() {
-        return Err("--no-state and --resume are mutually exclusive".to_string());
-    }
-
     let spec = load_spec(&args.spec)?;
     let cells = resolve_cells(&spec)?;
-
-    if args.dry_run {
-        let target = args
-            .output_dir
-            .as_deref()
-            .unwrap_or(&spec.output_dir)
-            .to_path_buf();
-        let run_dir = output::create_run_dir(&target, &spec.name)?;
-        output::write_manifest(&run_dir, &spec, &cells)?;
-        println!(
-            "[dry-run] resolved {} cells; manifest -> {}",
-            cells.len(),
-            run_dir.join(output::EXPERIMENT_FILE).display()
-        );
-        for c in &cells {
-            println!("  {}", c.cell_id);
-        }
-        return Ok(());
-    }
-
-    let (run_dir, resume, wrote_manifest) = if let Some(existing) = args.resume.as_ref() {
-        (existing.clone(), true, true)
-    } else if args.db_only {
-        // In db-only mode we avoid creating any run directory or writing
-        // filesystem artifacts. Use a placeholder run_dir (not touched).
-        (PathBuf::from("."), false, false)
-    } else {
-        let dir = output::create_run_dir(&spec.output_dir, &spec.name)?;
-        output::write_manifest(&dir, &spec, &cells)?;
-        (dir, false, true)
-    };
-
-    // If db_only was requested, enable cache/registry mode implicitly.
-    let cache = args.cache || args.db_only;
     let opts = RunOptions {
-        resume,
-        no_state_log: args.no_state || args.db_only,
-        cache,
-        run_db: args.run_db.clone(),
-        suppress_artifacts: args.db_only,
+        run_db: args.run_db,
+        override_existing: args.override_existing,
     };
-    let summary = execute_with_options(&spec, &cells, &run_dir, opts)?;
+    let summary = execute(&spec, &cells, opts)?;
     println!(
-        "lab run done: {} cells total, {} skipped (resume), {} registry hits, {} completed, {} failed",
-        summary.total,
-        summary.already_done,
-        summary.registry_hits,
-        summary.completed,
-        summary.failed
+        "lab run done: {} total, {} skipped, {} overridden, {} completed, {} failed",
+        summary.total, summary.skipped, summary.overridden, summary.completed, summary.failed
     );
-    if wrote_manifest {
-        println!("artifacts -> {}", summary.run_dir.display());
-    } else {
-        println!("artifacts suppressed (db-only mode)");
-    }
     if summary.failed > 0 {
-        if args.no_state {
-            return Err(format!("{} cell(s) failed", summary.failed));
-        }
-        return Err(format!(
-            "{} cell(s) failed; see {}",
-            summary.failed,
-            run_dir.join(output::STATE_FILE).display()
-        ));
+        return Err(format!("{} cell(s) failed", summary.failed));
     }
     Ok(())
 }
@@ -438,7 +387,7 @@ fn registry(args: RegistryArgs) -> Result<(), String> {
         RegistryCmd::Rank(a) => registry_rank(a),
         RegistryCmd::Pareto(a) => registry_pareto(a),
         RegistryCmd::Inspect(a) => registry_inspect(a),
-        RegistryCmd::Regenerate(a) => registry_regenerate(a),
+        RegistryCmd::Export(a) => registry_export(a),
     }
 }
 
@@ -628,119 +577,118 @@ fn registry_inspect(args: RegistryInspectArgs) -> Result<(), String> {
     Ok(())
 }
 
-// ── `registry regenerate` ─────────────────────────────────────────────────────
+// ── `registry export` ─────────────────────────────────────────────────────────
 
-fn registry_regenerate(args: RegistryRegenerateArgs) -> Result<(), String> {
-    if args.out.exists() && !args.force {
-        return Err(format!(
-            "output file '{}' already exists; use --force to overwrite",
-            args.out.display()
-        ));
+fn registry_export(args: RegistryExportArgs) -> Result<(), String> {
+    match (&args.run, &args.out, &args.out_dir) {
+        (Some(key), Some(out), None) => {
+            // Single-run export: read stored schedule_json and write to --out.
+            if out.exists() && !args.force {
+                return Err(format!(
+                    "output file '{}' already exists; use --force to overwrite",
+                    out.display()
+                ));
+            }
+            let db_path = registry_path(args.run_db.as_deref());
+            let reg = Registry::open(&db_path)?;
+            let full_key = if key.len() == 64 {
+                key.clone()
+            } else {
+                reg.resolve_prefix(key)?
+            };
+            let row = reg
+                .get_row(&full_key)?
+                .ok_or_else(|| format!("no run found for key '{full_key}'"))?;
+            let json = row.schedule_json.ok_or_else(|| {
+                format!(
+                    "run '{}' has no stored schedule JSON; rerun with `lab run --override` to regenerate",
+                    &full_key[..full_key.len().min(16)]
+                )
+            })?;
+            std::fs::write(out, json)
+                .map_err(|e| format!("failed to write {}: {e}", out.display()))?;
+            println!("exported -> {}", out.display());
+            Ok(())
+        }
+        (None, None, Some(out_dir)) => {
+            // Filtered multi-run export.
+            if !out_dir.exists() {
+                std::fs::create_dir_all(out_dir)
+                    .map_err(|e| format!("failed to create output dir: {e}"))?;
+            }
+            let db_path = registry_path(args.run_db.as_deref());
+            let reg = Registry::open(&db_path)?;
+            let sort = parse_sort_keys(&args.sort)?;
+            let rows = reg.list(&ListOpts {
+                dataset: args.dataset,
+                algorithm: args.algorithm,
+                metric: args.metric,
+                min: args.min,
+                max: args.max,
+                sort,
+                limit: args.limit.or(Some(100)),
+            })?;
+            let mut exported = 0usize;
+            let mut unavailable = 0usize;
+            // Track filenames to detect collisions within this batch.
+            let mut used_names: std::collections::HashSet<String> =
+                std::collections::HashSet::new();
+            for row in &rows {
+                let Some(json) = &row.schedule_json else {
+                    eprintln!(
+                        "  skip (no schedule_json): {} — rerun with `lab run --override`",
+                        &row.run_key[..row.run_key.len().min(16)]
+                    );
+                    unavailable += 1;
+                    continue;
+                };
+                // Build filename: <dataset>__<algorithm>__<config>.json
+                let base_name = format!(
+                    "{}__{}__{}.json",
+                    row.dataset_id, row.algorithm, row.config_slug
+                );
+                let filename = if used_names.contains(&base_name) {
+                    // Collision: append run_key prefix.
+                    let key_prefix = &row.run_key[..row.run_key.len().min(8)];
+                    format!(
+                        "{}__{}__{}__{}.json",
+                        row.dataset_id, row.algorithm, row.config_slug, key_prefix
+                    )
+                } else {
+                    base_name.clone()
+                };
+                used_names.insert(filename.clone());
+                used_names.insert(base_name);
+                let dest = out_dir.join(&filename);
+                if dest.exists() && !args.force {
+                    eprintln!("  skip (exists, use --force): {}", dest.display());
+                    continue;
+                }
+                std::fs::write(&dest, json)
+                    .map_err(|e| format!("failed to write {}: {e}", dest.display()))?;
+                exported += 1;
+            }
+            println!(
+                "exported {exported} schedule(s) to {}{}",
+                out_dir.display(),
+                if unavailable > 0 {
+                    format!(" ({unavailable} skipped: no schedule_json)")
+                } else {
+                    String::new()
+                }
+            );
+            Ok(())
+        }
+        (Some(_), None, _) => Err("--run requires --out for single-run export".to_string()),
+        (None, Some(_), _) => Err("--out requires --run for single-run export".to_string()),
+        (Some(_), Some(_), Some(_)) => {
+            Err("--out and --out-dir are mutually exclusive".to_string())
+        }
+        (None, None, None) => Err(
+            "registry export requires either --run + --out (single) or --out-dir (filtered)"
+                .to_string(),
+        ),
     }
-
-    let db_path = registry_path(args.run_db.as_deref());
-    let reg = Registry::open(&db_path)?;
-    let key = if args.run.len() == 64 {
-        args.run.clone()
-    } else {
-        reg.resolve_prefix(&args.run)?
-    };
-    let row = reg
-        .get_row(&key)?
-        .ok_or_else(|| format!("no run found for key '{key}'"))?;
-
-    let identity: RunIdentity = serde_json::from_str(&row.identity_json)
-        .map_err(|e| format!("failed to parse stored identity: {e}"))?;
-
-    // Reconstruct run config from stored config_json.
-    let run_config: lab::config::RunConfig = serde_json::from_str(&identity.config_json)
-        .map_err(|e| format!("failed to parse stored config JSON: {e}"))?;
-
-    // Parse horizon override if present.
-    let horizon_override = identity
-        .horizon_json
-        .as_deref()
-        .map(serde_json::from_str::<lab::config::HorizonOverride>)
-        .transpose()
-        .map_err(|e: serde_json::Error| format!("failed to parse stored horizon: {e}"))?;
-
-    let dataset_path = PathBuf::from(&identity.dataset_path);
-    let prepared = lab::problem::prepare_problem(&dataset_path, horizon_override).map_err(|e| {
-        format!(
-            "failed to prepare dataset '{}': {e}",
-            dataset_path.display()
-        )
-    })?;
-
-    use std::time::Instant;
-    let started = Instant::now();
-    let schedule = match run_config {
-        lab::config::RunConfig::Est(cfg) => {
-            let scheduler = cfg.build_scheduler()?;
-            scheduler
-                .run(
-                    &prepared.problem,
-                    &prepared.possible_periods,
-                    &prepared.horizon,
-                )
-                .map_err(|e| format!("EST regenerate failed: {e}"))?
-        }
-        lab::config::RunConfig::Hap(cfg) => {
-            let scheduler = cfg.build_scheduler()?;
-            scheduler
-                .run(
-                    &prepared.problem,
-                    &prepared.possible_periods,
-                    &prepared.horizon,
-                )
-                .map_err(|e| format!("HAP regenerate failed: {e}"))?
-        }
-        lab::config::RunConfig::Lst(cfg) => {
-            let scheduler = cfg.build_scheduler()?;
-            scheduler
-                .run(
-                    &prepared.problem,
-                    &prepared.possible_periods,
-                    &prepared.horizon,
-                )
-                .map_err(|e| format!("LST regenerate failed: {e}"))?
-        }
-    };
-    let runtime_ms = started.elapsed().as_secs_f64() * 1000.0;
-
-    let ctx = MetricsContext::new();
-    let mut metrics =
-        ScheduleMetrics::compute(&schedule, &prepared.problem, &prepared.horizon, &ctx);
-    metrics.scheduler_runtime_ms = Some(runtime_ms);
-    let metrics_value =
-        serde_json::to_value(&metrics).map_err(|e| format!("failed to serialize metrics: {e}"))?;
-
-    let location = prepared.problem.telescope.as_ref().map(|t| LocationMeta {
-        name: t.name.clone(),
-        longitude_deg: t.location.lon.value(),
-        latitude_deg: t.location.lat.value(),
-        height_m: t.location.height.value(),
-    });
-    let period = Some(PeriodMeta {
-        start_mjd_utc: prepared.horizon.start.value(),
-        end_mjd_utc: prepared.horizon.end.value(),
-    });
-    let metadata = ScheduleMetadata {
-        algorithm: run_config.algorithm().to_string(),
-        algorithm_config: serde_json::from_str(&identity.config_json).unwrap_or_default(),
-        location,
-        period,
-        dataset_id: Some(identity.dataset_id.clone()),
-        dataset_label: None,
-    };
-    let output_obj = ScheduleOutput::new(prepared.raw_json.clone(), &schedule, Some(metadata))
-        .with_metrics(metrics_value);
-    let text = serde_json::to_string_pretty(&output_obj)
-        .map_err(|e| format!("failed to serialize schedule: {e}"))?;
-    std::fs::write(&args.out, text)
-        .map_err(|e| format!("failed to write {}: {e}", args.out.display()))?;
-    println!("regenerated -> {}", args.out.display());
-    Ok(())
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -1060,8 +1008,9 @@ fn compare_rows_by_default_policy(a: &RunRow, b: &RunRow) -> std::cmp::Ordering 
 // ── Spec loading ──────────────────────────────────────────────────────────────
 
 /// Loads and deserialises an [`ExperimentSpec`] from `path`, resolving
-/// relative `datasets[*].path` and `output_dir` entries against the spec
-/// file's parent directory.
+/// relative `datasets[*].path` entries against the spec file's parent
+/// directory.  The `output_dir` field is optional and kept only for backward
+/// compatibility with existing spec files; the runner ignores it.
 fn load_spec(path: &Path) -> Result<ExperimentSpec, String> {
     let text = std::fs::read_to_string(path)
         .map_err(|e| format!("failed to read spec {}: {e}", path.display()))?;
@@ -1072,11 +1021,14 @@ fn load_spec(path: &Path) -> Result<ExperimentSpec, String> {
     for d in &mut spec.datasets {
         d.path = resolve_relative(base, &d.path);
     }
-    spec.output_dir = if spec.output_dir.is_absolute() {
-        spec.output_dir.clone()
-    } else {
-        base.join(&spec.output_dir)
-    };
+    // Resolve output_dir relative to spec location if present.
+    if let Some(ref dir) = spec.output_dir {
+        spec.output_dir = Some(if dir.is_absolute() {
+            dir.clone()
+        } else {
+            base.join(dir)
+        });
+    }
     Ok(spec)
 }
 
@@ -1112,6 +1064,7 @@ mod tests {
             config_slug: "e2-k1-b1-future_flexibility".to_string(),
             identity_json: "{}".to_string(),
             metrics_json: metrics_json.to_string(),
+            schedule_json: None,
             created_at: "2024-05-26T10:00:00Z".to_string(),
             last_seen_at: "2024-05-26T10:00:00Z".to_string(),
             source_cell_id: None,

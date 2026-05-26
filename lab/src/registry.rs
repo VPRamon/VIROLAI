@@ -217,6 +217,7 @@ CREATE INDEX IF NOT EXISTS idx_runs_scheduled_time_ratio ON runs (scheduled_time
             ("requested_time_sec", "REAL"),
             ("scheduled_time_sec", "REAL"),
             ("scheduled_time_ratio", "REAL"),
+            ("schedule_json", "TEXT"),
         ] {
             self.ensure_column("runs", col, ty)?;
         }
@@ -248,11 +249,13 @@ CREATE INDEX IF NOT EXISTS idx_runs_scheduled_time_ratio ON runs (scheduled_time
     /// Inserts or updates a successful run record.
     ///
     /// On conflict (same `run_key`) the `last_seen_at` timestamp and the
-    /// stored metrics are refreshed.
+    /// stored metrics are refreshed.  If `schedule_json` is `Some`, the
+    /// stored schedule is also updated.
     pub fn upsert(
         &self,
         identity: &RunIdentity,
         metrics_json: &str,
+        schedule_json: Option<&str>,
         source_cell_id: Option<&str>,
     ) -> Result<(), String> {
         let run_key = identity.run_key();
@@ -279,18 +282,19 @@ CREATE INDEX IF NOT EXISTS idx_runs_scheduled_time_ratio ON runs (scheduled_time
                     run_key, dataset_id, dataset_path, dataset_hash,
                     algorithm, config_slug, config_json, horizon_json,
                     scheduler_version, metrics_version,
-                    identity_json, metrics_json,
+                    identity_json, metrics_json, schedule_json,
                     task_ratio, priority_ratio, priority_density,
                     utilization, fragmentation_index, runtime_ms,
                     requested_time_sec, scheduled_time_sec, scheduled_time_ratio,
                     created_at, last_seen_at, source_cell_id
                 ) VALUES (
                     ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10,
-                    ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18,
-                    ?19, ?20, ?21, ?22, ?23, ?24
+                    ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19,
+                    ?20, ?21, ?22, ?23, ?24, ?25
                 )
                 ON CONFLICT(run_key) DO UPDATE SET
                     metrics_json          = excluded.metrics_json,
+                    schedule_json         = COALESCE(excluded.schedule_json, runs.schedule_json),
                     task_ratio            = excluded.task_ratio,
                     priority_ratio        = excluded.priority_ratio,
                     priority_density      = excluded.priority_density,
@@ -314,6 +318,7 @@ CREATE INDEX IF NOT EXISTS idx_runs_scheduled_time_ratio ON runs (scheduled_time
                     identity.metrics_version,
                     identity_json,
                     metrics_json,
+                    schedule_json,
                     task_ratio,
                     priority_ratio,
                     priority_density,
@@ -367,7 +372,7 @@ CREATE INDEX IF NOT EXISTS idx_runs_scheduled_time_ratio ON runs (scheduled_time
             .conn
             .query_row(
                 "SELECT run_key, dataset_id, dataset_path, algorithm, config_slug,
-                        identity_json, metrics_json, created_at, last_seen_at, source_cell_id
+                        identity_json, metrics_json, schedule_json, created_at, last_seen_at, source_cell_id
                    FROM runs WHERE run_key = ?1",
                 params![run_key],
                 row_to_run_row,
@@ -465,7 +470,7 @@ CREATE INDEX IF NOT EXISTS idx_runs_scheduled_time_ratio ON runs (scheduled_time
 
         let sql = format!(
             "SELECT run_key, dataset_id, dataset_path, algorithm, config_slug,
-                    identity_json, metrics_json, created_at, last_seen_at, source_cell_id
+                    identity_json, metrics_json, schedule_json, created_at, last_seen_at, source_cell_id
                FROM runs {where_clause} ORDER BY {order} LIMIT {limit}"
         );
 
@@ -517,7 +522,7 @@ CREATE INDEX IF NOT EXISTS idx_runs_scheduled_time_ratio ON runs (scheduled_time
 
         let sql = format!(
             "SELECT run_key, dataset_id, dataset_path, algorithm, config_slug,
-                    identity_json, metrics_json, created_at, last_seen_at, source_cell_id
+                    identity_json, metrics_json, schedule_json, created_at, last_seen_at, source_cell_id
                FROM runs {where_clause} ORDER BY {order} LIMIT {limit}"
         );
 
@@ -657,6 +662,7 @@ pub struct RunRow {
     pub config_slug: String,
     pub identity_json: String,
     pub metrics_json: String,
+    pub schedule_json: Option<String>,
     pub created_at: String,
     pub last_seen_at: String,
     pub source_cell_id: Option<String>,
@@ -671,9 +677,10 @@ fn row_to_run_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RunRow> {
         config_slug: row.get(4)?,
         identity_json: row.get(5)?,
         metrics_json: row.get(6)?,
-        created_at: row.get(7)?,
-        last_seen_at: row.get(8)?,
-        source_cell_id: row.get(9)?,
+        schedule_json: row.get(7)?,
+        created_at: row.get(8)?,
+        last_seen_at: row.get(9)?,
+        source_cell_id: row.get(10)?,
     })
 }
 
@@ -831,7 +838,7 @@ mod tests {
         let key = id.run_key();
 
         assert!(!reg.contains(&key).unwrap());
-        reg.upsert(&id, SAMPLE_METRICS, Some("ds1__est__e1-k1-b1"))
+        reg.upsert(&id, SAMPLE_METRICS, None, Some("ds1__est__e1-k1-b1"))
             .unwrap();
         assert!(reg.contains(&key).unwrap());
 
@@ -844,9 +851,9 @@ mod tests {
     fn upsert_refreshes_existing_record() {
         let (reg, _dir) = open_temp_registry();
         let id = make_identity("deadbeef", r#"{"k_beams":1}"#);
-        reg.upsert(&id, SAMPLE_METRICS, None).unwrap();
+        reg.upsert(&id, SAMPLE_METRICS, None, None).unwrap();
         // Second upsert should not error.
-        reg.upsert(&id, SAMPLE_METRICS, None).unwrap();
+        reg.upsert(&id, SAMPLE_METRICS, None, None).unwrap();
         // Only one row should exist.
         let rows = reg
             .list(&ListOpts {
@@ -868,8 +875,8 @@ mod tests {
         id2.dataset_id = "ds2".to_string();
         id2.config_slug = "e1-k2-b1".to_string();
 
-        reg.upsert(&id1, SAMPLE_METRICS, None).unwrap();
-        reg.upsert(&id2, SAMPLE_METRICS, None).unwrap();
+        reg.upsert(&id1, SAMPLE_METRICS, None, None).unwrap();
+        reg.upsert(&id2, SAMPLE_METRICS, None, None).unwrap();
 
         let rows = reg
             .list(&ListOpts {
@@ -893,8 +900,8 @@ mod tests {
         let mut id_b = make_identity("hash1", r#"{"k_beams":2}"#);
         id_b.config_slug = "e1-k2-b1".to_string();
 
-        reg.upsert(&id_a, metrics_a, None).unwrap();
-        reg.upsert(&id_b, metrics_b, None).unwrap();
+        reg.upsert(&id_a, metrics_a, None, None).unwrap();
+        reg.upsert(&id_b, metrics_b, None, None).unwrap();
 
         let rows = reg
             .best(&BestOpts {
@@ -920,7 +927,7 @@ mod tests {
         let (reg, _dir) = open_temp_registry();
         let id = make_identity("deadbeef", r#"{"k_beams":1}"#);
         let key = id.run_key();
-        reg.upsert(&id, SAMPLE_METRICS, None).unwrap();
+        reg.upsert(&id, SAMPLE_METRICS, None, None).unwrap();
 
         let prefix = &key[..16];
         let resolved = reg.resolve_prefix(prefix).unwrap();

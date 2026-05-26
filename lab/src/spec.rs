@@ -52,7 +52,12 @@ pub struct ExperimentSpec {
     #[serde(default)]
     pub max_parallel: Option<usize>,
     /// Root directory for all output artifacts.
-    pub output_dir: PathBuf,
+    ///
+    /// This field is kept only so older experiment specs still deserialise
+    /// cleanly.  The DB-only runner ignores this value; schedule JSON is
+    /// stored in the SQLite registry instead.
+    #[serde(default)]
+    pub output_dir: Option<PathBuf>,
 }
 
 /// A single input dataset entry in an experiment spec.
@@ -241,6 +246,29 @@ mod tests {
         assert_eq!(r.scheduled_priority, 0.0);
         assert_eq!(r.utilization, 1.0);
         assert_eq!(r.fragmentation, 1.0);
+    }
+
+    #[test]
+    fn spec_without_output_dir_is_accepted() {
+        let json = r#"{
+            "name": "no-dir",
+            "datasets": [{ "id": "ds", "path": "data/ds.json" }],
+            "algorithms": [{ "kind": "est", "axes": { "k_beams": [1] } }]
+        }"#;
+        let spec: ExperimentSpec = serde_json::from_str(json).expect("parse without output_dir");
+        assert!(spec.output_dir.is_none());
+    }
+
+    #[test]
+    fn spec_with_output_dir_still_parses() {
+        let json = r#"{
+            "name": "with-dir",
+            "datasets": [{ "id": "ds", "path": "data/ds.json" }],
+            "algorithms": [{ "kind": "est", "axes": { "k_beams": [1] } }],
+            "output_dir": "out/with-dir"
+        }"#;
+        let spec: ExperimentSpec = serde_json::from_str(json).expect("parse with output_dir");
+        assert!(spec.output_dir.is_some());
     }
 
     #[test]
