@@ -254,3 +254,8 @@ cargo run -p schedulers --bin schedulers -- \
   --est-fom future_flexibility \
   --output out/schedule-lst.json
 ```
+
+
+run sweep
+
+cargo run -p lab --bin lab --release -- run   --spec lab/sweep-custom.json   --cache   --run-db .lab/runs-new.sqlite

@@ -8,6 +8,11 @@
       "id": "isdc_n",
       "path": "datasets/isdc_n.json",
       "label": "ISDC North"
+    },
+    {
+      "id": "isdc_s",
+      "path": "datasets/isdc_s.json",
+      "label": "ISDC South"
     }
   ],
 
