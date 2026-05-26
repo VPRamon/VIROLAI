@@ -2,35 +2,25 @@
 
 use lab::registry::RunRow;
 
-use super::format::parse_metrics;
+use super::format::{is_known_metric, metric_opt, parse_metrics};
 
+/// Extracts a metric value for scoring, defaulting absent/null fields to 0.0.
+///
+/// Returns `Err` for composite metrics (use `registry rank` instead) and for
+/// unknown metric names.  The actual JSON extraction delegates to
+/// [`metric_opt`] so the lookup logic lives in one place.
 pub(super) fn metric_value(mv: &serde_json::Value, metric: &str) -> Result<f64, String> {
-    match metric {
-        "task_ratio" | "scheduled_task_ratio" => {
-            Ok(mv["scheduled_task_ratio"].as_f64().unwrap_or(0.0))
-        }
-        "scheduled_task_count" => Ok(mv["scheduled_task_count"].as_f64().unwrap_or(0.0)),
-        "scheduled_priority_sum" => Ok(mv["scheduled_priority_sum"].as_f64().unwrap_or(0.0)),
-        "priority_ratio" | "scheduled_priority_ratio" => {
-            Ok(mv["scheduled_priority_ratio"].as_f64().unwrap_or(0.0))
-        }
-        "priority_density" => Ok(mv["priority_density"].as_f64().unwrap_or(0.0)),
-        "scheduled_time_sec" => Ok(mv["scheduled_time_sec"].as_f64().unwrap_or(0.0)),
-        "requested_time_sec" => Ok(mv["requested_time_sec"].as_f64().unwrap_or(0.0)),
-        "scheduled_time_ratio" => Ok(mv["scheduled_time_ratio"].as_f64().unwrap_or(0.0)),
-        "utilization" => Ok(mv["utilization"].as_f64().unwrap_or(0.0)),
-        "fragmentation_index" => Ok(mv["fragmentation"]["fragmentation_index"]
-            .as_f64()
-            .unwrap_or(0.0)),
-        "runtime_ms" | "scheduler_runtime_ms" => {
-            Ok(mv["scheduler_runtime_ms"].as_f64().unwrap_or(0.0))
-        }
-        "composite_score" | "composite_rank_score" => Err(
-            "composite_rank_score is persisted only for backward-compatible schedule metrics; define query-time weights with `registry rank` instead"
+    if matches!(metric, "composite_score" | "composite_rank_score") {
+        return Err(
+            "composite_rank_score is persisted only for backward-compatible schedule metrics; \
+             define query-time weights with `registry rank` instead"
                 .to_string(),
-        ),
-        _ => Err(format!("unsupported metric '{metric}'")),
+        );
     }
+    if !is_known_metric(metric) {
+        return Err(format!("unsupported metric '{metric}'"));
+    }
+    Ok(metric_opt(mv, metric).unwrap_or(0.0))
 }
 
 pub(super) fn parse_weights(raw: &[String]) -> Result<Vec<(String, f64)>, String> {

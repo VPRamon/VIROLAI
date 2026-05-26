@@ -3,8 +3,8 @@
 use chrono::Utc;
 use rusqlite::{Connection, Transaction, params};
 
-use super::super::super::identity::RunIdentity;
-use super::super::Registry;
+use super::super::identity::RunIdentity;
+use super::super::store::Registry;
 
 impl Registry {
     /// Inserts a schedule payload if that semantic schedule is not already stored.

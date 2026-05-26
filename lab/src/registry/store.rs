@@ -19,13 +19,13 @@ use std::path::Path;
 
 use super::query::DEFAULT_RUN_DB;
 
-mod crud;
-
 // ── Registry ──────────────────────────────────────────────────────────────────
 
 /// Handle to an open run registry database.
 pub struct Registry {
-    pub(super) conn: Connection,
+    /// SQLite connection. Visible to the entire `registry` module tree so that
+    /// the `crud` submodule can implement `impl Registry` methods there.
+    pub(in crate::registry) conn: Connection,
 }
 
 impl Registry {

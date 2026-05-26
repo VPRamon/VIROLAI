@@ -455,7 +455,7 @@ fn run_stores_unique_schedule_and_run_hash_reference() {
 }
 
 #[test]
-fn registry_regenerate_prefers_stored_schedule_json() {
+fn registry_export_prefers_stored_schedule_json() {
     let tmp = TempDir::new().unwrap();
     write_input(tmp.path());
     let spec_path = write_spec(tmp.path());
@@ -488,11 +488,11 @@ fn registry_regenerate_prefers_stored_schedule_json() {
     )
     .unwrap();
 
-    let out_file = tmp.path().join("regenerated.json");
-    let regenerate_status = Command::new(BIN)
+    let out_file = tmp.path().join("exported.json");
+    let export_status = Command::new(BIN)
         .args([
             "registry",
-            "regenerate",
+            "export",
             "--run",
             &run_key,
             "--out",
@@ -501,14 +501,14 @@ fn registry_regenerate_prefers_stored_schedule_json() {
             db_path.to_str().unwrap(),
         ])
         .status()
-        .expect("registry regenerate should succeed");
-    assert!(regenerate_status.success());
+        .expect("registry export should succeed");
+    assert!(export_status.success());
 
     assert_eq!(fs::read_to_string(out_file).unwrap(), sentinel);
 }
 
 #[test]
-fn registry_regenerate_errors_when_schedule_hash_missing() {
+fn registry_export_errors_when_schedule_hash_missing() {
     let tmp = TempDir::new().unwrap();
     write_input(tmp.path());
     let spec_path = write_spec(tmp.path());
@@ -533,11 +533,11 @@ fn registry_regenerate_errors_when_schedule_hash_missing() {
     conn.execute("UPDATE runs SET schedule_hash = NULL", [])
         .unwrap();
 
-    let out_file = tmp.path().join("regenerated-missing.json");
-    let regenerate_status = Command::new(BIN)
+    let out_file = tmp.path().join("exported-missing.json");
+    let export_status = Command::new(BIN)
         .args([
             "registry",
-            "regenerate",
+            "export",
             "--run",
             &run_key,
             "--out",
@@ -546,16 +546,16 @@ fn registry_regenerate_errors_when_schedule_hash_missing() {
             db_path.to_str().unwrap(),
         ])
         .status()
-        .expect("registry regenerate should run");
+        .expect("registry export should run");
     assert!(
-        !regenerate_status.success(),
-        "registry regenerate should fail when schedule_hash is missing"
+        !export_status.success(),
+        "registry export should fail when schedule_hash is missing"
     );
     assert!(!out_file.exists());
 }
 
 #[test]
-fn registry_regenerate_errors_when_schedule_row_missing() {
+fn registry_export_errors_when_schedule_row_missing() {
     let tmp = TempDir::new().unwrap();
     write_input(tmp.path());
     let spec_path = write_spec(tmp.path());
@@ -579,11 +579,11 @@ fn registry_regenerate_errors_when_schedule_row_missing() {
         .unwrap();
     conn.execute("DELETE FROM schedules", []).unwrap();
 
-    let out_file = tmp.path().join("regenerated-missing-row.json");
-    let regenerate_status = Command::new(BIN)
+    let out_file = tmp.path().join("exported-missing-row.json");
+    let export_status = Command::new(BIN)
         .args([
             "registry",
-            "regenerate",
+            "export",
             "--run",
             &run_key,
             "--out",
@@ -592,10 +592,10 @@ fn registry_regenerate_errors_when_schedule_row_missing() {
             db_path.to_str().unwrap(),
         ])
         .status()
-        .expect("registry regenerate should run");
+        .expect("registry export should run");
     assert!(
-        !regenerate_status.success(),
-        "registry regenerate should fail when the schedules row is missing"
+        !export_status.success(),
+        "registry export should fail when the schedules row is missing"
     );
     assert!(!out_file.exists());
 }

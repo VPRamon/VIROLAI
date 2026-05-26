@@ -39,9 +39,33 @@ pub(super) fn parse_metrics(metrics_json: &str) -> serde_json::Value {
     serde_json::from_str(metrics_json).unwrap_or(serde_json::Value::Null)
 }
 
+/// Returns `true` if `metric` is a recognised extraction key.
+///
+/// Used by [`scoring`] to validate metric names without duplicating the
+/// extraction logic from [`metric_opt`].
+pub(super) fn is_known_metric(metric: &str) -> bool {
+    matches!(
+        metric,
+        "task_ratio"
+            | "scheduled_task_ratio"
+            | "scheduled_task_count"
+            | "scheduled_priority_sum"
+            | "priority_ratio"
+            | "scheduled_priority_ratio"
+            | "priority_density"
+            | "scheduled_time_sec"
+            | "requested_time_sec"
+            | "scheduled_time_ratio"
+            | "utilization"
+            | "fragmentation_index"
+            | "runtime_ms"
+            | "scheduler_runtime_ms"
+    )
+}
+
 /// Extracts a metric from a parsed `metrics_json` value.
 /// Returns `None` when the key is absent or null, never defaulting to 0.0.
-fn metric_opt(mv: &serde_json::Value, metric: &str) -> Option<f64> {
+pub(super) fn metric_opt(mv: &serde_json::Value, metric: &str) -> Option<f64> {
     match metric {
         "task_ratio" | "scheduled_task_ratio" => mv["scheduled_task_ratio"].as_f64(),
         "scheduled_task_count" => mv["scheduled_task_count"].as_f64(),

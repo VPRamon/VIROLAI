@@ -2,9 +2,9 @@
 
 use rusqlite::{OptionalExtension, params};
 
-use super::super::super::query::{BestOpts, ListOpts, default_sort_keys, metric_col, sort_expr};
-use super::super::super::row::{RunRow, row_to_run_row};
-use super::super::Registry;
+use super::super::query::{BestOpts, ListOpts, default_sort_keys, metric_col, sort_expr};
+use super::super::row::{RunRow, row_to_run_row};
+use super::super::store::Registry;
 
 impl Registry {
     /// Returns the number of unique schedule payloads stored.

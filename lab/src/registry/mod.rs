@@ -3,6 +3,7 @@
 //! The registry persists successful scheduler runs, while query-time helpers
 //! define how rows are filtered, sorted, ranked, or exported by callers.
 
+mod crud;
 mod identity;
 mod query;
 mod row;

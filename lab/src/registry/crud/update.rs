@@ -2,7 +2,7 @@
 
 use rusqlite::params;
 
-use super::super::Registry;
+use super::super::store::Registry;
 
 impl Registry {
     /// Attaches an already stored schedule hash to a run.

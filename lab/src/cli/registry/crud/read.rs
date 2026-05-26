@@ -1,19 +1,23 @@
-//! Implementations for each `lab registry` subcommand.
+//! Read command handlers for `lab registry`.
+//!
+//! All registry CLI subcommands are read operations: they query the SQLite
+//! registry and display or export results.  Write operations (inserting run
+//! rows) are performed by `lab run`, not by registry commands.
 
 use lab::registry::{
     BestOpts, ListOpts, Registry, RunRow, SortKey, default_sort_keys, parse_sort_key, registry_path,
 };
 
-use super::format::{parse_metrics, print_rows, row_json};
-use super::scoring::{
+use super::super::format::{parse_metrics, print_rows, row_json};
+use super::super::scoring::{
     compare_rows_by_default_policy, dominates, metric_value, parse_objectives, parse_weights,
 };
-use super::{
+use super::super::{
     RegistryBestArgs, RegistryExportArgs, RegistryInspectArgs, RegistryListArgs,
-    RegistryParetoArgs, RegistryRankArgs, RegistryRegenerateArgs, RegistrySortArgs,
+    RegistryParetoArgs, RegistryRankArgs, RegistrySortArgs,
 };
 
-pub(super) fn list(args: RegistryListArgs) -> Result<(), String> {
+pub(in crate::cli::registry) fn list(args: RegistryListArgs) -> Result<(), String> {
     let db_path = registry_path(args.run_db.as_deref());
     let reg = Registry::open(&db_path)?;
     let sort = parse_sort_keys(&args.sort)?;
@@ -31,7 +35,7 @@ pub(super) fn list(args: RegistryListArgs) -> Result<(), String> {
     Ok(())
 }
 
-pub(super) fn sort(args: RegistrySortArgs) -> Result<(), String> {
+pub(in crate::cli::registry) fn sort(args: RegistrySortArgs) -> Result<(), String> {
     let db_path = registry_path(args.run_db.as_deref());
     let reg = Registry::open(&db_path)?;
     let sort = parse_sort_keys(&args.sort)?;
@@ -46,7 +50,7 @@ pub(super) fn sort(args: RegistrySortArgs) -> Result<(), String> {
     print_rows(&rows, &args.format, &sort)
 }
 
-pub(super) fn best(args: RegistryBestArgs) -> Result<(), String> {
+pub(in crate::cli::registry) fn best(args: RegistryBestArgs) -> Result<(), String> {
     let db_path = registry_path(args.run_db.as_deref());
     let reg = Registry::open(&db_path)?;
     let sort = parse_sort_keys(&args.sort)?;
@@ -61,7 +65,7 @@ pub(super) fn best(args: RegistryBestArgs) -> Result<(), String> {
     print_rows(&rows, &args.format, &sort)
 }
 
-pub(super) fn rank(args: RegistryRankArgs) -> Result<(), String> {
+pub(in crate::cli::registry) fn rank(args: RegistryRankArgs) -> Result<(), String> {
     let weights = parse_weights(&args.weight)?;
     if weights.is_empty() {
         return Err("registry rank requires at least one --weight metric=value".to_string());
@@ -119,7 +123,7 @@ pub(super) fn rank(args: RegistryRankArgs) -> Result<(), String> {
     Ok(())
 }
 
-pub(super) fn pareto(args: RegistryParetoArgs) -> Result<(), String> {
+pub(in crate::cli::registry) fn pareto(args: RegistryParetoArgs) -> Result<(), String> {
     let objectives = parse_objectives(&args.maximize, &args.minimize)?;
     let db_path = registry_path(args.run_db.as_deref());
     let reg = Registry::open(&db_path)?;
@@ -151,7 +155,7 @@ pub(super) fn pareto(args: RegistryParetoArgs) -> Result<(), String> {
     Ok(())
 }
 
-pub(super) fn inspect(args: RegistryInspectArgs) -> Result<(), String> {
+pub(in crate::cli::registry) fn inspect(args: RegistryInspectArgs) -> Result<(), String> {
     let db_path = registry_path(args.run_db.as_deref());
     let reg = Registry::open(&db_path)?;
     let key = if args.run.len() == 64 {
@@ -190,7 +194,7 @@ pub(super) fn inspect(args: RegistryInspectArgs) -> Result<(), String> {
     Ok(())
 }
 
-pub(super) fn export(args: RegistryExportArgs) -> Result<(), String> {
+pub(in crate::cli::registry) fn export(args: RegistryExportArgs) -> Result<(), String> {
     match (&args.run, &args.out, &args.out_dir) {
         (Some(key), Some(out), None) => {
             if out.exists() && !args.force {
@@ -209,7 +213,7 @@ pub(super) fn export(args: RegistryExportArgs) -> Result<(), String> {
             let row = reg
                 .get_row(&full_key)?
                 .ok_or_else(|| format!("no run found for key '{full_key}'"))?;
-            let json = stored_schedule_json_for_row(&row)?;
+            let json = schedule_json_for_row(&row)?;
             std::fs::write(out, json)
                 .map_err(|e| format!("failed to write {}: {e}", out.display()))?;
             println!("exported -> {}", out.display());
@@ -291,47 +295,24 @@ pub(super) fn export(args: RegistryExportArgs) -> Result<(), String> {
     }
 }
 
-pub(super) fn regenerate(args: RegistryRegenerateArgs) -> Result<(), String> {
-    if args.out.exists() && !args.force {
-        return Err(format!(
-            "output file '{}' already exists; use --force to overwrite",
-            args.out.display()
-        ));
-    }
+// ── Private helpers ────────────────────────────────────────────────────────────
 
-    let db_path = registry_path(args.run_db.as_deref());
-    let reg = Registry::open(&db_path)?;
-    let full_key = if args.run.len() == 64 {
-        args.run.clone()
-    } else {
-        reg.resolve_prefix(&args.run)?
-    };
-    let row = reg
-        .get_row(&full_key)?
-        .ok_or_else(|| format!("no run found for key '{full_key}'"))?;
-
-    let json = stored_schedule_json_for_row(&row)?;
-    std::fs::write(&args.out, json)
-        .map_err(|e| format!("failed to write {}: {e}", args.out.display()))?;
-    println!("regenerated -> {}", args.out.display());
-    Ok(())
-}
-
-fn stored_schedule_json_for_row(row: &RunRow) -> Result<String, String> {
+/// Resolves the schedule JSON for a row, with actionable error messages for
+/// rows that predate the deduplicated schedule storage.
+fn schedule_json_for_row(row: &RunRow) -> Result<String, String> {
     let Some(schedule_hash) = &row.schedule_hash else {
         return Err(format!(
             "run '{}' has no schedule_hash; migrate the registry with migrate_schedule_dedup",
             &row.run_key[..row.run_key.len().min(16)]
         ));
     };
-    if let Some(json) = &row.schedule_json {
-        return Ok(json.clone());
-    }
-    Err(format!(
-        "run '{}' references missing schedule '{}'; registry is inconsistent",
-        &row.run_key[..row.run_key.len().min(16)],
-        &schedule_hash[..schedule_hash.len().min(16)]
-    ))
+    row.schedule_json.clone().ok_or_else(|| {
+        format!(
+            "run '{}' references missing schedule '{}'; registry is inconsistent",
+            &row.run_key[..row.run_key.len().min(16)],
+            &schedule_hash[..schedule_hash.len().min(16)]
+        )
+    })
 }
 
 fn parse_sort_keys(raw: &[String]) -> Result<Vec<SortKey>, String> {
