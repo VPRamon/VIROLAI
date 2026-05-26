@@ -10,7 +10,7 @@ use super::scoring::{
 };
 use super::{
     RegistryBestArgs, RegistryExportArgs, RegistryInspectArgs, RegistryListArgs,
-    RegistryParetoArgs, RegistryRankArgs, RegistrySortArgs,
+    RegistryParetoArgs, RegistryRankArgs, RegistryRegenerateArgs, RegistrySortArgs,
 };
 
 pub(super) fn list(args: RegistryListArgs) -> Result<(), String> {
@@ -172,6 +172,9 @@ pub(super) fn inspect(args: RegistryInspectArgs) -> Result<(), String> {
     if let Some(cell) = &row.source_cell_id {
         println!("source_cell:   {cell}");
     }
+    if let Some(hash) = &row.schedule_hash {
+        println!("schedule_hash: {hash}");
+    }
     println!("\n--- identity ---");
     if let Ok(v) = serde_json::from_str::<serde_json::Value>(&row.identity_json) {
         println!("{}", serde_json::to_string_pretty(&v).unwrap());
@@ -206,12 +209,7 @@ pub(super) fn export(args: RegistryExportArgs) -> Result<(), String> {
             let row = reg
                 .get_row(&full_key)?
                 .ok_or_else(|| format!("no run found for key '{full_key}'"))?;
-            let json = row.schedule_json.ok_or_else(|| {
-                format!(
-                    "run '{}' has no stored schedule JSON; rerun with `lab run --override` to regenerate",
-                    &full_key[..full_key.len().min(16)]
-                )
-            })?;
+            let json = stored_schedule_json_for_row(&row)?;
             std::fs::write(out, json)
                 .map_err(|e| format!("failed to write {}: {e}", out.display()))?;
             println!("exported -> {}", out.display());
@@ -291,6 +289,49 @@ pub(super) fn export(args: RegistryExportArgs) -> Result<(), String> {
                 .to_string(),
         ),
     }
+}
+
+pub(super) fn regenerate(args: RegistryRegenerateArgs) -> Result<(), String> {
+    if args.out.exists() && !args.force {
+        return Err(format!(
+            "output file '{}' already exists; use --force to overwrite",
+            args.out.display()
+        ));
+    }
+
+    let db_path = registry_path(args.run_db.as_deref());
+    let reg = Registry::open(&db_path)?;
+    let full_key = if args.run.len() == 64 {
+        args.run.clone()
+    } else {
+        reg.resolve_prefix(&args.run)?
+    };
+    let row = reg
+        .get_row(&full_key)?
+        .ok_or_else(|| format!("no run found for key '{full_key}'"))?;
+
+    let json = stored_schedule_json_for_row(&row)?;
+    std::fs::write(&args.out, json)
+        .map_err(|e| format!("failed to write {}: {e}", args.out.display()))?;
+    println!("regenerated -> {}", args.out.display());
+    Ok(())
+}
+
+fn stored_schedule_json_for_row(row: &RunRow) -> Result<String, String> {
+    let Some(schedule_hash) = &row.schedule_hash else {
+        return Err(format!(
+            "run '{}' has no schedule_hash; migrate the registry with migrate_schedule_dedup",
+            &row.run_key[..row.run_key.len().min(16)]
+        ));
+    };
+    if let Some(json) = &row.schedule_json {
+        return Ok(json.clone());
+    }
+    Err(format!(
+        "run '{}' references missing schedule '{}'; registry is inconsistent",
+        &row.run_key[..row.run_key.len().min(16)],
+        &schedule_hash[..schedule_hash.len().min(16)]
+    ))
 }
 
 fn parse_sort_keys(raw: &[String]) -> Result<Vec<SortKey>, String> {

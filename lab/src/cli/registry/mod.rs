@@ -29,6 +29,8 @@ enum RegistryCmd {
     Inspect(RegistryInspectArgs),
     /// Export stored schedule JSON from the registry.
     Export(RegistryExportArgs),
+    /// Recreate a schedule JSON for one run, preferring deduplicated registry storage.
+    Regenerate(RegistryRegenerateArgs),
 }
 
 #[derive(Parser, Debug)]
@@ -248,6 +250,25 @@ struct RegistryExportArgs {
     run_db: Option<PathBuf>,
 }
 
+#[derive(Parser, Debug)]
+struct RegistryRegenerateArgs {
+    /// Full run key or unique prefix.
+    #[arg(long, value_name = "KEY")]
+    run: String,
+
+    /// Output file for the schedule JSON.
+    #[arg(long, value_name = "FILE")]
+    out: PathBuf,
+
+    /// Overwrite the output file if it already exists.
+    #[arg(long)]
+    force: bool,
+
+    /// Path to the SQLite registry file.
+    #[arg(long, value_name = "PATH")]
+    run_db: Option<PathBuf>,
+}
+
 pub(crate) fn registry(args: RegistryArgs) -> Result<(), String> {
     match args.cmd {
         RegistryCmd::List(a) => commands::list(a),
@@ -257,5 +278,6 @@ pub(crate) fn registry(args: RegistryArgs) -> Result<(), String> {
         RegistryCmd::Pareto(a) => commands::pareto(a),
         RegistryCmd::Inspect(a) => commands::inspect(a),
         RegistryCmd::Export(a) => commands::export(a),
+        RegistryCmd::Regenerate(a) => commands::regenerate(a),
     }
 }

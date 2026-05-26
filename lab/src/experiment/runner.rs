@@ -31,7 +31,8 @@ use crate::experiment::config::{HapSurvivorMode, RunConfig};
 use crate::experiment::problem::{PreparedProblem, prepare_problem};
 use crate::experiment::spec::ExperimentSpec;
 use crate::registry::{
-    METRICS_VERSION, Registry, RunIdentity, hash_file, registry_path, scheduler_version,
+    METRICS_VERSION, Registry, RunIdentity, canonical_schedule_hash, hash_file, registry_path,
+    scheduler_version,
 };
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -279,17 +280,120 @@ fn run_cell_inner(
         .map_err(|e| format!("failed to serialize schedule {}: {e}", cell.cell_id))?;
     let metrics_json = serde_json::to_string(&metrics).unwrap_or_else(|_| "{}".to_string());
 
+    let resource_id = prepared.problem.telescope.as_ref().map(|t| t.name.as_str());
+    let schedule_hash = canonical_schedule_hash(&schedule, resource_id)?;
+
     let identity = build_identity(cell, sched_ver)?;
-    if let Ok(reg) = registry.lock() {
-        reg.upsert(
+    if let Ok(mut reg) = registry.lock() {
+        reg.upsert_result(
             &identity,
             &metrics_json,
-            Some(schedule_json.as_str()),
+            &schedule_hash,
+            schedule_json.as_str(),
             Some(cell.cell_id.as_str()),
         )?;
     }
 
     Ok(())
+}
+
+/// Recomputes a schedule JSON payload from a stored run identity.
+///
+/// This is used by the one-off schedule deduplication migration script. Normal
+/// registry commands treat missing schedule rows as database inconsistencies.
+pub fn regenerate_from_identity(identity: &RunIdentity) -> Result<RegeneratedSchedule, String> {
+    let current_hash = hash_file(std::path::Path::new(&identity.dataset_path))?;
+    if current_hash != identity.dataset_hash {
+        return Err(format!(
+            "dataset hash mismatch for {}: registry has {}, current file has {}",
+            identity.dataset_path, identity.dataset_hash, current_hash
+        ));
+    }
+
+    let run_config: RunConfig = serde_json::from_str(&identity.config_json)
+        .map_err(|e| format!("failed to parse run config from identity: {e}"))?;
+    let horizon_override = identity
+        .horizon_json
+        .as_deref()
+        .map(serde_json::from_str)
+        .transpose()
+        .map_err(|e| format!("failed to parse horizon override from identity: {e}"))?;
+    let prepared = prepare_problem(
+        std::path::Path::new(&identity.dataset_path),
+        horizon_override,
+    )?;
+    let started = Instant::now();
+    let schedule = run_scheduler(run_config, &prepared, &identity.run_key())?;
+    let scheduler_runtime_ms = started.elapsed().as_secs_f64() * 1000.0;
+
+    let metadata = build_schedule_metadata_from_parts(
+        &run_config,
+        &prepared,
+        Some(identity.dataset_id.clone()),
+        None,
+    );
+    let ctx = MetricsContext::new();
+    let mut metrics =
+        ScheduleMetrics::compute(&schedule, &prepared.problem, &prepared.horizon, &ctx);
+    metrics.scheduler_runtime_ms = Some(scheduler_runtime_ms);
+    let metrics_value =
+        serde_json::to_value(&metrics).map_err(|e| format!("failed to serialize metrics: {e}"))?;
+    let output_obj = ScheduleOutput::new(prepared.raw_json.clone(), &schedule, Some(metadata))
+        .with_metrics(metrics_value);
+    let schedule_json = serde_json::to_string_pretty(&output_obj)
+        .map_err(|e| format!("failed to serialize regenerated schedule: {e}"))?;
+    let resource_id = prepared.problem.telescope.as_ref().map(|t| t.name.as_str());
+    let schedule_hash = canonical_schedule_hash(&schedule, resource_id)?;
+
+    Ok(RegeneratedSchedule {
+        schedule_json,
+        schedule_hash,
+    })
+}
+
+/// Schedule data recomputed from a run identity.
+pub struct RegeneratedSchedule {
+    pub schedule_json: String,
+    pub schedule_hash: String,
+}
+
+fn run_scheduler(
+    run_config: RunConfig,
+    prepared: &PreparedProblem,
+    cell_id: &str,
+) -> Result<schedulers::schedule::Schedule, String> {
+    match run_config {
+        RunConfig::Est(config) => {
+            let scheduler = config.build_scheduler()?;
+            scheduler
+                .run(
+                    &prepared.problem,
+                    &prepared.possible_periods,
+                    &prepared.horizon,
+                )
+                .map_err(|e| format!("EST run {cell_id} failed: {e}"))
+        }
+        RunConfig::Hap(config) => {
+            let scheduler = config.build_scheduler()?;
+            scheduler
+                .run(
+                    &prepared.problem,
+                    &prepared.possible_periods,
+                    &prepared.horizon,
+                )
+                .map_err(|e| format!("HAP run {cell_id} failed: {e}"))
+        }
+        RunConfig::Lst(config) => {
+            let scheduler = config.build_scheduler()?;
+            scheduler
+                .run(
+                    &prepared.problem,
+                    &prepared.possible_periods,
+                    &prepared.horizon,
+                )
+                .map_err(|e| format!("LST run {cell_id} failed: {e}"))
+        }
+    }
 }
 
 /// Builds a [`RunIdentity`] for a cell.
@@ -319,6 +423,20 @@ fn build_schedule_metadata(
     run: &RunConfig,
     cell: &MatrixCell,
     prepared: &PreparedProblem,
+) -> ScheduleMetadata {
+    build_schedule_metadata_from_parts(
+        run,
+        prepared,
+        Some(cell.dataset_id.clone()),
+        cell.dataset_label.clone(),
+    )
+}
+
+fn build_schedule_metadata_from_parts(
+    run: &RunConfig,
+    prepared: &PreparedProblem,
+    dataset_id: Option<String>,
+    dataset_label: Option<String>,
 ) -> ScheduleMetadata {
     let location = prepared.problem.telescope.as_ref().map(|t| LocationMeta {
         name: t.name.clone(),
@@ -369,8 +487,8 @@ fn build_schedule_metadata(
         algorithm_config,
         location,
         period,
-        dataset_id: Some(cell.dataset_id.clone()),
-        dataset_label: cell.dataset_label.clone(),
+        dataset_id,
+        dataset_label,
     }
 }
 

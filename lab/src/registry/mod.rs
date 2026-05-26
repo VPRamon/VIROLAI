@@ -6,6 +6,7 @@
 mod identity;
 mod query;
 mod row;
+mod schedule_hash;
 mod store;
 
 pub use identity::{METRICS_VERSION, RunIdentity, hash_file, scheduler_version};
@@ -14,6 +15,7 @@ pub use query::{
     parse_sort_key, registry_path,
 };
 pub use row::RunRow;
+pub use schedule_hash::canonical_schedule_hash;
 pub use store::Registry;
 
 #[cfg(test)]
@@ -118,7 +120,7 @@ mod tests {
 
     #[test]
     fn insert_and_lookup_by_key() {
-        let (reg, _dir) = open_temp_registry();
+        let (mut reg, _dir) = open_temp_registry();
         let id = make_identity("deadbeef", r#"{"k_beams":1}"#);
         let key = id.run_key();
 
@@ -134,7 +136,7 @@ mod tests {
 
     #[test]
     fn upsert_refreshes_existing_record() {
-        let (reg, _dir) = open_temp_registry();
+        let (mut reg, _dir) = open_temp_registry();
         let id = make_identity("deadbeef", r#"{"k_beams":1}"#);
         reg.upsert(&id, SAMPLE_METRICS, None, None).unwrap();
         reg.upsert(&id, SAMPLE_METRICS, None, None).unwrap();
@@ -150,7 +152,7 @@ mod tests {
 
     #[test]
     fn list_filters_by_dataset() {
-        let (reg, _dir) = open_temp_registry();
+        let (mut reg, _dir) = open_temp_registry();
 
         let mut id1 = make_identity("hash1", r#"{"k_beams":1}"#);
         id1.dataset_id = "ds1".to_string();
@@ -174,7 +176,7 @@ mod tests {
 
     #[test]
     fn best_returns_ordered_by_metric() {
-        let (reg, _dir) = open_temp_registry();
+        let (mut reg, _dir) = open_temp_registry();
 
         let metrics_a = r#"{"scheduled_task_ratio":0.6,"scheduled_priority_ratio":0.6,"priority_density":1.0,"utilization":0.5,"fragmentation":{"fragmentation_index":0.3,"gap_count":1,"gap_total_sec":50.0,"largest_gap_sec":50.0},"composite_rank_score":0.5,"scheduler_runtime_ms":10.0}"#;
         let metrics_b = r#"{"scheduled_task_ratio":0.9,"scheduled_priority_ratio":0.95,"priority_density":1.05,"utilization":0.85,"fragmentation":{"fragmentation_index":0.1,"gap_count":0,"gap_total_sec":0.0,"largest_gap_sec":0.0},"composite_rank_score":0.9,"scheduler_runtime_ms":20.0}"#;
@@ -207,7 +209,7 @@ mod tests {
 
     #[test]
     fn prefix_resolution_succeeds_for_unique_prefix() {
-        let (reg, _dir) = open_temp_registry();
+        let (mut reg, _dir) = open_temp_registry();
         let id = make_identity("deadbeef", r#"{"k_beams":1}"#);
         let key = id.run_key();
         reg.upsert(&id, SAMPLE_METRICS, None, None).unwrap();
@@ -223,5 +225,65 @@ mod tests {
         let result = reg.resolve_prefix("nonexistentprefix");
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("no run found"));
+    }
+
+    #[test]
+    fn upserting_same_schedule_hash_stores_one_schedule_row() {
+        let (reg, _dir) = open_temp_registry();
+
+        reg.upsert_schedule("schedule-a", "dataset-a", r#"{"schedule":1}"#)
+            .unwrap();
+        reg.upsert_schedule("schedule-a", "dataset-a", r#"{"schedule":2}"#)
+            .unwrap();
+
+        assert_eq!(reg.schedule_count().unwrap(), 1);
+        assert_eq!(
+            reg.get_schedule_json("schedule-a").unwrap().unwrap(),
+            r#"{"schedule":1}"#
+        );
+    }
+
+    #[test]
+    fn multiple_runs_can_reference_one_schedule() {
+        let (mut reg, _dir) = open_temp_registry();
+        let mut id1 = make_identity("hash1", r#"{"k_beams":1}"#);
+        id1.config_slug = "e1-k1-b1".to_string();
+        let mut id2 = make_identity("hash1", r#"{"k_beams":2}"#);
+        id2.config_slug = "e1-k2-b1".to_string();
+
+        reg.upsert_result(
+            &id1,
+            SAMPLE_METRICS,
+            "schedule-a",
+            r#"{"schedule":1}"#,
+            None,
+        )
+        .unwrap();
+        reg.upsert_result(
+            &id2,
+            SAMPLE_METRICS,
+            "schedule-a",
+            r#"{"schedule":1}"#,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(reg.schedule_count().unwrap(), 1);
+        assert_eq!(
+            reg.get_row(&id1.run_key())
+                .unwrap()
+                .unwrap()
+                .schedule_hash
+                .as_deref(),
+            Some("schedule-a")
+        );
+        assert_eq!(
+            reg.get_row(&id2.run_key())
+                .unwrap()
+                .unwrap()
+                .schedule_hash
+                .as_deref(),
+            Some("schedule-a")
+        );
     }
 }

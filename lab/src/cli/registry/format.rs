@@ -26,6 +26,7 @@ pub(super) fn row_json(row: &RunRow, score: Option<f64>) -> serde_json::Value {
         "created_at": row.created_at,
         "last_seen_at": row.last_seen_at,
         "source_cell_id": row.source_cell_id,
+        "schedule_hash": row.schedule_hash,
         "metrics": parse_metrics(&row.metrics_json),
     });
     if let Some(score) = score {
@@ -182,6 +183,7 @@ mod tests {
             config_slug: "e2-k1-b1-future_flexibility".to_string(),
             identity_json: "{}".to_string(),
             metrics_json: metrics_json.to_string(),
+            schedule_hash: None,
             schedule_json: None,
             created_at: "2024-05-26T10:00:00Z".to_string(),
             last_seen_at: "2024-05-26T10:00:00Z".to_string(),

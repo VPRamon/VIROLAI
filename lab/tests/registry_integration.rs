@@ -1,5 +1,6 @@
 //! Integration tests for the SQLite run registry and DB-only runner.
 
+use rusqlite::{Connection, params};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -416,6 +417,187 @@ fn registry_export_filtered_to_dir() {
             "exported schedule must have schedule_metadata"
         );
     }
+}
+
+#[test]
+fn run_stores_unique_schedule_and_run_hash_reference() {
+    let tmp = TempDir::new().unwrap();
+    write_input(tmp.path());
+    let spec_path = write_spec(tmp.path());
+    let db_path = tmp.path().join("runs.sqlite");
+
+    let status = Command::new(BIN)
+        .args([
+            "run",
+            "--spec",
+            spec_path.to_str().unwrap(),
+            "--run-db",
+            db_path.to_str().unwrap(),
+        ])
+        .status()
+        .expect("run should succeed");
+    assert!(status.success());
+
+    let conn = Connection::open(&db_path).unwrap();
+    let run_schedule_hash: Option<String> = conn
+        .query_row("SELECT schedule_hash FROM runs LIMIT 1", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert!(
+        run_schedule_hash.is_some(),
+        "run row must reference a schedule hash"
+    );
+    let schedule_count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM schedules", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(schedule_count, 1);
+}
+
+#[test]
+fn registry_regenerate_prefers_stored_schedule_json() {
+    let tmp = TempDir::new().unwrap();
+    write_input(tmp.path());
+    let spec_path = write_spec(tmp.path());
+    let db_path = tmp.path().join("runs.sqlite");
+
+    let status = Command::new(BIN)
+        .args([
+            "run",
+            "--spec",
+            spec_path.to_str().unwrap(),
+            "--run-db",
+            db_path.to_str().unwrap(),
+        ])
+        .status()
+        .expect("run should succeed");
+    assert!(status.success());
+
+    let conn = Connection::open(&db_path).unwrap();
+    let (run_key, schedule_hash): (String, String) = conn
+        .query_row(
+            "SELECT run_key, schedule_hash FROM runs LIMIT 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    let sentinel = r#"{"stored":true}"#;
+    conn.execute(
+        "UPDATE schedules SET schedule_json = ?2 WHERE schedule_hash = ?1",
+        params![schedule_hash, sentinel],
+    )
+    .unwrap();
+
+    let out_file = tmp.path().join("regenerated.json");
+    let regenerate_status = Command::new(BIN)
+        .args([
+            "registry",
+            "regenerate",
+            "--run",
+            &run_key,
+            "--out",
+            out_file.to_str().unwrap(),
+            "--run-db",
+            db_path.to_str().unwrap(),
+        ])
+        .status()
+        .expect("registry regenerate should succeed");
+    assert!(regenerate_status.success());
+
+    assert_eq!(fs::read_to_string(out_file).unwrap(), sentinel);
+}
+
+#[test]
+fn registry_regenerate_errors_when_schedule_hash_missing() {
+    let tmp = TempDir::new().unwrap();
+    write_input(tmp.path());
+    let spec_path = write_spec(tmp.path());
+    let db_path = tmp.path().join("runs.sqlite");
+
+    let status = Command::new(BIN)
+        .args([
+            "run",
+            "--spec",
+            spec_path.to_str().unwrap(),
+            "--run-db",
+            db_path.to_str().unwrap(),
+        ])
+        .status()
+        .expect("run should succeed");
+    assert!(status.success());
+
+    let conn = Connection::open(&db_path).unwrap();
+    let run_key: String = conn
+        .query_row("SELECT run_key FROM runs LIMIT 1", [], |row| row.get(0))
+        .unwrap();
+    conn.execute("UPDATE runs SET schedule_hash = NULL", [])
+        .unwrap();
+
+    let out_file = tmp.path().join("regenerated-missing.json");
+    let regenerate_status = Command::new(BIN)
+        .args([
+            "registry",
+            "regenerate",
+            "--run",
+            &run_key,
+            "--out",
+            out_file.to_str().unwrap(),
+            "--run-db",
+            db_path.to_str().unwrap(),
+        ])
+        .status()
+        .expect("registry regenerate should run");
+    assert!(
+        !regenerate_status.success(),
+        "registry regenerate should fail when schedule_hash is missing"
+    );
+    assert!(!out_file.exists());
+}
+
+#[test]
+fn registry_regenerate_errors_when_schedule_row_missing() {
+    let tmp = TempDir::new().unwrap();
+    write_input(tmp.path());
+    let spec_path = write_spec(tmp.path());
+    let db_path = tmp.path().join("runs.sqlite");
+
+    let status = Command::new(BIN)
+        .args([
+            "run",
+            "--spec",
+            spec_path.to_str().unwrap(),
+            "--run-db",
+            db_path.to_str().unwrap(),
+        ])
+        .status()
+        .expect("run should succeed");
+    assert!(status.success());
+
+    let conn = Connection::open(&db_path).unwrap();
+    let run_key: String = conn
+        .query_row("SELECT run_key FROM runs LIMIT 1", [], |row| row.get(0))
+        .unwrap();
+    conn.execute("DELETE FROM schedules", []).unwrap();
+
+    let out_file = tmp.path().join("regenerated-missing-row.json");
+    let regenerate_status = Command::new(BIN)
+        .args([
+            "registry",
+            "regenerate",
+            "--run",
+            &run_key,
+            "--out",
+            out_file.to_str().unwrap(),
+            "--run-db",
+            db_path.to_str().unwrap(),
+        ])
+        .status()
+        .expect("registry regenerate should run");
+    assert!(
+        !regenerate_status.success(),
+        "registry regenerate should fail when the schedules row is missing"
+    );
+    assert!(!out_file.exists());
 }
 
 // ── `lab registry inspect` ────────────────────────────────────────────────────
