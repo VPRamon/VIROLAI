@@ -24,8 +24,7 @@
         "k_beams": [1, 2],
         "branching_factors": [1, 2],
         "foms": [
-            "soft_constraint",
-            "future_flexibility"
+            "soft_constraint"
         ]
       }
     },
@@ -36,8 +35,7 @@
         "k_beams": [1, 2],
         "branching_factors": [1, 2],
         "foms": [
-            "soft_constraint",
-            "future_flexibility"
+            "soft_constraint"
         ]
       }
     }

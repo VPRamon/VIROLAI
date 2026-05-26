@@ -68,6 +68,9 @@ pub struct RunOptions {
     pub cache: bool,
     /// Path to the registry SQLite file.  Defaults to `.lab/runs.sqlite`.
     pub run_db: Option<PathBuf>,
+    /// When true, do not create or write any filesystem artifacts (manifest,
+    /// schedules, state). Results should still be stored in the registry DB.
+    pub suppress_artifacts: bool,
 }
 
 /// Executes all pending cells in `cells` with optional resume support.
@@ -113,7 +116,9 @@ pub fn execute_with_options(
         return Err("--no-state and --resume are mutually exclusive".to_string());
     }
 
-    output::init_subdirs(run_dir)?;
+    if !opts.suppress_artifacts {
+        output::init_subdirs(run_dir)?;
+    }
 
     let already_done: HashSet<String> = if opts.resume {
         let events = read_events(&run_dir.join(output::STATE_FILE))?;
@@ -186,7 +191,7 @@ pub fn execute_with_options(
     };
 
     // Emit synthetic completed events for registry hits.
-    let state_writer: Option<Arc<StateWriter>> = if opts.no_state_log {
+    let state_writer: Option<Arc<StateWriter>> = if opts.no_state_log || opts.suppress_artifacts {
         None
     } else {
         Some(Arc::new(StateWriter::open_append(
@@ -233,6 +238,7 @@ pub fn execute_with_options(
     };
     let sched_ver = scheduler_version();
 
+    let suppress = opts.suppress_artifacts;
     let outcomes: Vec<CellOutcome> = pool.install(|| {
         cells_to_run
             .par_iter()
@@ -248,6 +254,7 @@ pub fn execute_with_options(
                     state_writer.as_deref(),
                     registry_arc.as_deref(),
                     &sched_ver,
+                    suppress,
                 )
             })
             .collect()
@@ -289,6 +296,7 @@ fn run_one_cell(
     state_writer: Option<&StateWriter>,
     registry: Option<&Mutex<Registry>>,
     sched_ver: &str,
+    suppress_artifacts: bool,
 ) -> CellOutcome {
     let started_at = Utc::now().to_rfc3339();
     if let Some(w) = state_writer {
@@ -304,7 +312,7 @@ fn run_one_cell(
         eprintln!("▶ {}", cell.cell_id);
     }
 
-    match run_cell_inner(cell, prepared, run_dir, registry, sched_ver) {
+    match run_cell_inner_impl(cell, prepared, run_dir, registry, sched_ver, suppress_artifacts) {
         Ok(paths) => {
             if let Some(w) = state_writer {
                 let _ = w.append(&StateEvent {
@@ -353,6 +361,19 @@ fn run_cell_inner(
     run_dir: &Path,
     registry: Option<&Mutex<Registry>>,
     sched_ver: &str,
+) -> Result<CellPaths, String> {
+    // shim kept for compatibility; this function now forwards to the
+    // inner implementation below that takes the suppress flag.
+    run_cell_inner_impl(cell, prepared, run_dir, registry, sched_ver, false)
+}
+
+fn run_cell_inner_impl(
+    cell: &MatrixCell,
+    prepared: &PreparedProblem,
+    run_dir: &Path,
+    registry: Option<&Mutex<Registry>>,
+    sched_ver: &str,
+    suppress_artifacts: bool,
 ) -> Result<CellPaths, String> {
     let schedule_path = output::schedule_path(run_dir, &cell.cell_id);
 
@@ -405,13 +426,13 @@ fn run_cell_inner(
         .with_metrics(metrics_value);
     let text = serde_json::to_string_pretty(&output_obj)
         .map_err(|e| format!("failed to serialize schedule {}: {e}", cell.cell_id))?;
-    fs::write(&schedule_path, text)
-        .map_err(|e| format!("failed to write {}: {e}", schedule_path.display()))?;
+    if !suppress_artifacts {
+        fs::write(&schedule_path, text)
+            .map_err(|e| format!("failed to write {}: {e}", schedule_path.display()))?;
+    }
 
     // Insert into registry on success (cache mode only).
-    if let Some(reg_mutex) = registry
-        && let Ok(identity) = build_identity(cell, sched_ver)
-    {
+    if let Some(reg_mutex) = registry && let Ok(identity) = build_identity(cell, sched_ver) {
         let metrics_json = serde_json::to_string(&metrics).unwrap_or_else(|_| "{}".to_string());
         if let Ok(reg) = reg_mutex.lock() {
             let _ = reg.upsert(&identity, &metrics_json, Some(&cell.cell_id));

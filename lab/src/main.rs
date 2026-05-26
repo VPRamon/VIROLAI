@@ -104,6 +104,11 @@ struct RunArgs {
     #[arg(long)]
     no_state: bool,
 
+    /// Do not write any filesystem artifacts (experiment.json, schedules, state).
+    /// Results will only be recorded in the registry DB. Implies `--cache`.
+    #[arg(long)]
+    db_only: bool,
+
     /// Enable SQLite registry cache: skip cells whose identity already exists
     /// in the registry and insert successful runs after execution.
     #[arg(long)]
@@ -375,19 +380,26 @@ fn run(args: RunArgs) -> Result<(), String> {
         return Ok(());
     }
 
-    let (run_dir, resume) = if let Some(existing) = args.resume.as_ref() {
-        (existing.clone(), true)
+    let (run_dir, resume, wrote_manifest) = if let Some(existing) = args.resume.as_ref() {
+        (existing.clone(), true, true)
+    } else if args.db_only {
+        // In db-only mode we avoid creating any run directory or writing
+        // filesystem artifacts. Use a placeholder run_dir (not touched).
+        (PathBuf::from("."), false, false)
     } else {
         let dir = output::create_run_dir(&spec.output_dir, &spec.name)?;
         output::write_manifest(&dir, &spec, &cells)?;
-        (dir, false)
+        (dir, false, true)
     };
 
+    // If db_only was requested, enable cache/registry mode implicitly.
+    let cache = args.cache || args.db_only;
     let opts = RunOptions {
         resume,
-        no_state_log: args.no_state,
-        cache: args.cache,
+        no_state_log: args.no_state || args.db_only,
+        cache,
         run_db: args.run_db.clone(),
+        suppress_artifacts: args.db_only,
     };
     let summary = execute_with_options(&spec, &cells, &run_dir, opts)?;
     println!(
@@ -398,7 +410,11 @@ fn run(args: RunArgs) -> Result<(), String> {
         summary.completed,
         summary.failed
     );
-    println!("artifacts -> {}", summary.run_dir.display());
+    if wrote_manifest {
+        println!("artifacts -> {}", summary.run_dir.display());
+    } else {
+        println!("artifacts suppressed (db-only mode)");
+    }
     if summary.failed > 0 {
         if args.no_state {
             return Err(format!("{} cell(s) failed", summary.failed));
