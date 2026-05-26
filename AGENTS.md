@@ -11,8 +11,8 @@ This repository is a Rust scheduling project.
 - Binaries:
   - `schedulers` in `schedulers/src/main.rs`
   - `lab` in `lab/src/main.rs`
-  - `phd` in `lab/src/bin/phd.rs`
-  - `lab-ctao-adapter` in `lab/src/bin/lab-ctao-adapter.rs`
+  - `phd` in `lab/src/bin/phd/main.rs`
+  - `lab-ctao-adapter` in `lab/src/bin/lab_ctao_adapter/main.rs`
   - `webapp` in `webapp/src/main.rs`
 - Webapp integration assets under `webapp/`:
   - TSI submodule in `webapp/TSI/`

@@ -24,11 +24,11 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
-use crate::config::{
+use crate::experiment::config::{
     EstRunConfig, EstSweepAxes, HapRunConfig, HapSweepAxes, HorizonOverride, LstRunConfig,
     RunConfig,
 };
-use crate::spec::{AlgorithmSweep, DatasetEntry, ExperimentSpec};
+use crate::experiment::spec::{AlgorithmSweep, DatasetEntry, ExperimentSpec};
 
 /// One fully-resolved unit of work in the experiment matrix.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -258,8 +258,8 @@ fn validate_config(cfg: RunConfig) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::HapSurvivorMode;
-    use crate::spec::ExperimentSpec;
+    use crate::experiment::config::HapSurvivorMode;
+    use crate::experiment::spec::ExperimentSpec;
     use std::path::PathBuf;
 
     fn spec_two_datasets_two_algorithms() -> ExperimentSpec {

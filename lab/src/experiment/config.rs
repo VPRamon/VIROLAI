@@ -157,7 +157,7 @@ pub struct ExperimentSweep {
 //
 // The legacy single-dataset `ExperimentSpec` (used only by the removed
 // `est_experiment` binary) has been deleted. The matrix runner uses
-// [`crate::spec::ExperimentSpec`] exclusively.
+// [`crate::experiment::spec::ExperimentSpec`] exclusively.
 
 // ── EST run configuration ────────────────────────────────────────────────────
 

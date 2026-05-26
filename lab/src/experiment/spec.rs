@@ -2,7 +2,7 @@
 //!
 //! An [`ExperimentSpec`] is a JSON document that declares a matrix of
 //! `(dataset × algorithm × per-algorithm sweep)` cells. The runner takes the
-//! Cartesian product and produces one [`crate::cell::MatrixCell`] per
+//! Cartesian product and produces one [`crate::experiment::cell::MatrixCell`] per
 //! combination.
 //!
 //! # Spec format
@@ -28,7 +28,7 @@ use schedulers::metrics::RankingWeights;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-use crate::config::{EstSweepAxes, HapSweepAxes, HorizonOverride};
+use crate::experiment::config::{EstSweepAxes, HapSweepAxes, HorizonOverride};
 
 /// Top-level experiment specification, typically loaded from a JSON file.
 #[derive(Debug, Clone, Serialize, Deserialize)]

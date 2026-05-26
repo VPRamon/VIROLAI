@@ -15,7 +15,7 @@ use serde_json::Value;
 use std::fs;
 use std::path::Path;
 
-use crate::config::HorizonOverride;
+use crate::experiment::config::HorizonOverride;
 
 // ── Prepared problem ──────────────────────────────────────────────────────────
 

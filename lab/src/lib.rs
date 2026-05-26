@@ -9,13 +9,14 @@
 //!
 //! | Module | Responsibility |
 //! |--------|----------------|
-//! | [`config`] | Immutable run-configuration types (`RunConfig`, `EstRunConfig`, `HapRunConfig`) and sweep-axis descriptors |
-//! | [`spec`] | `ExperimentSpec` JSON format for the matrix runner |
-//! | [`cell`] | `MatrixCell` and `resolve_cells` — Cartesian-product expansion |
-//! | [`problem`] | `PreparedProblem` — dataset loading and prescheduling |
-//! | [`runner`] | `execute` — DB-only parallel matrix runner; upserts metrics + schedule JSON into SQLite |
-//! | [`output`] | Run-directory layout helpers (kept for any residual tooling) |
-//! | [`state`] | `state.jsonl` append-only checkpoint stream (legacy; not used by runner) |
+//! | Module | Responsibility |
+//! |--------|----------------|
+//! | [`experiment`] | Sweep specs, run configs, matrix cells, dataset preparation, and execution |
+//! | [`registry`] | SQLite run registry, identity hashing, query options, sort helpers, and rows |
+//!
+//! Compatibility aliases such as [`cell`], [`config`], and [`runner`] remain
+//! exported at the crate root so existing programmatic users do not need to
+//! change imports.
 //!
 //! # Usage
 //!
@@ -27,19 +28,14 @@
 //!
 //! It is also wired as the target of `phd sweep` in the `phd` unified CLI.
 
-pub mod cell;
-pub mod config;
-pub mod output;
-pub mod problem;
+pub mod experiment;
 pub mod registry;
-pub mod runner;
-pub mod spec;
-pub mod state;
+
+pub use experiment::{cell, config, output, problem, runner, spec, state};
 
 // Re-export the most commonly used public types at the crate root for
 // convenience when this library is used programmatically.
-pub use cell::{MatrixCell, resolve_cells};
-pub use config::{EstRunConfig, HapRunConfig, HapSurvivorMode, RunConfig};
-pub use problem::{PreparedProblem, prepare_problem};
-pub use runner::{RunOptions, RunSummary, execute};
-pub use spec::ExperimentSpec;
+pub use experiment::{
+    EstRunConfig, ExperimentSpec, HapRunConfig, HapSurvivorMode, MatrixCell, PreparedProblem,
+    RunConfig, RunOptions, RunSummary, execute, prepare_problem, resolve_cells,
+};

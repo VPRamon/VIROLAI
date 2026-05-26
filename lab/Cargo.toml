@@ -14,11 +14,11 @@ path = "src/main.rs"
 
 [[bin]]
 name = "phd"
-path = "src/bin/phd.rs"
+path = "src/bin/phd/main.rs"
 
 [[bin]]
 name = "lab-ctao-adapter"
-path = "src/bin/lab-ctao-adapter.rs"
+path = "src/bin/lab_ctao_adapter/main.rs"
 
 [dependencies]
 schedulers     = { path = "../schedulers" }

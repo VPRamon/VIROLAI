@@ -48,8 +48,8 @@ cargo run -p lab --bin phd --release -- sweep \
 | Path | Contents |
 |---|---|
 | `schedulers/src/` | Scheduler library and `schedulers` binary |
-| `lab/src/bin/phd.rs` | The `phd` unified CLI |
-| `lab/src/bin/lab-ctao-adapter.rs` | CTAO → `scheduling_problem.json` adapter |
+| `lab/src/bin/phd/` | The `phd` unified CLI |
+| `lab/src/bin/lab_ctao_adapter/` | CTAO -> `scheduling_problem.json` adapter |
 | `schemas/` | Modular JSON schemas (problem, block, algorithm, metrics, schedule, manifest) |
 | `data/` | Example datasets (`isdc_n.json`, `lst_2024.json`, …) |
 | `lab/` | Ready-to-run sweep specs |
@@ -657,4 +657,3 @@ cargo run -p lab --bin lab -- registry regenerate \
   --run-db .lab/runs.sqlite \
   --run 9f3a7c \
   --out out/best-density.json
-  

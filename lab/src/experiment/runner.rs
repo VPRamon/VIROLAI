@@ -26,13 +26,13 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use crate::cell::MatrixCell;
-use crate::config::{HapSurvivorMode, RunConfig};
-use crate::problem::{PreparedProblem, prepare_problem};
+use crate::experiment::cell::MatrixCell;
+use crate::experiment::config::{HapSurvivorMode, RunConfig};
+use crate::experiment::problem::{PreparedProblem, prepare_problem};
+use crate::experiment::spec::ExperimentSpec;
 use crate::registry::{
     METRICS_VERSION, Registry, RunIdentity, hash_file, registry_path, scheduler_version,
 };
-use crate::spec::ExperimentSpec;
 
 // ── Public API ────────────────────────────────────────────────────────────────
 

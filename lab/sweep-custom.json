@@ -13,6 +13,21 @@
       "id": "isdc_s",
       "path": "datasets/isdc_s.json",
       "label": "ISDC South"
+    },
+    {
+      "id": "lst_2024",
+      "path": "datasets/lst_2024.json",
+      "label": "LST 2024"
+    },
+    {
+      "id": "lst_2025",
+      "path": "datasets/lst_2025.json",
+      "label": "LST 2025"
+    },
+    {
+      "id": "lst_2026",
+      "path": "datasets/lst_2026.json",
+      "label": "LST 2026"
     }
   ],
 
@@ -20,9 +35,9 @@
     {
       "kind": "est",
       "axes": {
-        "endangered_thresholds": [0, 1, 2],
-        "k_beams": [1, 2],
-        "branching_factors": [1, 2],
+        "endangered_thresholds": [0, 1, 2, 4, 8, 16],
+        "k_beams": [1, 2, 4, 8, 16],
+        "branching_factors": [1, 2, 4, 8, 16],
         "foms": [
             "soft_constraint"
         ]
@@ -31,9 +46,9 @@
     {
       "kind": "lst",
       "axes": {
-        "endangered_thresholds": [1, 2],
-        "k_beams": [1, 2],
-        "branching_factors": [1, 2],
+        "endangered_thresholds": [1, 2, 4, 8, 16],
+        "k_beams": [1, 2, 4, 8, 16],
+        "branching_factors": [1, 2, 4, 8, 16],
         "foms": [
             "soft_constraint"
         ]
