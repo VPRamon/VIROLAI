@@ -199,6 +199,48 @@ Most registry commands accept `--dataset`, `--algorithm`, `--limit`, and
 `--format table|json`. Commands that return ordered results accept repeatable
 `--sort <metric:asc|desc>` arguments.
 
+**Registry DB columns**
+
+The registry schema stores run rows in the `runs` table and deduplicated
+schedule JSON in the `schedules` table. Key columns and their meanings:
+
+| Column | Description |
+| --- | --- |
+| `run_key` | Primary key: 64-char SHA-256 hash identifying the run (dataset hash, algorithm, config, horizon, versions). |
+| `dataset_id` | Dataset identifier from the experiment spec. |
+| `dataset_path` | Filesystem path to the dataset JSON used for the run. |
+| `dataset_hash` | Content hash of the dataset file used to detect changes. |
+| `algorithm` | Algorithm kind: `est`, `lst`, or `hap`. |
+| `config_slug` | Short human-readable slug for the run configuration (e.g. `e1-k3-b1`). |
+| `config_json` | Serialized run configuration JSON. |
+| `horizon_json` | Optional serialized horizon override JSON. |
+| `scheduler_version` | Version string for the scheduler implementation used. |
+| `metrics_version` | Version/schema of the `metrics_json` payload. |
+| `identity_json` | Full serialized `RunIdentity` object stored with the row. |
+| `metrics_json` | Serialized schedule/metrics JSON (objective and descriptive metrics). |
+| `schedule_hash` | Reference key into the `schedules` table for the stored schedule JSON (deduplication). |
+| `task_ratio` | Indexed metric: fraction of tasks scheduled (descriptive). |
+| `priority_ratio` | Indexed metric: fraction of total priority that was scheduled. |
+| `priority_density` | Indexed metric used for ranking by priority per unit time. |
+| `utilization` | Indexed metric: fraction of available time used. |
+| `fragmentation_index` | Indexed metric describing schedule fragmentation (lower preferred). |
+| `runtime_ms` | Indexed metric: scheduler runtime in milliseconds. |
+| `requested_time_sec` | Total requested observation time (seconds). |
+| `scheduled_time_sec` | Total scheduled observation time (seconds). |
+| `scheduled_time_ratio` | Ratio `scheduled_time_sec / requested_time_sec`. |
+| `created_at` | Row creation timestamp (ISO 8601). |
+| `last_seen_at` | Last upsert/refresh timestamp (ISO 8601). |
+| `source_cell_id` | Optional `cell_id` from the originating experiment manifest. |
+
+Schedules table (`schedules`):
+
+| Column | Description |
+| --- | --- |
+| `schedule_hash` | Primary key: canonical schedule hash used for deduplication. |
+| `dataset_hash` | Dataset content hash associated with the schedule. |
+| `schedule_json` | Full self-contained schedule JSON (the payload exported by `registry export`). |
+| `created_at` | Timestamp when the schedule JSON was inserted. |
+
 ### `registry export`
 
 Export one run by key:
