@@ -1,0 +1,91 @@
+{
+  "name": "all-datasets-all-algorithms",
+  "output_dir": "out/all-datasets-all-algorithms",
+  "max_parallel": 8,
+
+  "datasets": [
+    {
+      "id": "isdc_n",
+      "path": "datasets/isdc_n.json",
+      "label": "ISDC North"
+    },
+    {
+      "id": "isdc_s",
+      "path": "datasets/isdc_s.json",
+      "label": "ISDC South"
+    },
+    {
+      "id": "lst_2024",
+      "path": "datasets/lst_2024.json",
+      "label": "LST 2024"
+    },
+    {
+      "id": "lst_2025",
+      "path": "datasets/lst_2025.json",
+      "label": "LST 2025"
+    },
+    {
+      "id": "lst_2026",
+      "path": "datasets/lst_2026.json",
+      "label": "LST 2026"
+    }
+  ],
+
+  "algorithms": [
+    {
+      "kind": "est",
+      "axes": {
+        "endangered_thresholds": [1],
+        "k_beams": [4],
+        "branching_factors": [2],
+        "foms": [
+          "soft_constraint",
+          "future_flexibility"
+        ]
+      }
+    },
+    {
+      "kind": "lst",
+      "axes": {
+        "endangered_thresholds": [1],
+        "k_beams": [4],
+        "branching_factors": [2],
+        "foms": [
+          "soft_constraint",
+          "future_flexibility"
+        ]
+      }
+    },
+    {
+      "kind": "multi_cursor",
+      "axes": {
+        "layouts": [
+          "est_lst_split",
+          "four_quarter_forward"
+        ],
+        "endangered_thresholds": [1],
+        "k_beams": [4],
+        "branching_factors": [2],
+        "foms": [
+          "soft_constraint",
+          "future_flexibility"
+        ]
+      }
+    },
+    {
+      "kind": "hap",
+      "axes": {
+        "iota_max_values": [64],
+        "rho_values": [3],
+        "population_sizes": [4],
+        "survivor_modes": ["elitist_top_k"],
+        "survivor_caps": [4],
+        "seeds": [0, 1],
+        "foms": [
+          "soft_constraint",
+          "future_flexibility"
+        ]
+      }
+    }
+  ]
+}

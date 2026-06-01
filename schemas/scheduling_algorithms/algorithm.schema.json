@@ -103,6 +103,7 @@
           "enum": [
             "est_lst_split",
             "start_mid_forward",
+            "four_quarter_forward",
             "dynamic_est_lst_meet",
             "dynamic_start_mid_forward"
           ]

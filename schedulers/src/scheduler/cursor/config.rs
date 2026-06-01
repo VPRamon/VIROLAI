@@ -325,6 +325,51 @@ impl MultiCursorConfig {
         }
     }
 
+    /// Four forward cursors over contiguous quarter-horizon territories
+    /// `[0, 0.25)`, `[0.25, 0.5)`, `[0.5, 0.75)`, and `[0.75, 1.0)` (Plan A).
+    pub fn four_quarter_forward(
+        k_beams: usize,
+        branching_factor: usize,
+        endangered_threshold: u32,
+    ) -> Self {
+        Self {
+            cursors: vec![
+                CursorConfig::forward(
+                    0,
+                    CursorTerritory::FractionRange {
+                        start: 0.0,
+                        end: 0.25,
+                    },
+                ),
+                CursorConfig::forward(
+                    1,
+                    CursorTerritory::FractionRange {
+                        start: 0.25,
+                        end: 0.5,
+                    },
+                ),
+                CursorConfig::forward(
+                    2,
+                    CursorTerritory::FractionRange {
+                        start: 0.5,
+                        end: 0.75,
+                    },
+                ),
+                CursorConfig::forward(
+                    3,
+                    CursorTerritory::FractionRange {
+                        start: 0.75,
+                        end: 1.0,
+                    },
+                ),
+            ],
+            k_beams,
+            branching_factor,
+            endangered_threshold,
+            cursor_policy: CursorPolicy::BestCandidateGlobal,
+        }
+    }
+
     /// Two cursors advancing from both horizon ends until they meet (Plan B).
     ///
     /// * cursor 0 — forward from the horizon start; its dynamic end follows

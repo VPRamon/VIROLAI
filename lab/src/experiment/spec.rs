@@ -11,8 +11,8 @@
 //! {
 //!   "name": "paper-sweep",
 //!   "datasets": [
-//!     { "id": "ctao_n", "path": "data/ctao_n.json" },
-//!     { "id": "ctao_s", "path": "data/ctao_s.json",
+//!     { "id": "ctao_n", "path": "datasets/ctao_n.json" },
+//!     { "id": "ctao_s", "path": "datasets/ctao_s.json",
 //!       "horizon_override": { "start_mjd": 60000.0, "end_mjd": 60001.0 } }
 //!   ],
 //!   "algorithms": [
@@ -183,8 +183,8 @@ mod tests {
         r#"{
             "name": "demo",
             "datasets": [
-                { "id": "ctao_n", "path": "data/ctao_n.json" },
-                { "id": "ctao_s", "path": "data/ctao_s.json", "label": "South",
+                { "id": "ctao_n", "path": "datasets/ctao_n.json" },
+                { "id": "ctao_s", "path": "datasets/ctao_s.json", "label": "South",
                   "horizon_override": { "start_mjd": 60000.0, "end_mjd": 60001.0 } }
             ],
             "algorithms": [
@@ -200,7 +200,7 @@ mod tests {
     fn deserialize_spec_with_lst() {
         let json = r#"{
             "name": "fast-comparison",
-            "datasets": [{ "id": "isdc_n", "path": "data/isdc_n.json" }],
+            "datasets": [{ "id": "isdc_n", "path": "datasets/isdc_n.json" }],
             "algorithms": [
                 { "kind": "est", "axes": { "k_beams": [1, 4] } },
                 { "kind": "lst", "axes": { "k_beams": [1, 4], "branching_factors": [1, 2] } }
@@ -230,7 +230,7 @@ mod tests {
     fn legacy_ranking_field_is_still_accepted() {
         let json = r#"{
             "name": "demo",
-            "datasets": [{ "id": "ctao_n", "path": "data/ctao_n.json" }],
+            "datasets": [{ "id": "ctao_n", "path": "datasets/ctao_n.json" }],
             "algorithms": [{ "kind": "est", "axes": { "k_beams": [1] } }],
             "ranking": { "completion": 2.0, "priority": 1.0 },
             "output_dir": "out/demo"

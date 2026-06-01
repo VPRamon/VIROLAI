@@ -330,6 +330,109 @@ fn two_cursor_config(
 }
 
 #[test]
+fn four_quarter_forward_constructor_uses_contiguous_quarters() {
+    let config = MultiCursorConfig::four_quarter_forward(4, 2, 1);
+    assert_eq!(
+        config.cursors,
+        vec![
+            CursorConfig::forward(
+                0,
+                CursorTerritory::FractionRange {
+                    start: 0.0,
+                    end: 0.25,
+                },
+            ),
+            CursorConfig::forward(
+                1,
+                CursorTerritory::FractionRange {
+                    start: 0.25,
+                    end: 0.5,
+                },
+            ),
+            CursorConfig::forward(
+                2,
+                CursorTerritory::FractionRange {
+                    start: 0.5,
+                    end: 0.75,
+                },
+            ),
+            CursorConfig::forward(
+                3,
+                CursorTerritory::FractionRange {
+                    start: 0.75,
+                    end: 1.0,
+                },
+            ),
+        ]
+    );
+    assert_eq!(config.k_beams, 4);
+    assert_eq!(config.branching_factor, 2);
+    assert_eq!(config.endangered_threshold, 1);
+}
+
+#[test]
+fn four_quarter_forward_places_tasks_in_all_quarters() {
+    let mut possible = TaskPeriodMap::new();
+    possible.insert(TaskId(1), windows(&[(0.0, 2.0)]));
+    possible.insert(TaskId(2), windows(&[(2.5, 4.5)]));
+    possible.insert(TaskId(3), windows(&[(5.0, 7.0)]));
+    possible.insert(TaskId(4), windows(&[(7.5, 9.5)]));
+    let s = Scenario {
+        task_specs: vec![(1, 0.5, 1.0), (2, 0.5, 1.0), (3, 0.5, 1.0), (4, 0.5, 1.0)],
+        possible,
+        horizon: period(0.0, 10.0),
+        config: Configuration::default(),
+    };
+
+    let schedule = run_mc(MultiCursorConfig::four_quarter_forward(4, 2, 1), &s);
+    assert_eq!(schedule.len(), 4, "all four quarter-owned tasks should fit");
+    assert_no_overlap(&schedule);
+}
+
+#[test]
+fn four_quarter_forward_does_not_duplicate_cross_boundary_task() {
+    let mut possible = TaskPeriodMap::new();
+    possible.insert(TaskId(1), windows(&[(2.0, 3.0)]));
+    let s = Scenario {
+        task_specs: vec![(1, 0.4, 1.0)],
+        possible,
+        horizon: period(0.0, 10.0),
+        config: Configuration::default(),
+    };
+
+    let schedule = run_mc(MultiCursorConfig::four_quarter_forward(4, 2, 1), &s);
+    assert_eq!(
+        schedule.len(),
+        1,
+        "boundary-spanning task must be scheduled once"
+    );
+    assert_no_overlap(&schedule);
+}
+
+#[test]
+fn four_quarter_forward_boundary_task_stays_in_correct_quarter() {
+    let mut possible = TaskPeriodMap::new();
+    possible.insert(TaskId(1), windows(&[(2.5, 3.5)]));
+    let s = Scenario {
+        task_specs: vec![(1, 0.5, 1.0)],
+        possible,
+        horizon: period(0.0, 10.0),
+        config: Configuration::default(),
+    };
+
+    let schedule = run_mc(MultiCursorConfig::four_quarter_forward(4, 2, 1), &s);
+    let placement = schedule.get(TaskId(1)).expect("task should be scheduled");
+    assert!(
+        placement.start.value() >= 2.5 - 1e-9,
+        "task must stay in the second quarter"
+    );
+    assert!(
+        placement.end.value() <= 5.0 + 1e-9,
+        "task must stay within the second quarter territory"
+    );
+}
+
+#[test]
 fn multi_cursor_two_forward_fixed_territories_no_overlap() {
     // Front cursor owns [0, 5), back cursor owns [5, 10).
     let mut possible = TaskPeriodMap::new();

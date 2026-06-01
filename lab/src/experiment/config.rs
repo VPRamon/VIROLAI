@@ -339,6 +339,8 @@ pub enum MultiCursorLayout {
     /// Fixed: forward cursor over `[0, 0.5)` and a forward cursor over
     /// `[0.5, 1.0)`.
     StartMidForward,
+    /// Fixed: four forward cursors over contiguous quarter-horizon territories.
+    FourQuarterForward,
     /// Dynamic: a forward cursor from the horizon start and a backward cursor
     /// from the horizon end advance towards each other until they meet. Each
     /// cursor's inner boundary follows the other cursor's live position.
@@ -355,12 +357,13 @@ impl MultiCursorLayout {
         match self {
             Self::EstLstSplit => "est_lst_split",
             Self::StartMidForward => "start_mid_forward",
+            Self::FourQuarterForward => "four_quarter_forward",
             Self::DynamicEstLstMeet => "dynamic_est_lst_meet",
             Self::DynamicStartMidForward => "dynamic_start_mid_forward",
         }
     }
 
-    /// Build the two-cursor list (in horizon-relative fractions) for this layout.
+    /// Build the cursor list (in horizon-relative fractions) for this layout.
     fn cursors(self) -> Vec<CursorConfig> {
         let front = CursorTerritory::FractionRange {
             start: 0.0,
@@ -368,6 +371,22 @@ impl MultiCursorLayout {
         };
         let back = CursorTerritory::FractionRange {
             start: 0.5,
+            end: 1.0,
+        };
+        let quarter_1 = CursorTerritory::FractionRange {
+            start: 0.0,
+            end: 0.25,
+        };
+        let quarter_2 = CursorTerritory::FractionRange {
+            start: 0.25,
+            end: 0.5,
+        };
+        let quarter_3 = CursorTerritory::FractionRange {
+            start: 0.5,
+            end: 0.75,
+        };
+        let quarter_4 = CursorTerritory::FractionRange {
+            start: 0.75,
             end: 1.0,
         };
         match self {
@@ -381,6 +400,14 @@ impl MultiCursorLayout {
                 vec![
                     CursorConfig::forward(0, front),
                     CursorConfig::forward(1, back),
+                ]
+            }
+            Self::FourQuarterForward => {
+                vec![
+                    CursorConfig::forward(0, quarter_1),
+                    CursorConfig::forward(1, quarter_2),
+                    CursorConfig::forward(2, quarter_3),
+                    CursorConfig::forward(3, quarter_4),
                 ]
             }
             Self::DynamicEstLstMeet => {
@@ -706,8 +733,14 @@ mod tests {
             layout: MultiCursorLayout::StartMidForward,
             ..MultiCursorRunConfig::default()
         };
+        let four_quarter = MultiCursorRunConfig {
+            layout: MultiCursorLayout::FourQuarterForward,
+            ..MultiCursorRunConfig::default()
+        };
         assert_ne!(split.slug(), start_mid.slug());
+        assert_ne!(split.slug(), four_quarter.slug());
         assert_eq!(start_mid.slug(), "start_mid_forward-e1-k1-b1");
+        assert_eq!(four_quarter.slug(), "four_quarter_forward-e1-k1-b1");
     }
 
     #[test]

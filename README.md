@@ -328,7 +328,7 @@ follows another cursor's live position. See
 {
   "kind": "multi_cursor",
   "axes": {
-    "layouts":               ["est_lst_split", "dynamic_est_lst_meet"],
+    "layouts":               ["est_lst_split", "four_quarter_forward"],
     "endangered_thresholds": [1],
     "k_beams":               [4],
     "branching_factors":     [2]
@@ -338,7 +338,7 @@ follows another cursor's live position. See
 
 | Axis | Key | Description |
 |---|---|---|
-| Layouts | `layouts` | Cursor arrangement: fixed `"est_lst_split"` / `"start_mid_forward"`, or dynamic `"dynamic_est_lst_meet"` / `"dynamic_start_mid_forward"` |
+| Layouts | `layouts` | Cursor arrangement: fixed `"est_lst_split"` / `"start_mid_forward"` / `"four_quarter_forward"`, or dynamic `"dynamic_est_lst_meet"` / `"dynamic_start_mid_forward"` |
 | Endangered threshold | `endangered_thresholds` | Same semantics as EST |
 | K-beams | `k_beams` | Beam width |
 | Branching factor | `branching_factors` | Candidates explored per beam per round |

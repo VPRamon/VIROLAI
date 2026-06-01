@@ -108,7 +108,7 @@ LST uses the same axes as EST:
 {
   "kind": "multi_cursor",
   "axes": {
-    "layouts": ["est_lst_split", "dynamic_est_lst_meet"],
+    "layouts": ["est_lst_split", "four_quarter_forward"],
     "endangered_thresholds": [1],
     "k_beams": [4],
     "branching_factors": [2],

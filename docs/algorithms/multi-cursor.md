@@ -38,6 +38,15 @@ This is the simplest forward/backward split with a fixed midpoint.
 
 Useful when you want two forward frontiers with a static split.
 
+### `four_quarter_forward`
+
+- cursor `0`: forward over `[0.0, 0.25)`
+- cursor `1`: forward over `[0.25, 0.5)`
+- cursor `2`: forward over `[0.5, 0.75)`
+- cursor `3`: forward over `[0.75, 1.0)`
+
+Useful when you want one fixed forward starting point per quarter of the horizon.
+
 ## Dynamic layouts (Plan B)
 
 ### `dynamic_est_lst_meet`
@@ -83,7 +92,7 @@ Multi-cursor uses EST-style beam knobs plus a layout selector:
 {
   "kind": "multi_cursor",
   "axes": {
-    "layouts": ["est_lst_split", "dynamic_est_lst_meet"],
+    "layouts": ["est_lst_split", "four_quarter_forward"],
     "endangered_thresholds": [1],
     "k_beams": [4],
     "branching_factors": [2],
@@ -97,6 +106,7 @@ Multi-cursor uses EST-style beam knobs plus a layout selector:
 Multi-cursor cell slugs encode the layout first:
 
 - `est_lst_split-e1-k4-b2`
+- `four_quarter_forward-e1-k4-b2`
 - `dynamic_est_lst_meet-e1-k4-b2`
 
 Non-default FOMs append a suffix such as `-future_flexibility`.
@@ -122,6 +132,10 @@ Fixed-territory tests:
 - `multi_cursor_forward_backward_both_cursors_contribute`
 - `multi_cursor_rejects_cross_territory_placement`
 - `multi_cursor_does_not_duplicate_task_across_cursors`
+- `four_quarter_forward_constructor_uses_contiguous_quarters`
+- `four_quarter_forward_places_tasks_in_all_quarters`
+- `four_quarter_forward_does_not_duplicate_cross_boundary_task`
+- `four_quarter_forward_boundary_task_stays_in_correct_quarter`
 - `multi_cursor_respects_block_dependencies`
 
 Dynamic-territory tests:

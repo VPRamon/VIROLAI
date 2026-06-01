@@ -139,8 +139,9 @@ Current runnable examples live in this directory:
 | Spec | Purpose |
 | --- | --- |
 | `lab/sweep-fast.json` | Small EST/LST comparison suitable for smoke tests and iteration. |
-| `lab/sweep-custom.json` | Broader EST/LST comparison over both ISDC datasets. |
+| `lab/sweep-custom.json` | Broader EST/LST comparison over all bundled sample datasets. |
 | `lab/sweep-full.json` | Larger EST/HAP comparison template. Review dataset paths and cell count before running. |
+| `lab/sweep-all.json` | All-datasets, all-algorithms example including `est_lst_split` and `four_quarter_forward` multi-cursor layouts. |
 
 ## Algorithm Axes
 
@@ -157,7 +158,7 @@ Current runnable examples live in this directory:
 
 | Axis | Description |
 | --- | --- |
-| `layouts` | Layout names such as `est_lst_split`, `start_mid_forward`, `dynamic_est_lst_meet`, or `dynamic_start_mid_forward`. |
+| `layouts` | Layout names such as `est_lst_split`, `start_mid_forward`, `four_quarter_forward`, `dynamic_est_lst_meet`, or `dynamic_start_mid_forward`. |
 | `endangered_thresholds` | Same residual-flexibility threshold semantics as EST/LST. |
 | `k_beams` | Beam counts to evaluate. |
 | `branching_factors` | Branching factors to evaluate. |

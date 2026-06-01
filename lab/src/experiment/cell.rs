@@ -472,6 +472,7 @@ mod tests {
                     layouts: vec![
                         MultiCursorLayout::EstLstSplit,
                         MultiCursorLayout::StartMidForward,
+                        MultiCursorLayout::FourQuarterForward,
                         MultiCursorLayout::DynamicEstLstMeet,
                         MultiCursorLayout::DynamicStartMidForward,
                     ],
@@ -486,7 +487,7 @@ mod tests {
             output_dir: Some(PathBuf::from("out")),
         };
         let cells = resolve_cells(&spec).unwrap();
-        assert_eq!(cells.len(), 4);
+        assert_eq!(cells.len(), 5);
         assert!(cells.iter().all(|c| c.algorithm == "multi_cursor"));
         assert!(
             cells
@@ -497,6 +498,11 @@ mod tests {
             cells
                 .iter()
                 .any(|c| c.cell_id == "d1__multi_cursor__start_mid_forward-e1-k4-b2")
+        );
+        assert!(
+            cells
+                .iter()
+                .any(|c| c.cell_id == "d1__multi_cursor__four_quarter_forward-e1-k4-b2")
         );
         assert!(
             cells

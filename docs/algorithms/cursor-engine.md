@@ -114,6 +114,7 @@ Examples:
 
 - `est_lst_split`
 - `start_mid_forward`
+- `four_quarter_forward`
 
 These layouts split the horizon at fixed boundaries.
 
