@@ -16,6 +16,39 @@ impl Registry {
             .map_err(|e| format!("failed to count schedules: {e}"))
     }
 
+    /// Runs referential-integrity checks over the registry.
+    pub fn check_integrity(&self) -> Result<IntegrityReport, String> {
+        let count = |sql: &str| -> Result<usize, String> {
+            self.conn
+                .query_row(sql, [], |row| row.get::<_, usize>(0))
+                .map_err(|e| format!("integrity query failed: {e}"))
+        };
+        Ok(IntegrityReport {
+            total_runs: count("SELECT COUNT(*) FROM runs")?,
+            total_schedules: count("SELECT COUNT(*) FROM schedules")?,
+            runs_without_schedule_hash: count(
+                "SELECT COUNT(*) FROM runs WHERE schedule_hash IS NULL",
+            )?,
+            runs_with_missing_schedule: count(
+                "SELECT COUNT(*) FROM runs r
+                  WHERE r.schedule_hash IS NOT NULL
+                    AND NOT EXISTS (
+                        SELECT 1 FROM schedules s WHERE s.schedule_hash = r.schedule_hash
+                    )",
+            )?,
+            orphan_schedules: count(
+                "SELECT COUNT(*) FROM schedules s
+                  WHERE NOT EXISTS (
+                      SELECT 1 FROM runs r WHERE r.schedule_hash = s.schedule_hash
+                  )",
+            )?,
+            runs_without_metadata: count(
+                "SELECT COUNT(*) FROM runs
+                  WHERE schedule_hash IS NOT NULL AND metadata_json IS NULL",
+            )?,
+        })
+    }
+
     /// Returns the stored schedule JSON for `schedule_hash`, if present.
     pub fn get_schedule_json(&self, schedule_hash: &str) -> Result<Option<String>, String> {
         self.conn
@@ -61,7 +94,7 @@ impl Registry {
             .conn
             .query_row(
                 "SELECT run_key, dataset_id, dataset_path, algorithm, config_slug,
-                        identity_json, metrics_json, r.schedule_hash, s.schedule_json,
+                        identity_json, metrics_json, r.metadata_json, r.schedule_hash, s.schedule_json,
                         r.created_at, r.last_seen_at, r.source_cell_id
                    FROM runs r
                    LEFT JOIN schedules s ON r.schedule_hash = s.schedule_hash
@@ -158,7 +191,7 @@ impl Registry {
 
         let sql = format!(
             "SELECT run_key, dataset_id, dataset_path, algorithm, config_slug,
-                    identity_json, metrics_json, r.schedule_hash, s.schedule_json,
+                    identity_json, metrics_json, r.metadata_json, r.schedule_hash, s.schedule_json,
                     r.created_at, r.last_seen_at, r.source_cell_id
                FROM runs r
                LEFT JOIN schedules s ON r.schedule_hash = s.schedule_hash
@@ -210,7 +243,7 @@ impl Registry {
 
         let sql = format!(
             "SELECT run_key, dataset_id, dataset_path, algorithm, config_slug,
-                    identity_json, metrics_json, r.schedule_hash, s.schedule_json,
+                    identity_json, metrics_json, r.metadata_json, r.schedule_hash, s.schedule_json,
                     r.created_at, r.last_seen_at, r.source_cell_id
                FROM runs r
                LEFT JOIN schedules s ON r.schedule_hash = s.schedule_hash
@@ -234,5 +267,31 @@ impl Registry {
         .collect::<Result<_, _>>()
         .map_err(|e| format!("registry best row failed: {e}"))?;
         Ok(rows)
+    }
+}
+
+/// Result of [`Registry::check_integrity`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct IntegrityReport {
+    /// Total number of run records.
+    pub total_runs: usize,
+    /// Total number of stored schedule bodies.
+    pub total_schedules: usize,
+    /// Runs whose `schedule_hash` is `NULL`.
+    pub runs_without_schedule_hash: usize,
+    /// Runs whose `schedule_hash` has no matching `schedules` row.
+    pub runs_with_missing_schedule: usize,
+    /// Schedule rows referenced by no run.
+    pub orphan_schedules: usize,
+    /// Runs that have a schedule but no stored metadata (legacy databases).
+    pub runs_without_metadata: usize,
+}
+
+impl IntegrityReport {
+    /// Returns `true` when no inconsistency was detected. Orphan schedules and
+    /// legacy missing-metadata rows are reported but are not, on their own,
+    /// corruption.
+    pub fn is_consistent(&self) -> bool {
+        self.runs_without_schedule_hash == 0 && self.runs_with_missing_schedule == 0
     }
 }

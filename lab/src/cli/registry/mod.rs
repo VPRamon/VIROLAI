@@ -29,6 +29,8 @@ enum RegistryCmd {
     Inspect(RegistryInspectArgs),
     /// Export stored schedule JSON from the registry.
     Export(RegistryExportArgs),
+    /// Check registry referential integrity.
+    Doctor(RegistryDoctorArgs),
 }
 
 #[derive(Parser, Debug)]
@@ -248,6 +250,13 @@ struct RegistryExportArgs {
     run_db: Option<PathBuf>,
 }
 
+#[derive(Parser, Debug)]
+struct RegistryDoctorArgs {
+    /// Path to the SQLite registry file.
+    #[arg(long, value_name = "PATH")]
+    run_db: Option<PathBuf>,
+}
+
 pub(crate) fn registry(args: RegistryArgs) -> Result<(), String> {
     match args.cmd {
         RegistryCmd::List(a) => crud::list(a),
@@ -257,5 +266,6 @@ pub(crate) fn registry(args: RegistryArgs) -> Result<(), String> {
         RegistryCmd::Pareto(a) => crud::pareto(a),
         RegistryCmd::Inspect(a) => crud::inspect(a),
         RegistryCmd::Export(a) => crud::export(a),
+        RegistryCmd::Doctor(a) => crud::doctor(a),
     }
 }

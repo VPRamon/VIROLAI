@@ -20,6 +20,10 @@ path = "src/bin/phd/main.rs"
 name = "lab-ctao-adapter"
 path = "src/bin/lab_ctao_adapter/main.rs"
 
+[[bin]]
+name = "lab-migrate-schedule-dedup"
+path = "src/bin/migrate_schedule_dedup.rs"
+
 [dependencies]
 schedulers     = { path = "../schedulers" }
 siderust       = { path = "../siderust" }

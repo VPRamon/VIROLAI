@@ -207,6 +207,7 @@ mod tests {
             config_slug: "e2-k1-b1-future_flexibility".to_string(),
             identity_json: "{}".to_string(),
             metrics_json: metrics_json.to_string(),
+            metadata_json: None,
             schedule_hash: None,
             schedule_json: None,
             created_at: "2024-05-26T10:00:00Z".to_string(),

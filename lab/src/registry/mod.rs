@@ -4,12 +4,15 @@
 //! define how rows are filtered, sorted, ranked, or exported by callers.
 
 mod crud;
+mod export;
 mod identity;
 mod query;
 mod row;
 mod schedule_hash;
 mod store;
 
+pub use crud::IntegrityReport;
+pub use export::reconstruct_artifact;
 pub use identity::{METRICS_VERSION, RunIdentity, hash_file, scheduler_version};
 pub use query::{
     BestOpts, DEFAULT_RUN_DB, ListOpts, SortDirection, SortKey, default_sort_keys, metric_col,
@@ -255,16 +258,18 @@ mod tests {
         reg.upsert_result(
             &id1,
             SAMPLE_METRICS,
+            r#"{"algorithm":"est","algorithm_config":{"k_beams":1}}"#,
             "schedule-a",
-            r#"{"schedule":1}"#,
+            r#"{"scheduling_blocks":[]}"#,
             None,
         )
         .unwrap();
         reg.upsert_result(
             &id2,
             SAMPLE_METRICS,
+            r#"{"algorithm":"est","algorithm_config":{"k_beams":2}}"#,
             "schedule-a",
-            r#"{"schedule":1}"#,
+            r#"{"scheduling_blocks":[]}"#,
             None,
         )
         .unwrap();
@@ -286,5 +291,59 @@ mod tests {
                 .as_deref(),
             Some("schedule-a")
         );
+    }
+
+    /// Regression test for the schedule-deduplication bug: two runs with
+    /// different identities/metrics/metadata but the same `schedule_hash` must
+    /// share a single schedule body, yet each must export its own metadata and
+    /// metrics — never inheriting them from the first run inserted.
+    #[test]
+    fn shared_schedule_exports_per_run_metadata_and_metrics() {
+        let (mut reg, _dir) = open_temp_registry();
+        let mut id1 = make_identity("hash1", r#"{"k_beams":1}"#);
+        id1.config_slug = "e1-k1-b1".to_string();
+        let mut id2 = make_identity("hash1", r#"{"k_beams":2}"#);
+        id2.config_slug = "e1-k2-b1".to_string();
+
+        let body = r#"{"scheduling_blocks":[{"id":1,"tasks":[{"id":101,"scheduled":true}]}]}"#;
+        let metadata1 = r#"{"algorithm":"est","algorithm_config":{"k_beams":1}}"#;
+        let metadata2 = r#"{"algorithm":"est","algorithm_config":{"k_beams":2}}"#;
+        let metrics1 = r#"{"scheduled_task_ratio":0.8,"scheduler_runtime_ms":11.0}"#;
+        let metrics2 = r#"{"scheduled_task_ratio":0.8,"scheduler_runtime_ms":22.0}"#;
+
+        reg.upsert_result(&id1, metrics1, metadata1, "schedule-x", body, None)
+            .unwrap();
+        reg.upsert_result(&id2, metrics2, metadata2, "schedule-x", body, None)
+            .unwrap();
+
+        // Exactly one semantic schedule, both runs point to it.
+        assert_eq!(reg.schedule_count().unwrap(), 1);
+
+        let row1 = reg.get_row(&id1.run_key()).unwrap().unwrap();
+        let row2 = reg.get_row(&id2.run_key()).unwrap().unwrap();
+        assert_eq!(row1.schedule_hash.as_deref(), Some("schedule-x"));
+        assert_eq!(row2.schedule_hash.as_deref(), Some("schedule-x"));
+
+        let a: serde_json::Value =
+            serde_json::from_str(&reconstruct_artifact(&row1).unwrap()).unwrap();
+        let b: serde_json::Value =
+            serde_json::from_str(&reconstruct_artifact(&row2).unwrap()).unwrap();
+
+        assert_eq!(a["schedule_metadata"]["algorithm_config"]["k_beams"], 1);
+        assert_eq!(b["schedule_metadata"]["algorithm_config"]["k_beams"], 2);
+        assert_eq!(a["schedule_metrics"]["scheduler_runtime_ms"], 11.0);
+        assert_eq!(b["schedule_metrics"]["scheduler_runtime_ms"], 22.0);
+    }
+
+    /// Reusing a `schedule_hash` for a different dataset is rejected.
+    #[test]
+    fn schedule_hash_collision_across_datasets_is_rejected() {
+        let (reg, _dir) = open_temp_registry();
+        reg.upsert_schedule("schedule-y", "dataset-a", r#"{"scheduling_blocks":[]}"#)
+            .unwrap();
+        let err = reg
+            .upsert_schedule("schedule-y", "dataset-b", r#"{"scheduling_blocks":[]}"#)
+            .unwrap_err();
+        assert!(err.contains("collision"), "unexpected error: {err}");
     }
 }

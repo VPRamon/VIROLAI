@@ -455,7 +455,7 @@ fn run_stores_unique_schedule_and_run_hash_reference() {
 }
 
 #[test]
-fn registry_export_prefers_stored_schedule_json() {
+fn registry_export_uses_invariant_body_with_run_metadata() {
     let tmp = TempDir::new().unwrap();
     write_input(tmp.path());
     let spec_path = write_spec(tmp.path());
@@ -473,6 +473,7 @@ fn registry_export_prefers_stored_schedule_json() {
         .expect("run should succeed");
     assert!(status.success());
 
+    // Replace the stored invariant body with a marked sentinel object.
     let conn = Connection::open(&db_path).unwrap();
     let (run_key, schedule_hash): (String, String) = conn
         .query_row(
@@ -481,10 +482,10 @@ fn registry_export_prefers_stored_schedule_json() {
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .unwrap();
-    let sentinel = r#"{"stored":true}"#;
+    let sentinel_body = r#"{"marker":"invariant-body","scheduling_blocks":[]}"#;
     conn.execute(
         "UPDATE schedules SET schedule_json = ?2 WHERE schedule_hash = ?1",
-        params![schedule_hash, sentinel],
+        params![schedule_hash, sentinel_body],
     )
     .unwrap();
 
@@ -504,7 +505,113 @@ fn registry_export_prefers_stored_schedule_json() {
         .expect("registry export should succeed");
     assert!(export_status.success());
 
-    assert_eq!(fs::read_to_string(out_file).unwrap(), sentinel);
+    let v: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(out_file).unwrap()).unwrap();
+    // The invariant body is used as the base ...
+    assert_eq!(v["marker"], "invariant-body");
+    // ... and the run's own metadata + metrics are injected on top.
+    assert!(v.get("schedule_metadata").is_some());
+    assert!(v.get("schedule_metrics").is_some());
+}
+
+/// The core deduplication bug: two different configs that produce the same
+/// schedule must share one `schedules` row, yet each export must carry its own
+/// `schedule_metadata` / `schedule_metrics` and never inherit them from the
+/// first run inserted.
+#[test]
+fn two_configs_same_schedule_export_distinct_metadata() {
+    let tmp = TempDir::new().unwrap();
+    write_input(tmp.path());
+
+    // Two EST cells (k_beams 1 and 2). For the single-task fixture both schedule
+    // the task identically, so they share one semantic schedule hash.
+    let spec = r#"{
+  "name": "dedup-smoke",
+  "datasets": [ { "id": "ds1", "path": "input.json" } ],
+  "algorithms": [
+    { "kind": "est", "axes": { "endangered_thresholds": [1], "k_beams": [1, 2], "branching_factors": [1] } }
+  ],
+  "max_parallel": 1
+}"#;
+    let spec_path = tmp.path().join("spec.json");
+    fs::write(&spec_path, spec).unwrap();
+    let db_path = tmp.path().join("runs.sqlite");
+
+    let status = Command::new(BIN)
+        .args([
+            "run",
+            "--spec",
+            spec_path.to_str().unwrap(),
+            "--run-db",
+            db_path.to_str().unwrap(),
+        ])
+        .status()
+        .expect("run should succeed");
+    assert!(status.success());
+
+    let conn = Connection::open(&db_path).unwrap();
+
+    // Two runs, exactly one deduplicated schedule.
+    let run_count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM runs", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(run_count, 2, "expected two run rows");
+    let schedule_count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM schedules", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(schedule_count, 1, "two equal schedules must dedup to one");
+
+    // Both runs reference the same schedule hash.
+    let distinct_hashes: i64 = conn
+        .query_row("SELECT COUNT(DISTINCT schedule_hash) FROM runs", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert_eq!(distinct_hashes, 1);
+
+    // Collect the run keys ordered by config_slug so the assertions are stable.
+    let mut stmt = conn
+        .prepare("SELECT run_key, config_slug FROM runs ORDER BY config_slug")
+        .unwrap();
+    let runs: Vec<(String, String)> = stmt
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    assert_eq!(runs.len(), 2);
+    assert_ne!(runs[0].1, runs[1].1, "configs must differ");
+
+    let export = |run_key: &str, file: &str| -> serde_json::Value {
+        let out = tmp.path().join(file);
+        let st = Command::new(BIN)
+            .args([
+                "registry",
+                "export",
+                "--run",
+                run_key,
+                "--out",
+                out.to_str().unwrap(),
+                "--run-db",
+                db_path.to_str().unwrap(),
+            ])
+            .status()
+            .unwrap();
+        assert!(st.success(), "export failed for {run_key}");
+        serde_json::from_str(&fs::read_to_string(out).unwrap()).unwrap()
+    };
+
+    let a = export(&runs[0].0, "a.json");
+    let b = export(&runs[1].0, "b.json");
+
+    let k_a = a["schedule_metadata"]["algorithm_config"]["k_beams"].clone();
+    let k_b = b["schedule_metadata"]["algorithm_config"]["k_beams"].clone();
+    assert!(k_a.is_number() && k_b.is_number());
+    assert_ne!(
+        k_a, k_b,
+        "each export must carry its own algorithm_config, not the first run's"
+    );
+    assert!(a.get("schedule_metrics").is_some());
+    assert!(b.get("schedule_metrics").is_some());
 }
 
 #[test]

@@ -272,12 +272,14 @@ fn run_cell_inner(
         ScheduleMetrics::compute(&schedule, &prepared.problem, &prepared.horizon, &ctx);
     metrics.scheduler_runtime_ms = Some(scheduler_runtime_ms);
 
-    let metrics_value =
-        serde_json::to_value(&metrics).map_err(|e| format!("failed to serialize metrics: {e}"))?;
-    let output_obj = ScheduleOutput::new(prepared.raw_json.clone(), &schedule, Some(metadata))
-        .with_metrics(metrics_value);
-    let schedule_json = serde_json::to_string_pretty(&output_obj)
+    // The schedules table stores only the invariant body (raw problem +
+    // placements). Run-specific metadata and metrics are stored on the run row
+    // and recombined at export time.
+    let body_obj = ScheduleOutput::new(prepared.raw_json.clone(), &schedule, None);
+    let schedule_body_json = serde_json::to_string_pretty(&body_obj)
         .map_err(|e| format!("failed to serialize schedule {}: {e}", cell.cell_id))?;
+    let metadata_json = serde_json::to_string(&metadata)
+        .map_err(|e| format!("failed to serialize schedule metadata: {e}"))?;
     let metrics_json = serde_json::to_string(&metrics).unwrap_or_else(|_| "{}".to_string());
 
     let resource_id = prepared.problem.telescope.as_ref().map(|t| t.name.as_str());
@@ -288,8 +290,9 @@ fn run_cell_inner(
         reg.upsert_result(
             &identity,
             &metrics_json,
+            &metadata_json,
             &schedule_hash,
-            schedule_json.as_str(),
+            schedule_body_json.as_str(),
             Some(cell.cell_id.as_str()),
         )?;
     }
@@ -297,11 +300,15 @@ fn run_cell_inner(
     Ok(())
 }
 
-/// Recomputes a schedule JSON payload from a stored run identity.
+/// Re-derives the run-specific schedule metadata for a stored run identity.
 ///
-/// This is used by the one-off schedule deduplication migration script. Normal
-/// registry commands treat missing schedule rows as database inconsistencies.
-pub fn regenerate_from_identity(identity: &RunIdentity) -> Result<RegeneratedSchedule, String> {
+/// Used by the one-off schedule-deduplication migration to backfill the
+/// `runs.metadata_json` column on databases created before that column existed.
+/// Metadata is independent of the computed placements, so the scheduler is
+/// **not** re-run; only the dataset is loaded to recover the observing site and
+/// horizon. Returns an error if the dataset file is missing or its content hash
+/// no longer matches the recorded identity.
+pub fn metadata_json_from_identity(identity: &RunIdentity) -> Result<String, String> {
     let current_hash = hash_file(std::path::Path::new(&identity.dataset_path))?;
     if current_hash != identity.dataset_hash {
         return Err(format!(
@@ -309,7 +316,6 @@ pub fn regenerate_from_identity(identity: &RunIdentity) -> Result<RegeneratedSch
             identity.dataset_path, identity.dataset_hash, current_hash
         ));
     }
-
     let run_config: RunConfig = serde_json::from_str(&identity.config_json)
         .map_err(|e| format!("failed to parse run config from identity: {e}"))?;
     let horizon_override = identity
@@ -322,81 +328,14 @@ pub fn regenerate_from_identity(identity: &RunIdentity) -> Result<RegeneratedSch
         std::path::Path::new(&identity.dataset_path),
         horizon_override,
     )?;
-    let started = Instant::now();
-    let schedule = run_scheduler(run_config, &prepared, &identity.run_key())?;
-    let scheduler_runtime_ms = started.elapsed().as_secs_f64() * 1000.0;
-
     let metadata = build_schedule_metadata_from_parts(
         &run_config,
         &prepared,
         Some(identity.dataset_id.clone()),
         None,
     );
-    let ctx = MetricsContext::new();
-    let mut metrics =
-        ScheduleMetrics::compute(&schedule, &prepared.problem, &prepared.horizon, &ctx);
-    metrics.scheduler_runtime_ms = Some(scheduler_runtime_ms);
-    let metrics_value =
-        serde_json::to_value(&metrics).map_err(|e| format!("failed to serialize metrics: {e}"))?;
-    let output_obj = ScheduleOutput::new(prepared.raw_json.clone(), &schedule, Some(metadata))
-        .with_metrics(metrics_value);
-    let schedule_json = serde_json::to_string_pretty(&output_obj)
-        .map_err(|e| format!("failed to serialize regenerated schedule: {e}"))?;
-    let resource_id = prepared.problem.telescope.as_ref().map(|t| t.name.as_str());
-    let schedule_hash = canonical_schedule_hash(&schedule, resource_id)?;
-
-    Ok(RegeneratedSchedule {
-        schedule_json,
-        schedule_hash,
-    })
+    serde_json::to_string(&metadata).map_err(|e| format!("failed to serialize metadata: {e}"))
 }
-
-/// Schedule data recomputed from a run identity.
-pub struct RegeneratedSchedule {
-    pub schedule_json: String,
-    pub schedule_hash: String,
-}
-
-fn run_scheduler(
-    run_config: RunConfig,
-    prepared: &PreparedProblem,
-    cell_id: &str,
-) -> Result<schedulers::schedule::Schedule, String> {
-    match run_config {
-        RunConfig::Est(config) => {
-            let scheduler = config.build_scheduler()?;
-            scheduler
-                .run(
-                    &prepared.problem,
-                    &prepared.possible_periods,
-                    &prepared.horizon,
-                )
-                .map_err(|e| format!("EST run {cell_id} failed: {e}"))
-        }
-        RunConfig::Hap(config) => {
-            let scheduler = config.build_scheduler()?;
-            scheduler
-                .run(
-                    &prepared.problem,
-                    &prepared.possible_periods,
-                    &prepared.horizon,
-                )
-                .map_err(|e| format!("HAP run {cell_id} failed: {e}"))
-        }
-        RunConfig::Lst(config) => {
-            let scheduler = config.build_scheduler()?;
-            scheduler
-                .run(
-                    &prepared.problem,
-                    &prepared.possible_periods,
-                    &prepared.horizon,
-                )
-                .map_err(|e| format!("LST run {cell_id} failed: {e}"))
-        }
-    }
-}
-
-/// Builds a [`RunIdentity`] for a cell.
 pub(crate) fn build_identity(cell: &MatrixCell, sched_ver: &str) -> Result<RunIdentity, String> {
     let dataset_hash = hash_file(&cell.dataset_path)?;
     let config_json = serde_json::to_string(&cell.run_config)

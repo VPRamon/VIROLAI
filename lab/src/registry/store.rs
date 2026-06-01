@@ -77,6 +77,7 @@ CREATE TABLE IF NOT EXISTS runs (
     metrics_version TEXT NOT NULL,
     identity_json   TEXT NOT NULL,
     metrics_json    TEXT NOT NULL,
+    metadata_json   TEXT,
     schedule_hash   TEXT,
     -- indexed metric columns
     task_ratio              REAL,
@@ -100,7 +101,6 @@ CREATE TABLE IF NOT EXISTS schedules (
     schedule_json TEXT NOT NULL,
     created_at    TEXT NOT NULL
 );
-
 CREATE INDEX IF NOT EXISTS idx_runs_dataset   ON runs (dataset_id);
 CREATE INDEX IF NOT EXISTS idx_runs_algorithm ON runs (algorithm);
 CREATE INDEX IF NOT EXISTS idx_runs_config    ON runs (config_slug);
@@ -122,6 +122,7 @@ CREATE INDEX IF NOT EXISTS idx_schedules_dataset_hash ON schedules(dataset_hash)
             ("scheduled_time_sec", "REAL"),
             ("scheduled_time_ratio", "REAL"),
             ("schedule_hash", "TEXT"),
+            ("metadata_json", "TEXT"),
         ] {
             self.ensure_column("runs", col, ty)?;
         }

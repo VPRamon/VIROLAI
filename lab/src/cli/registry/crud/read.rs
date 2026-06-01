@@ -5,7 +5,8 @@
 //! rows) are performed by `lab run`, not by registry commands.
 
 use lab::registry::{
-    BestOpts, ListOpts, Registry, RunRow, SortKey, default_sort_keys, parse_sort_key, registry_path,
+    BestOpts, ListOpts, Registry, RunRow, SortKey, default_sort_keys, parse_sort_key,
+    reconstruct_artifact, registry_path,
 };
 
 use super::super::format::{parse_metrics, print_rows, row_json};
@@ -13,8 +14,8 @@ use super::super::scoring::{
     compare_rows_by_default_policy, dominates, metric_value, parse_objectives, parse_weights,
 };
 use super::super::{
-    RegistryBestArgs, RegistryExportArgs, RegistryInspectArgs, RegistryListArgs,
-    RegistryParetoArgs, RegistryRankArgs, RegistrySortArgs,
+    RegistryBestArgs, RegistryDoctorArgs, RegistryExportArgs, RegistryInspectArgs,
+    RegistryListArgs, RegistryParetoArgs, RegistryRankArgs, RegistrySortArgs,
 };
 
 pub(in crate::cli::registry) fn list(args: RegistryListArgs) -> Result<(), String> {
@@ -213,7 +214,7 @@ pub(in crate::cli::registry) fn export(args: RegistryExportArgs) -> Result<(), S
             let row = reg
                 .get_row(&full_key)?
                 .ok_or_else(|| format!("no run found for key '{full_key}'"))?;
-            let json = schedule_json_for_row(&row)?;
+            let json = reconstruct_artifact(&row)?;
             std::fs::write(out, json)
                 .map_err(|e| format!("failed to write {}: {e}", out.display()))?;
             println!("exported -> {}", out.display());
@@ -240,13 +241,17 @@ pub(in crate::cli::registry) fn export(args: RegistryExportArgs) -> Result<(), S
             let mut unavailable = 0usize;
             let mut used_names = std::collections::HashSet::new();
             for row in &rows {
-                let Some(json) = &row.schedule_json else {
-                    eprintln!(
-                        "  skip (no schedule_json): {} - rerun with `lab run --override`",
-                        &row.run_key[..row.run_key.len().min(16)]
-                    );
-                    unavailable += 1;
-                    continue;
+                let json = match reconstruct_artifact(row) {
+                    Ok(json) => json,
+                    Err(e) => {
+                        eprintln!(
+                            "  skip ({}): {}",
+                            e,
+                            &row.run_key[..row.run_key.len().min(16)]
+                        );
+                        unavailable += 1;
+                        continue;
+                    }
                 };
                 let base_name = format!(
                     "{}__{}__{}.json",
@@ -268,7 +273,7 @@ pub(in crate::cli::registry) fn export(args: RegistryExportArgs) -> Result<(), S
                     eprintln!("  skip (exists, use --force): {}", dest.display());
                     continue;
                 }
-                std::fs::write(&dest, json)
+                std::fs::write(&dest, &json)
                     .map_err(|e| format!("failed to write {}: {e}", dest.display()))?;
                 exported += 1;
             }
@@ -276,7 +281,7 @@ pub(in crate::cli::registry) fn export(args: RegistryExportArgs) -> Result<(), S
                 "exported {exported} schedule(s) to {}{}",
                 out_dir.display(),
                 if unavailable > 0 {
-                    format!(" ({unavailable} skipped: no schedule_json)")
+                    format!(" ({unavailable} skipped: not exportable)")
                 } else {
                     String::new()
                 }
@@ -295,25 +300,37 @@ pub(in crate::cli::registry) fn export(args: RegistryExportArgs) -> Result<(), S
     }
 }
 
-// ── Private helpers ────────────────────────────────────────────────────────────
+pub(in crate::cli::registry) fn doctor(args: RegistryDoctorArgs) -> Result<(), String> {
+    let db_path = registry_path(args.run_db.as_deref());
+    let reg = Registry::open(&db_path)?;
+    let report = reg.check_integrity()?;
 
-/// Resolves the schedule JSON for a row, with actionable error messages for
-/// rows that are missing deduplicated schedule storage.
-fn schedule_json_for_row(row: &RunRow) -> Result<String, String> {
-    let Some(schedule_hash) = &row.schedule_hash else {
-        return Err(format!(
-            "run '{}' has no schedule_hash; registry is inconsistent",
-            &row.run_key[..row.run_key.len().min(16)]
-        ));
-    };
-    row.schedule_json.clone().ok_or_else(|| {
-        format!(
-            "run '{}' references missing schedule '{}'; registry is inconsistent",
-            &row.run_key[..row.run_key.len().min(16)],
-            &schedule_hash[..schedule_hash.len().min(16)]
-        )
-    })
+    println!("registry: {}", db_path.display());
+    println!("  runs:                       {}", report.total_runs);
+    println!("  schedules:                  {}", report.total_schedules);
+    println!(
+        "  runs without schedule_hash: {}",
+        report.runs_without_schedule_hash
+    );
+    println!(
+        "  runs -> missing schedule:   {}",
+        report.runs_with_missing_schedule
+    );
+    println!("  orphan schedules:           {}", report.orphan_schedules);
+    println!(
+        "  runs without metadata:      {} (legacy rows; re-run or migrate)",
+        report.runs_without_metadata
+    );
+
+    if report.is_consistent() {
+        println!("OK: no referential inconsistencies detected");
+        Ok(())
+    } else {
+        Err("registry integrity check failed".to_string())
+    }
 }
+
+// ── Private helpers ────────────────────────────────────────────────────────────
 
 fn parse_sort_keys(raw: &[String]) -> Result<Vec<SortKey>, String> {
     raw.iter().map(|s| parse_sort_key(s)).collect()

@@ -18,18 +18,23 @@ interactive result inspection.
 # 1. Build everything
 cargo build --release
 
-# 2. Run a sweep experiment (multiple datasets × algorithm configurations)
+# 2. Run a sweep experiment (multiple datasets × algorithm configurations).
+#    Results are stored in a SQLite registry (DB-only workflow).
 cargo run -p lab --bin phd --release -- sweep \
   --spec lab/est_sweep.json \
-  --out out/my-sweep \
-  --manifest
+  --run-db .lab/runs.sqlite
 
-# 3. Start the web app
+# 3. Export the schedules you want from the registry
+cargo run -p lab --bin lab --release -- registry export \
+  --out-dir out/my-sweep \
+  --run-db .lab/runs.sqlite
+
+# 4. Start the web app
 ./webapp/setup.sh -d          # Docker (frontend + backend + postgres)
 
-# 4. Open the web app
-#    http://localhost:3000  → Workspace page → Algorithm Results section
-#    Drop the generated *.manifest.json files from out/my-sweep/ onto a result workspace
+# 5. Publish the exported schedules to a workspace
+cargo run -p lab --bin phd --release -- publish \
+  --workspace my-sweep --create-workspace --dir out/my-sweep
 ```
 
 ---
@@ -68,25 +73,28 @@ cargo run -p lab --bin phd -- <COMMAND> [OPTIONS]
 
 | Command | Purpose |
 |---|---|
-| `sweep` | Run a parameter sweep and collect flat results (primary workflow) |
+| `sweep` | Run a parameter sweep and store results in the SQLite registry (primary workflow) |
 | `matrix` | Lower-level alias — delegates directly to the `lab` binary |
 | `run` | Run a single scheduling problem (delegates to `schedulers`) |
 | `dataset adapt` | Convert a CTAO dataset directory into `scheduling_problem.json` |
-| `manifest create` | Build manifest(s) from a sweep run-directory or a single schedule JSON |
-| `manifest validate` | Validate a manifest against structural rules |
+| `publish` | Upload schedule JSONs from a directory to a webapp workspace |
+
+Registry inspection and schedule export are provided by the `lab` binary under
+`lab registry …` (see [The run registry](#the-run-registry)).
 
 ---
 
 ### `phd sweep`
 
 ```
-phd sweep --spec <FILE> --out <DIR> [--manifest] [--parallel <N>]
+phd sweep --spec <FILE> [--run-db <PATH>] [--parallel <N>] [--override]
 ```
 
-Runs the full experiment matrix described in `<FILE>` and writes **one
-self-contained schedule JSON per cell** into `<DIR>` (flat — no
-subdirectories). Use `--manifest` to also emit a companion
-`<cell_id>.manifest.json` next to every schedule.
+Runs the full experiment matrix described in `<FILE>` and stores every
+successful run in a SQLite registry (default `.lab/runs.sqlite`). This is a
+**DB-only** workflow: no schedule files, manifests, or run directories are
+written. Schedules are materialised on demand with
+[`lab registry export`](#exporting-schedules).
 
 > Note: `phd sweep` invokes the sibling `lab` binary from
 > `target/debug/lab` or `target/release/lab`. If you encounter
@@ -95,85 +103,75 @@ subdirectories). Use `--manifest` to also emit a companion
 > ```bash
 > cargo build -p lab --bin lab
 > ```
->
-> For a release run, build the release binary as well:
->
-> ```bash
-> cargo build --release -p lab --bin lab
-> ```
 
 | Flag | Required | Description |
 |---|---|---|
 | `--spec <FILE>` | ✅ | Path to the experiment spec JSON (see [Spec Format](#spec-format)) |
-| `--out <DIR>` | ✅ | Output directory — created if absent |
-| `--manifest` | — | Emit `<cell_id>.manifest.json` alongside each schedule |
-| `--parallel <N>` | — | Override the number of parallel worker threads (defaults to the spec's `max_parallel` or the CPU count) |
+| `--run-db <PATH>` | — | Registry SQLite path (default `.lab/runs.sqlite`) |
+| `--parallel <N>` | — | Override worker threads (defaults to the spec's `max_parallel` or the CPU count) |
+| `--override` | — | Re-execute cells already present in the registry and refresh their rows |
 
-**Output layout:**
-
-```
-out/my-sweep/
-  cta_n__est__e0_k1_b1.json               # self-contained schedule
-  cta_n__est__e0_k1_b1.manifest.json      # companion manifest  (with --manifest)
-  cta_n__est__e0_k1_b2.json
-  cta_n__est__e0_k1_b2.manifest.json
-  ...
-```
-
-Each schedule JSON embeds `schedule_metadata` (algorithm, config, dataset id/label,
-scheduling horizon) and `schedule_metrics` (completion rates, priority statistics,
-fragmentation, etc.) so it is fully self-contained.
+Each stored run keeps its own identity, configuration, metrics, and schedule
+metadata. Semantically identical schedules produced by different configurations
+are **deduplicated**: the invariant schedule body is stored once, while each run
+keeps its own metadata and metrics. See [The run registry](#the-run-registry).
 
 ---
 
-### `phd manifest create`
+### The run registry
 
-Build manifests after the fact, either for an entire run directory or for a single
-schedule file.
+The registry is a SQLite database (`.lab/runs.sqlite` by default) with two
+tables:
 
-#### From a whole sweep run directory (`--run`)
+- `runs` — one row per unique run identity. Holds `identity_json`,
+  `config_json`, `metrics_json`, the run-specific `metadata_json`
+  (`schedule_metadata` body), `source_cell_id`, indexed metric columns, and a
+  `schedule_hash` foreign key.
+- `schedules` — one row per **semantically unique** schedule, keyed by
+  `schedule_hash` (a content hash of the placements only). Stores just the
+  *invariant* schedule body (the problem annotated with placements). Run-specific
+  `schedule_metadata` / `schedule_metrics` are **not** stored here, so multiple
+  runs can safely share a single schedule body.
 
-```
-phd manifest create --run <run-dir> [--out <dir>] [--skip-existing]
-```
-
-Walks the `<run-dir>/cells/` subdirectory produced by `phd matrix`, builds one
-manifest per cell, and writes them to `<out>` (defaults to `<run-dir>/cells/`).
-
-| Flag | Description |
-|---|---|
-| `--run <DIR>` | Path to the `run-<ts>/` directory from `phd matrix` |
-| `--out <DIR>` | Override output directory |
-| `--skip-existing` | Skip cells whose `.manifest.json` already exists |
-
-#### From a single schedule file (`--schedule`)
+`lab registry` exposes read-only queries over this database:
 
 ```
-phd manifest create --schedule <file.json> [--out <file.manifest.json>]
+lab registry list     [--dataset <ID>] [--algorithm <NAME>] [--sort <metric:dir>] [--format json|table]
+lab registry inspect  --run <KEY|PREFIX>
+lab registry best     --dataset <ID> [--algorithm <NAME>]
+lab registry export   …            # see below
+lab registry doctor                # referential-integrity check
 ```
 
-Reads the embedded `schedule_metadata` and `schedule_metrics` from the schedule JSON
-and writes a manifest to `--out` (or to stdout if omitted).
+`lab registry doctor` reports runs with a `NULL` schedule hash, runs pointing to
+a missing schedule, orphan schedules, and legacy rows lacking stored metadata; it
+exits non-zero when a real inconsistency is found.
 
-| Flag | Description |
-|---|---|
-| `--schedule <FILE>` | Self-contained schedule JSON (must have embedded metadata and metrics) |
-| `--out <PATH>` | Output file path (default: stdout) |
+#### Exporting schedules
 
-> **Note:** `--run` and `--schedule` are mutually exclusive.
+`registry export` reconstructs a complete, run-specific schedule artifact by
+recombining the shared invariant body with that run's own `schedule_metadata`
+and `schedule_metrics`:
 
----
+```bash
+# Single run -> single file
+lab registry export --run <KEY|PREFIX> --out out/best.json [--force] [--run-db <PATH>]
 
-### `phd manifest validate`
-
+# Filtered set -> directory (one file per run)
+lab registry export --out-dir out/my-sweep \
+  [--dataset <ID>] [--algorithm <NAME>] [--sort <metric:dir>] [--limit <N>] \
+  [--force] [--run-db <PATH>]
 ```
-phd manifest validate <manifest.json>
-```
 
-Runs structural validation against the manifest schema rules and prints a report.
-Exits with a non-zero status if any errors are found.
+Because the body is deduplicated but metadata/metrics live on the run row, two
+runs that share a schedule still export their **own** metadata and metrics — no
+export ever inherits them from another run.
 
----
+> Migrating an old database: registries created before schedule deduplication
+> store run-specific fields inside the shared body and lack `metadata_json`.
+> Upgrade such a file once with the standalone tool
+> (`cargo run -p lab --bin lab-migrate-schedule-dedup -- .lab/runs.sqlite`), or
+> simply re-run the sweep with `--override`.
 
 ### `phd dataset adapt`
 
@@ -216,7 +214,6 @@ which algorithms and parameter combinations to run, and where to write output.
 ```json
 {
   "name": "my-experiment",
-  "output_dir": "out/my-experiment",
   "datasets": [
     {
       "id": "isdc_n",
@@ -286,7 +283,7 @@ This produces `2 datasets × (2 × 2 × 2 EST cells) = 16` schedule files.
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `name` | string | — | Human-readable name (used in manifest `producer` metadata) |
-| `output_dir` | string | — | Where to write the run directory (`phd matrix`) or flat output (`phd sweep --out` overrides this) |
+| `output_dir` | string | — | Legacy field used by `phd matrix` run directories; ignored by the DB-only `phd sweep` workflow |
 | `max_parallel` | int | CPU count | Number of parallel worker threads |
 | `datasets[].id` | string | — | Short identifier used in cell filenames |
 | `datasets[].path` | string | — | Path to `scheduling_problem.json` |
@@ -353,8 +350,8 @@ Short flags `-e`, `-k`, and `-b` are not supported; use `--est-e`, `--est-k`, an
 
 ## Sweep Workflow (End-to-End)
 
-This section walks through the complete workflow: **run many configurations → generate
-manifests → upload to the webapp**.
+This section walks through the complete workflow: **run many configurations into
+the registry → export the schedules you want → upload to the webapp**.
 
 ### Step 1 — Prepare your experiment spec
 
@@ -366,45 +363,39 @@ cp lab/est_sweep.json lab/my_sweep.json
 
 Edit `my_sweep.json` to point at your datasets and set the parameter ranges.
 
-### Step 2 — Run the sweep
+### Step 2 — Run the sweep (DB-only)
 
 ```bash
 cargo run -p lab --bin phd --release -- sweep \
   --spec lab/my_sweep.json \
-  --out out/my-sweep \
-  --manifest
+  --run-db .lab/runs.sqlite
 ```
 
 - `--release` is recommended for large sweeps (significantly faster).
-- `--manifest` writes a `.manifest.json` alongside every schedule.
+- Every successful run is stored in the SQLite registry; no files are written.
+- Re-running is cheap: cells already present are skipped (use `--override` to
+  recompute and refresh their rows).
 - Progress is logged to stderr; each cell runs in parallel.
 
-After completion:
-
-```
-out/my-sweep/
-  isdc_n__est__e0_k1_b1.json
-  isdc_n__est__e0_k1_b1.manifest.json
-  isdc_n__est__e0_k2_b1.json
-  isdc_n__est__e0_k2_b1.manifest.json
-  ...
-```
-
-### Step 3 — (Optional) Build manifests from existing schedules
-
-If you ran the sweep without `--manifest`, or want to regenerate manifests:
+### Step 3 — Inspect and export schedules from the registry
 
 ```bash
-# For a single schedule:
-cargo run -p lab --bin phd -- manifest create \
-  --schedule out/my-sweep/isdc_n__est__e0_k1_b1.json \
-  --out out/my-sweep/isdc_n__est__e0_k1_b1.manifest.json
+# Browse stored runs
+cargo run -p lab --bin lab -- registry list --run-db .lab/runs.sqlite
 
-# For all schedules in a run directory (phd matrix output):
-cargo run -p lab --bin phd -- manifest create \
-  --run out/matrix-run/run-20260101T120000Z \
-  --out out/matrix-run/manifests
+# Export a filtered set to a directory (one self-contained JSON per run)
+cargo run -p lab --bin lab -- registry export \
+  --out-dir out/my-sweep \
+  --run-db .lab/runs.sqlite
+
+# Or export a single run by key/prefix
+cargo run -p lab --bin lab -- registry export \
+  --run 9f3a7c --out out/best.json \
+  --run-db .lab/runs.sqlite
 ```
+
+Each exported JSON is self-contained: the invariant schedule body recombined
+with that run's own `schedule_metadata` and `schedule_metrics`.
 
 ### Step 4 — Start the web app
 
@@ -462,9 +453,9 @@ For each file the status updates inline:
 
 After uploading, click **Clear uploaded** to hide the completed entries.
 
-> **Tip:** The fastest workflow is `phd sweep --manifest` followed by drag-and-drop
-> of the entire `out/my-sweep/` folder onto the drop zone. Manifests are uploaded
-> directly; any plain schedule JSONs are converted server-side.
+> **Tip:** A fast workflow is `lab registry export --out-dir out/my-sweep`
+> followed by drag-and-drop of the entire `out/my-sweep/` folder onto the drop
+> zone. Self-contained schedule JSONs are converted to manifests server-side.
 
 ---
 
@@ -574,7 +565,7 @@ Described by [`schemas/scheduling_problem/scheduling_problem.schema.json`](schem
 
 ### Schedule Output
 
-Each schedule JSON produced by `phd sweep` embeds:
+Each schedule JSON exported from the registry (`lab registry export`) embeds:
 
 - `schedule_metadata` — algorithm id, config, dataset id/label, scheduling horizon
 - `schedule_metrics` — completion rates, priority statistics, gap analysis,
@@ -649,11 +640,13 @@ Auto-fix formatting:
 cargo fmt --all
 ```
 
+---
 
+#### Export a schedule from the registry
 
-#### Generate schedule
-
-cargo run -p lab --bin lab -- registry regenerate \
+```bash
+cargo run -p lab --bin lab -- registry export \
   --run-db .lab/runs.sqlite \
   --run 9f3a7c \
   --out out/best-density.json
+```

@@ -10,7 +10,10 @@ pub struct RunRow {
     pub config_slug: String,
     pub identity_json: String,
     pub metrics_json: String,
+    /// Run-specific schedule metadata (`schedule_metadata` body), if stored.
+    pub metadata_json: Option<String>,
     pub schedule_hash: Option<String>,
+    /// Invariant schedule body shared across runs with the same `schedule_hash`.
     pub schedule_json: Option<String>,
     pub created_at: String,
     pub last_seen_at: String,
@@ -26,10 +29,11 @@ pub(super) fn row_to_run_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RunRow
         config_slug: row.get(4)?,
         identity_json: row.get(5)?,
         metrics_json: row.get(6)?,
-        schedule_hash: row.get(7)?,
-        schedule_json: row.get(8)?,
-        created_at: row.get(9)?,
-        last_seen_at: row.get(10)?,
-        source_cell_id: row.get(11)?,
+        metadata_json: row.get(7)?,
+        schedule_hash: row.get(8)?,
+        schedule_json: row.get(9)?,
+        created_at: row.get(10)?,
+        last_seen_at: row.get(11)?,
+        source_cell_id: row.get(12)?,
     })
 }
