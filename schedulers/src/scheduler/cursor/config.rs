@@ -1,10 +1,14 @@
 //! Configuration types for the multi-cursor scheduler.
 //!
 //! These types describe *what* cursors exist and *where* they may schedule,
-//! independently of the beam-search engine that executes them. The design
-//! anticipates a future "Plan B" (dynamic cursor territories) by keeping
-//! territory resolution behind [`CursorTerritory`] so the engine never needs to
-//! special-case how a cursor's active region is computed.
+//! independently of the beam-search engine that executes them. The scheduler
+//! supports both implemented territory models:
+//!
+//! - **Plan A** — fixed territories
+//! - **Plan B** — dynamic cursor-relative territories
+//!
+//! Territory resolution stays behind [`CursorTerritory`] so the engine never
+//! needs to special-case how a cursor's active region is computed.
 
 use crate::error::ScheduleError;
 use crate::time::{MJD, Period, Time};
@@ -26,9 +30,10 @@ pub enum CursorDirection {
 
 /// Where a cursor is anchored.
 ///
-/// Anchors are primarily a Plan B concept. In Plan A the [`CursorTerritory`] is
-/// authoritative; the anchor is retained so configurations remain descriptive
-/// and forward-compatible.
+/// Anchors are mainly descriptive for fixed layouts and operational for dynamic
+/// layouts. In Plan A the [`CursorTerritory`] is authoritative; in Plan B the
+/// anchor helps describe where the cursor starts before live boundaries begin to
+/// constrain it.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum CursorAnchor {
     /// Anchored at the start of the scheduling horizon.

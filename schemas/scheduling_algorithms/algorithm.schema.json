@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft-07/schema",
   "$id": "scheduling_algorithms/algorithm.schema.json",
   "title": "AlgorithmConfig",
-  "description": "Algorithm type and per-algorithm configuration used for a scheduling run.",
+  "description": "Algorithm type and per-algorithm configuration used for a scheduling run. This schema is active: it is referenced by schedule_metadata.schema.json and accepts current EST, LST, multi-cursor, and HAP metadata shapes.",
   "type": "object",
   "required": ["algorithm", "algorithm_config"],
   "oneOf": [
@@ -15,6 +15,20 @@
     },
     {
       "properties": {
+        "algorithm": { "const": "lst" },
+        "algorithm_config": { "$ref": "#/$defs/LstConfig" }
+      },
+      "required": ["algorithm", "algorithm_config"]
+    },
+    {
+      "properties": {
+        "algorithm": { "const": "multi_cursor" },
+        "algorithm_config": { "$ref": "#/$defs/MultiCursorConfig" }
+      },
+      "required": ["algorithm", "algorithm_config"]
+    },
+    {
+      "properties": {
         "algorithm": { "const": "hap" },
         "algorithm_config": { "$ref": "#/$defs/HapConfig" }
       },
@@ -22,6 +36,11 @@
     }
   ],
   "$defs": {
+    "BeamFom": {
+      "description": "Figure-of-merit function used to score and rank candidate placements.",
+      "type": "string",
+      "enum": ["soft_constraint", "future_flexibility"]
+    },
     "EstConfig": {
       "type": "object",
       "description": "Configuration parameters for the Earliest-Start-Time beam-search scheduler.",
@@ -40,49 +59,151 @@
           "minimum": 1
         },
         "endangered_threshold": {
-          "description": "Tasks with flexibility below this value are promoted ahead of others. 0 disables the protection.",
+          "description": "Residual-flexibility threshold below which a task is promoted ahead of others. 0 disables the protection.",
           "type": "integer",
           "minimum": 0
         },
-        "fom": {
-          "description": "Figure-of-merit function used to score and rank candidate placements.",
+        "fom": { "$ref": "#/$defs/BeamFom" }
+      }
+    },
+    "LstConfig": {
+      "type": "object",
+      "description": "Configuration parameters for the Latest-Start-Time beam-search scheduler. LST shares the EST beam knobs but runs as a single backward cursor.",
+      "required": ["k_beams", "branching_factor", "endangered_threshold"],
+      "additionalProperties": false,
+      "properties": {
+        "k_beams": {
+          "description": "Number of schedule states (beams) kept alive after each expansion round.",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100
+        },
+        "branching_factor": {
+          "description": "Number of distinct candidates tried per beam per round.",
+          "type": "integer",
+          "minimum": 1
+        },
+        "endangered_threshold": {
+          "description": "Residual-flexibility threshold below which a task is promoted ahead of others. 0 disables the protection.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "fom": { "$ref": "#/$defs/BeamFom" }
+      }
+    },
+    "MultiCursorConfig": {
+      "type": "object",
+      "description": "Configuration parameters for a multi-cursor beam-search run.",
+      "required": ["layout", "k_beams", "branching_factor", "endangered_threshold"],
+      "additionalProperties": false,
+      "properties": {
+        "layout": {
+          "description": "Named cursor layout.",
           "type": "string",
-          "enum": ["soft_constraint", "future_flexibility"]
-        }
+          "enum": [
+            "est_lst_split",
+            "start_mid_forward",
+            "dynamic_est_lst_meet",
+            "dynamic_start_mid_forward"
+          ]
+        },
+        "k_beams": {
+          "description": "Number of schedule states (beams) kept alive after each expansion round.",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100
+        },
+        "branching_factor": {
+          "description": "Number of distinct candidates tried per beam per round.",
+          "type": "integer",
+          "minimum": 1
+        },
+        "endangered_threshold": {
+          "description": "Residual-flexibility threshold below which a task is promoted ahead of others. 0 disables the protection.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "fom": { "$ref": "#/$defs/BeamFom" }
       }
     },
     "HapConfig": {
-      "type": "object",
-      "description": "Configuration parameters for the Hybrid Adaptive metaheuristic scheduler.",
-      "required": ["num_crus", "cru_max_iterations", "rho", "random_seed", "impatience_alpha"],
-      "additionalProperties": false,
-      "properties": {
-        "num_crus": {
-          "description": "Number of parallel Constructive Repair Units (CRUs) and survivor schedules.",
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 64
+      "description": "Configuration parameters for the Hybrid Adaptive metaheuristic scheduler. Accepts both the current lab-run metadata shape and the legacy standalone shape.",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["iota_max", "rho", "population_size", "survivor", "seed"],
+          "additionalProperties": false,
+          "properties": {
+            "iota_max": {
+              "description": "Maximum CRU task-scheduling iterations.",
+              "type": "integer",
+              "minimum": 1
+            },
+            "rho": {
+              "description": "Window selection stochasticity: pick uniformly from the best N windows.",
+              "type": "integer",
+              "minimum": 1
+            },
+            "population_size": {
+              "description": "Planner population size.",
+              "type": "integer",
+              "minimum": 1
+            },
+            "survivor": {
+              "type": "object",
+              "required": ["mode"],
+              "additionalProperties": false,
+              "properties": {
+                "mode": {
+                  "type": "string",
+                  "enum": ["greedy_one", "elitist_top_k", "pareto_front"]
+                },
+                "k": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              }
+            },
+            "seed": {
+              "description": "Master seed for deterministic replay.",
+              "type": "integer",
+              "minimum": 0
+            }
+          }
         },
-        "cru_max_iterations": {
-          "description": "Maximum repair iterations per CRU run.",
-          "type": "integer",
-          "minimum": 1
-        },
-        "rho": {
-          "description": "Window selection stochasticity: pick uniformly from the best N windows.",
-          "type": "integer",
-          "minimum": 1
-        },
-        "random_seed": {
-          "description": "Master seed used for per-CRU RNG derivation.",
-          "type": "integer",
-          "minimum": 0
-        },
-        "impatience_alpha": {
-          "description": "Impatience scaling factor (denominator) controlling how quickly tasks become urgent.",
-          "type": "number"
+        {
+          "type": "object",
+          "required": ["num_crus", "cru_max_iterations", "rho", "random_seed", "impatience_alpha"],
+          "additionalProperties": false,
+          "properties": {
+            "num_crus": {
+              "description": "Number of parallel Constructive Repair Units (CRUs) and survivor schedules.",
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 64
+            },
+            "cru_max_iterations": {
+              "description": "Maximum repair iterations per CRU run.",
+              "type": "integer",
+              "minimum": 1
+            },
+            "rho": {
+              "description": "Window selection stochasticity: pick uniformly from the best N windows.",
+              "type": "integer",
+              "minimum": 1
+            },
+            "random_seed": {
+              "description": "Master seed used for per-CRU RNG derivation.",
+              "type": "integer",
+              "minimum": 0
+            },
+            "impatience_alpha": {
+              "description": "Impatience scaling factor (denominator) controlling how quickly tasks become urgent.",
+              "type": "number"
+            }
+          }
         }
-      }
+      ]
     }
   }
 }

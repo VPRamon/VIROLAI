@@ -6,8 +6,8 @@
 //! by the engine via `CursorFrame::Mirrored`.
 //!
 //! - [`transform`]: pure mirroring / unmirroring utilities (used by tests and
-//!   the crate-internal `MirroredFom`).
-//! - [`algorithm`]: `LstScheduler` entry points.
+//!   the crate-internal `MirroredFom`)
+//! - `algorithm`: `LstScheduler` entry points
 
 mod algorithm;
 pub mod transform;

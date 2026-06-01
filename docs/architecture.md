@@ -1,8 +1,9 @@
 # Architecture — experiments to webapp pipeline
 
-This document is the canonical reference for how experiment artefacts
-flow from a Rust binary on a researcher's laptop to the webapp UI. If
-another doc disagrees with this one, this one wins.
+> **Status:** historical notes. The current scheduler workflow is documented in
+> the repository [README](../README.md), [docs/algorithms/README.md](algorithms/README.md),
+> and [docs/algorithms/sweep-configuration.md](algorithms/sweep-configuration.md).
+> This file is no longer the canonical reference.
 
 ## 1. The pipeline at a glance
 
@@ -10,35 +11,29 @@ another doc disagrees with this one, this one wins.
                 researcher CLI                                      webapp
     ┌──────────────────────────────────┐         ┌──────────────────────────────────┐
     │                                  │         │                                  │
-    │  phd sweep  ──►  out/sweep/      │  HTTP   │  POST /v1/workspaces/…/manifests  │
-    │     │            ├ <cell>.json   │ ──────► │  POST /v1/workspaces/…/schedules  │
-    │     │            └ <cell>.manifest.json     │  GET  /v1/workspaces/…/comparison │
-    │     ▼                                       │                                  │
-    │  phd publish  ──────────────────────────►   │  → /workspace/<id> UI            │
-    │                                             │     • Cohort summary (manifests) │
-    │                                             │     • Per-block table (schedules)│
-    │                                             │     • Drill-down → schedule view │
+    │  phd sweep  ──►  runs.sqlite     │         │  POST /v1/workspaces/…/manifests │
+    │     │                            │         │  POST /v1/workspaces/…/schedules │
+    │     └──► lab registry export ────┼─ HTTP ─►│  GET  /v1/workspaces/…/comparison│
+    │                                  │         │                                  │
+    │  phd publish  ──────────────────►│         │  → /workspace/<id> UI            │
+    │                                  │         │                                  │
     └──────────────────────────────────┘         └──────────────────────────────────┘
 ```
 
-There is exactly one canonical path:
+Current canonical path:
 
-1. Run a sweep with `phd sweep --spec … --out … --manifest`.
-2. Publish the output directory with `phd publish --workspace … --dir …
-   --include-schedules`.
-3. Open the workspace in the webapp.
-
-Everything else (`lab run`, `phd manifest create`, the
-`upload_results.sh` wrapper) is a supporting tool, not a separate
-pathway.
+1. Run a sweep with `phd sweep --spec … --run-db …`.
+2. Materialize selected schedules with `lab registry export`.
+3. Publish the exported directory with `phd publish --workspace … --dir …`.
+4. Open the workspace in the webapp.
 
 ## 2. The artefact contract
 
 | Artefact | Schema | Contents | Role |
 |---|---|---|---|
-| **Schedule** | `schemas/schedule/...` | Full per-task assignment + embedded `schedule_metadata` + embedded `schedule_metrics`. Self-contained. | Source of truth. Reanalysable. Required for drill-down. |
+| **Schedule export** | `schemas/schedule/...` | Full per-task assignment + embedded `schedule_metadata` + embedded `schedule_metrics`. Self-contained. | Source of truth after export. Required for drill-down. |
 | **Metrics** | `schemas/scheduling_statistics/schedule_metrics.schema.json` | Pure numeric/statistical block (completion ratio, priority histograms, fragmentation, utilisation, per-resource, ranking). | A **field inside** every schedule and every manifest. Never published as a standalone artefact. |
-| **Manifest** | `schemas/scheduling_statistics/manifest.schema.json` | Versioned exchange envelope. Embeds a `metrics` block; references the full schedule by `{uri, sha256, size_bytes, media_type}`; carries `producer`, `dataset`, `algorithm`, `run`, `horizon`, `provenance`, `links`, `validation`, `extensions`. | Unit of comparison and indexing in the webapp. |
+| **Manifest** | `schemas/scheduling_statistics/manifest.schema.json` | Versioned exchange envelope. Embeds a `metrics` block; references the exported full schedule by `{uri, sha256, size_bytes, media_type}`; carries `producer`, `dataset`, `algorithm`, `run`, `horizon`, `provenance`, `links`, `validation`, `extensions`. | Unit of comparison and indexing in the webapp. |
 | **Trace** | (deprecated) | — | Removed from the canonical pipeline. If reintroduced, would be a workspace-stored artifact referenced by a manifest. |
 
 ### 2.1 Manifest vs metrics — the exact difference
@@ -108,13 +103,12 @@ JSON bytes.
 
 | Command | Purpose |
 |---|---|
-| `phd sweep --spec … --out … --manifest` | Run an experiment matrix; emit flat `<cell>.json` + `<cell>.manifest.json` pairs. |
-| `phd publish --workspace … --dir … --include-schedules` | Walk a directory, classify each `.json`, batch-upload manifests and (optionally) schedules. |
-| `phd manifest create --schedule …` / `--run …` | Build a manifest post-hoc from a single schedule or a `run-<ts>/` directory. |
-| `phd manifest validate` | Validate a manifest against the schema. |
+| `phd sweep --spec … --run-db …` | Run an experiment matrix into the SQLite registry. |
+| `lab registry export --out-dir …` | Materialize schedule JSON files from selected registry rows. |
+| `phd publish --workspace … --dir …` | Walk an export directory and batch-upload schedules/manifests. |
 
-`lab run` and `lab matrix` remain available for
-advanced direct use; they share the same artefact contract.
+`lab run` remains available for advanced direct use; it shares the same
+registry contract as `phd sweep`.
 
 ## 6. UI surface (`/workspace`)
 

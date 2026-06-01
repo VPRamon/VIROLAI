@@ -6,29 +6,30 @@
 //! fixed territories) and **Plan B** (dynamic territories whose boundaries
 //! follow the live position of another cursor). Territory shape is resolved in
 //! one place — [`config::CursorTerritory`] plus
-//! [`state::CursorRuntime::schedule_active_period`] — never in the beam-search
-//! engine.
+//! `CursorRuntime::schedule_active_period` — never in the beam-search engine.
 //!
 //! # Mental model
 //!
 //! * **EST** is a preconfigured single-forward cursor wrapper over the whole
-//!   horizon.  [`EstScheduler`] delegates its `run` method to this engine.
+//!   horizon. [`crate::scheduler::est::EstScheduler`] delegates its `run`
+//!   method to this engine.
 //! * **LST** is a preconfigured single-backward cursor wrapper over the whole
-//!   horizon.  [`LstScheduler`] delegates its `run` method to this engine.
+//!   horizon. [`crate::scheduler::lst::LstScheduler`] delegates its `run`
+//!   method to this engine.
 //!   The backward direction is handled inside the engine via
-//!   [`CursorFrame::Mirrored`](frame::CursorFrame); there is no separate
-//!   LST-specific mirroring pass.
+//!   `CursorFrame::Mirrored`; there is no separate LST-specific mirroring pass.
 //! * **Plan A** runs several cursors with disjoint fixed territories that share
 //!   one global schedule; a task scheduled by one cursor becomes unavailable to
 //!   all others, and no placement may escape its cursor's territory.
 //!
 //! # Equivalence
 //!
-//! [`MultiCursorScheduler::single_forward`] reproduces [`EstScheduler`] exactly
-//! and [`MultiCursorScheduler::single_backward`] reproduces [`LstScheduler`]
-//! exactly (see the tests in this module).  Both wrappers delegate to the same
-//! generic engine; direction is handled via the cursor frame, not via external
-//! mirroring.
+//! [`MultiCursorScheduler::single_forward`] reproduces
+//! [`crate::scheduler::est::EstScheduler`] exactly and
+//! [`MultiCursorScheduler::single_backward`] reproduces
+//! [`crate::scheduler::lst::LstScheduler`] exactly (see the tests in this
+//! module). Both wrappers delegate to the same generic engine; direction is
+//! handled via the cursor frame, not via external mirroring.
 
 mod action;
 mod config;
@@ -110,7 +111,7 @@ impl MultiCursorScheduler {
     /// All cursor configurations — including a lone backward cursor (the
     /// LST-equivalent case) — run through the same generic beam engine. There
     /// is no special-case execution path: reverse cursors are handled inside the
-    /// engine via their mirrored [`CursorFrame`](frame::CursorFrame).
+    /// engine via their mirrored `CursorFrame`.
     pub fn run(
         &self,
         problem: &SchedulingProblem,

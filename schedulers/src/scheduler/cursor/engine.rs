@@ -54,9 +54,16 @@ struct CursorArena {
 
 /// Run the multi-cursor beam search.
 ///
-/// `possible_periods` and `fom` are in the engine's schedule-time coordinate
-/// space. Callers that need a globally mirrored space (the LST-equivalent path)
-/// pre-mirror the periods/FOM and unmirror the result themselves.
+/// This is the single production beam-search engine for every cursor-based
+/// scheduler:
+///
+/// - EST as one forward cursor
+/// - LST as one backward cursor
+/// - fixed or dynamic multi-cursor layouts
+///
+/// `possible_periods` and `fom` remain in ordinary schedule time. Backward/LST
+/// behavior is handled internally through [`CursorFrame::Mirrored`]; production
+/// callers do not pre-mirror periods or FOMs before entering this engine.
 pub(super) fn run_multi_cursor(
     config: &MultiCursorConfig,
     fom: &dyn ScheduleFom,

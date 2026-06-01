@@ -79,13 +79,13 @@ impl ScheduleFom for MirroredFom {
 /// [`MultiCursorScheduler::single_backward`](crate::scheduler::cursor::MultiCursorScheduler::single_backward).
 ///
 /// The backward direction is handled inside the shared cursor engine via a
-/// [`CursorFrame::Mirrored`](crate::scheduler::cursor::CursorConfig) frame;
+/// `CursorFrame::Mirrored` frame;
 /// this scheduler does **not** mirror feasibility windows manually or
 /// construct an intermediate [`EstScheduler`](crate::scheduler::est::EstScheduler).
 ///
 /// All tuning parameters (`k_beams`, `branching_factor`,
 /// `endangered_threshold`, `fom`) are taken from the shared
-/// [`est::Configuration`] and [`ScheduleFom`] types so both schedulers can
+/// [`crate::scheduler::est::Configuration`] and [`ScheduleFom`] types so both schedulers can
 /// be driven with the same CLI flags.
 #[derive(Debug, Clone)]
 pub struct LstScheduler {

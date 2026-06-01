@@ -2,8 +2,8 @@
 //!
 //! An [`ExperimentSpec`] is a JSON document that declares a matrix of
 //! `(dataset × algorithm × per-algorithm sweep)` cells. The runner takes the
-//! Cartesian product and produces one [`crate::experiment::cell::MatrixCell`] per
-//! combination.
+//! Cartesian product and produces one [`crate::experiment::cell::MatrixCell`]
+//! per combination, storing results in the SQLite registry.
 //!
 //! # Spec format
 //!
@@ -17,12 +17,16 @@
 //!   ],
 //!   "algorithms": [
 //!     { "kind": "est", "axes": { "k_beams": [1, 4], "branching_factors": [1, 2] } },
+//!     { "kind": "multi_cursor", "axes": { "layouts": ["dynamic_est_lst_meet"], "k_beams": [4] } },
 //!     { "kind": "hap", "axes": { "iota_max_values": [64, 128], "seeds": [0, 1] } }
 //!   ],
 //!   "max_parallel": 4,
 //!   "output_dir": "out/paper"
 //! }
 //! ```
+//!
+//! `output_dir` is retained for compatibility with older specs but is ignored
+//! by the DB-only runner.
 
 use schedulers::metrics::RankingWeights;
 use serde::{Deserialize, Serialize};
@@ -35,8 +39,7 @@ use crate::experiment::config::{
 /// Top-level experiment specification, typically loaded from a JSON file.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExperimentSpec {
-    /// Human-readable experiment name; used as a directory component under
-    /// `output_dir` (slugified).
+    /// Human-readable experiment name.
     pub name: String,
     /// Ordered list of input datasets to sweep over.
     pub datasets: Vec<DatasetEntry>,
@@ -53,7 +56,7 @@ pub struct ExperimentSpec {
     /// Defaults to the number of logical CPU cores when absent.
     #[serde(default)]
     pub max_parallel: Option<usize>,
-    /// Root directory for all output artifacts.
+    /// Legacy root directory for output artifacts.
     ///
     /// This field is kept only so older experiment specs still deserialise
     /// cleanly.  The DB-only runner ignores this value; schedule JSON is
@@ -103,7 +106,7 @@ pub enum AlgorithmSweep {
         #[serde(default)]
         axes: EstSweepAxes,
     },
-    /// Multi-cursor sweep block (Plan A fixed-territory layouts).
+    /// Multi-cursor sweep block (fixed or dynamic layouts).
     MultiCursor {
         /// Parameter axes to expand.
         #[serde(default)]

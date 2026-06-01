@@ -2,7 +2,8 @@
 
 `lab` is the experiment runner for the PhD scheduling workspace. It expands
 JSON sweep specifications into scheduler runs, executes the resulting matrix in
-parallel, and stores each run's schedule JSON and metrics in a SQLite registry.
+parallel, and stores each run's identity, configuration, metrics, and
+deduplicated schedule body in a SQLite registry.
 
 The crate provides three binaries:
 
@@ -43,9 +44,8 @@ cargo run -p lab --bin lab -- run \
 ```
 
 `lab run` resolves the cell matrix, skips DB hits, executes the rest in
-parallel, and upserts each result (schedule JSON + metrics) into the registry.
-No filesystem artifacts are written — no `schedules/` dir, no `state.jsonl`,
-no `experiment.json`.
+parallel, and upserts each result into the registry. No filesystem artifacts
+are written — no `schedules/` dir, no `state.jsonl`, no `experiment.json`.
 
 | Flag | Description |
 | --- | --- |
@@ -122,7 +122,7 @@ Top-level fields:
 | `name` | Human-readable experiment name. |
 | `max_parallel` | Optional concurrency cap. Defaults to available logical CPU capacity. |
 | `datasets` | Input scheduling problems to evaluate. |
-| `algorithms` | One or more `est`, `lst`, or `hap` sweep blocks. |
+| `algorithms` | One or more `est`, `lst`, `multi_cursor`, or `hap` sweep blocks. |
 | `output_dir` | Ignored — present only for backward compatibility with old specs. |
 
 Dataset entries support:
@@ -148,7 +148,17 @@ Current runnable examples live in this directory:
 
 | Axis | Description |
 | --- | --- |
-| `endangered_thresholds` | Values for the endangered-task threshold. |
+| `endangered_thresholds` | Residual-flexibility thresholds for endangered-task promotion. |
+| `k_beams` | Beam counts to evaluate. |
+| `branching_factors` | Branching factors to evaluate. |
+| `foms` | Figure-of-merit variants, such as `soft_constraint` or `future_flexibility`. |
+
+`multi_cursor` adds:
+
+| Axis | Description |
+| --- | --- |
+| `layouts` | Layout names such as `est_lst_split`, `start_mid_forward`, `dynamic_est_lst_meet`, or `dynamic_start_mid_forward`. |
+| `endangered_thresholds` | Same residual-flexibility threshold semantics as EST/LST. |
 | `k_beams` | Beam counts to evaluate. |
 | `branching_factors` | Branching factors to evaluate. |
 | `foms` | Figure-of-merit variants, such as `soft_constraint` or `future_flexibility`. |
@@ -238,7 +248,7 @@ Schedules table (`schedules`):
 | --- | --- |
 | `schedule_hash` | Primary key: canonical schedule hash used for deduplication. |
 | `dataset_hash` | Dataset content hash associated with the schedule. |
-| `schedule_json` | Full self-contained schedule JSON (the payload exported by `registry export`). |
+| `schedule_json` | Deduplicated invariant schedule body (problem + placements only). |
 | `created_at` | Timestamp when the schedule JSON was inserted. |
 
 ### `registry export`
@@ -297,7 +307,7 @@ message directing you to rerun with `--override`.
 
 - No filesystem artifacts are written by `lab run`. All outputs (schedule JSON
   and metrics) are stored in the registry database. Use `registry export` to
-  extract schedule files.
+  export schedule files.
 - Size sweeps deliberately. Cell count grows as
   `datasets × algorithms × axis-products`.
 - Use `max_parallel` or `phd sweep --parallel` to control CPU pressure.

@@ -440,7 +440,7 @@ fn parse_cli_args(program: &str, args: &[String]) -> Result<CliArgs, String> {
 
 fn print_usage(program: &str) {
     eprintln!(
-        "Usage: {program} <input_json> [horizon_start_mjd horizon_end_mjd] [-o <output_json>] [--write-manifest] [--algorithm est|hap|lst] [EST/LST options] [HAP options]\n\
+        "Usage: {program} <input_json> [horizon_start_mjd horizon_end_mjd] [-o <output_json>] [--write-manifest] [--algorithm est|lst|hap] [EST/LST options] [HAP options]\n\
          Output: [-o|--output <path>]  write schedule to this file (default: <input_stem>_schedule_<YYYYMMDD_HHMMSS>.json); --write-manifest also writes <output>.manifest.json\n\
          EST/LST options: [--est-fom <soft_constraint|future_flexibility>] [--est-e <u32>] [--est-k <usize>] [--est-b <usize>]\n\
          HAP options: [--hap-num-crus <usize>] [--hap-cru-iterations <usize>] [--hap-rho <usize>] [--hap-seed <u64>]\n\

@@ -2,13 +2,14 @@
 
 # PhD Scheduler
 
-Rust tooling for astronomical observation scheduling — CTAO dataset adaptation, EST- and
-HAP-based scheduling, parameter sweep experiments, and an adapted TSI web application for
-interactive result inspection.
+Rust tooling for astronomical observation scheduling — CTAO dataset adaptation,
+cursor-engine scheduling (`est`, `lst`, and `multi_cursor`), HAP planning,
+DB-backed parameter sweeps, and an adapted TSI web application for interactive
+result inspection.
 
 </div>
 
-[Quick Start](#quick-start) | [The `phd` CLI](#the-phd-cli) | [Sweep Workflow](#sweep-workflow-end-to-end) | [Web App](#web-app) | [Data Model](#data-model) | [QA](#qa)
+[Quick Start](#quick-start) | [The `phd` CLI](#the-phd-cli) | [Algorithms](docs/algorithms/README.md) | [Sweep Workflow](#sweep-workflow-end-to-end) | [Web App](#web-app) | [Data Model](#data-model) | [QA](#qa)
 
 ---
 
@@ -207,7 +208,8 @@ flag details.
 ## Spec Format
 
 A sweep spec is a JSON file that defines the experiment: which datasets to use,
-which algorithms and parameter combinations to run, and where to write output.
+which algorithms and parameter combinations to run, and which registry rows to
+create.
 
 ### Minimal spec
 
@@ -234,7 +236,7 @@ which algorithms and parameter combinations to run, and where to write output.
 }
 ```
 
-This produces `2 datasets × (2 × 2 × 2 EST cells) = 16` schedule files.
+This produces `1 dataset × (2 × 2 × 2 EST cells) = 8` registry rows.
 
 ### Full spec reference
 
@@ -283,20 +285,23 @@ This produces `2 datasets × (2 × 2 × 2 EST cells) = 16` schedule files.
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `name` | string | — | Human-readable name (used in manifest `producer` metadata) |
-| `output_dir` | string | — | Legacy field used by `phd matrix` run directories; ignored by the DB-only `phd sweep` workflow |
+| `output_dir` | string | — | Legacy field retained for older specs; ignored by the DB-only `phd sweep` workflow |
 | `max_parallel` | int | CPU count | Number of parallel worker threads |
-| `datasets[].id` | string | — | Short identifier used in cell filenames |
+| `datasets[].id` | string | — | Short identifier used in registry cell IDs |
 | `datasets[].path` | string | — | Path to `scheduling_problem.json` |
 | `datasets[].label` | string | `id` | Human-readable label embedded in manifests |
 | `datasets[].horizon_override` | object | null | Override the problem's scheduling window (MJD UTC) |
 
-#### EST algorithm axes
+For the full reference, including `lst`, `multi_cursor`, HAP, and the DB-only
+workflow, see [docs/algorithms/sweep-configuration.md](docs/algorithms/sweep-configuration.md).
 
-Each EST cell is the cartesian product of all three axes.
+#### EST/LST algorithm axes
+
+Each `est` or `lst` cell is the cartesian product of all axes.
 
 | Axis | Key | Description |
 |---|---|---|
-| Endangered threshold | `endangered_thresholds` | Minimum remaining scheduling blocks before a task is considered "endangered" (`--est-e`) |
+| Endangered threshold | `endangered_thresholds` | Residual-flexibility threshold below which a task is considered "endangered" (`--est-e`) |
 | K-beams | `k_beams` | Beam width — number of partial schedules kept at each step (`--est-k`) |
 | Branching factor | `branching_factors` | Candidates considered per block per beam (`--est-b`) |
 
@@ -344,62 +349,34 @@ encodes the layout and distinguishes fixed from dynamic layouts, e.g.
 `est_lst_split-e1-k4-b2` vs `dynamic_est_lst_meet-e1-k4-b2`.
 
 > Plain single-cursor EST and LST keep their dedicated `est` / `lst` algorithm
-> kinds; `multi_cursor` is only for genuinely multi-cursor layouts. Cursor-aware
-> figures of merit (e.g. `future_flexibility`) are best used with the single
-> `est`/`lst` kinds; under multi-cursor layouts they only affect beam ranking,
-> never schedule validity.
+> kinds; `multi_cursor` is only for genuinely multi-cursor layouts.
+> `future_flexibility` is now multi-cursor-aware, but like every FOM it only
+> affects beam ranking, never schedule validity.
 
 ---
 
 ## Scheduling model
 
-All beam-search schedulers in this workspace share one underlying engine: the
-**cursor engine** (`schedulers::scheduler::cursor`). A cursor sweeps the horizon
-placing tasks, ordered by earliest feasible start with endangered-task
-protection.
+The formal beam-search engine is the shared **cursor engine**
+(`schedulers::scheduler::cursor`):
 
-- **EST** (`est`) is a **preconfigured single-forward cursor wrapper** over the
-  full horizon: `EstScheduler::run` delegates to the cursor engine with a single
-  forward cursor. It schedules the earliest-feasible task first.
-- **LST** (`lst`) is a **preconfigured single-backward cursor wrapper** over the
-  full horizon: `LstScheduler::run` delegates to the cursor engine with a single
-  backward cursor. The backward direction is handled inside the engine via a
-  mirrored `CursorFrame`; there is no separate mirroring pass in `LstScheduler`.
-- **Multi-cursor** (`multi_cursor`) runs several cursors that share one global
-  schedule via the same engine. A task placed by one cursor becomes unavailable
-  to all others, no placement may escape its cursor's **active region**, and
-  placements never overlap. A cursor's active region is resolved in a single
-  place each round, so the beam-search core never special-cases territory shape
-  or cursor count.
-  - **Plan A — fixed territories.** Each cursor owns a static half of the
-    horizon. Built-in layouts:
-    - `est_lst_split` — forward cursor over `[0, 0.5)` + backward cursor over
-      `[0.5, 1.0)` (fractions of the horizon).
-    - `start_mid_forward` — forward cursor over `[0, 0.5)` + forward cursor over
-      `[0.5, 1.0)`.
-  - **Plan B — dynamic territories.** A cursor boundary may follow another
-    cursor's live position; the active region is **recomputed before every beam
-    expansion**, and no cursor may cross another cursor's dynamic boundary.
-    Built-in layouts:
-    - `dynamic_est_lst_meet` — a forward cursor from the horizon start and a
-      backward cursor from the horizon end advance towards each other until they
-      meet. Each cursor's inner boundary follows the other cursor's live
-      position, so the search decides where the horizon splits.
-    - `dynamic_start_mid_forward` — a forward cursor from the horizon start whose
-      end follows a second forward cursor anchored at the midpoint. The front
-      cursor may never invade the middle cursor's live region.
+- **EST** is a single forward cursor over the full horizon
+- **LST** is a single backward cursor over the full horizon
+- **Multi-cursor** runs several cursors over one shared schedule, with either
+  fixed territories (Plan A) or live cursor-relative boundaries (Plan B)
 
-`EstScheduler` and `LstScheduler` remain the public single-cursor APIs and are
-the recommended entry points for single-cursor experiments. Under the hood they
-are thin wrappers that call `MultiCursorScheduler::single_forward` and
-`MultiCursorScheduler::single_backward` respectively, both of which run the same
-shared cursor engine. Equivalence is enforced by a suite of wrapper-matching
-tests in `scheduler::cursor::tests`.
+Backward behavior is handled inside the shared engine through
+`CursorFrame::Mirrored`, so there is no separate production LST fast path.
 
-> **Note**: The standalone `schedulers` binary and `phd run` expose
-> `est`, `lst`, and `hap` algorithms only. Multi-cursor experiments are
-> available through the `lab run` / `phd sweep` workflow with a sweep spec
-> containing `"kind": "multi_cursor"` cells.
+Use the algorithm reference for the full model:
+
+- [Algorithm overview](docs/algorithms/README.md)
+- [Cursor engine](docs/algorithms/cursor-engine.md)
+- [EST](docs/algorithms/est.md)
+- [LST](docs/algorithms/lst.md)
+- [Multi-cursor](docs/algorithms/multi-cursor.md)
+- [HAP](docs/algorithms/hap.md)
+- [Figures of merit](docs/algorithms/figures-of-merit.md)
 
 ---
 
@@ -409,7 +386,7 @@ For one-off runs via `phd run` or the raw `schedulers` binary:
 
 ```
 schedulers <input_json> [horizon_start_mjd horizon_end_mjd]
-          [--algorithm est|hap]
+          [--algorithm est|lst|hap]
           [--output <path>]
           [EST options]
           [HAP options]

@@ -1,16 +1,19 @@
 //! Run-configuration types for the experiment runner.
 //!
 //! This module provides the fully-resolved, immutable configuration records
-//! for a single scheduler run ([`EstRunConfig`], [`HapRunConfig`], [`RunConfig`])
-//! as well as the sweep-axis descriptors ([`EstSweepAxes`], [`HapSweepAxes`])
-//! used to expand a JSON experiment spec into a list of concrete runs.
+//! for a single scheduler run ([`EstRunConfig`], [`LstRunConfig`],
+//! [`MultiCursorRunConfig`], [`HapRunConfig`], [`RunConfig`]) as well as the
+//! sweep-axis descriptors ([`EstSweepAxes`], [`MultiCursorSweepAxes`],
+//! [`HapSweepAxes`]) used to expand a JSON experiment spec into a list of
+//! concrete runs.
 //!
 //! # Design
 //! Every configuration type implements [`Copy`] and derives `Ord` so that a
 //! [`BTreeSet`](std::collections::BTreeSet) naturally deduplicates and sorts the
-//! expanded product.  [`RunConfig::slug`] produces a short, filesystem-safe
-//! string that uniquely identifies each configuration — used as the stem of
-//! schedule output files and as the last component of `cell_id` strings.
+//! expanded product. [`RunConfig::slug`] produces a short, deterministic string
+//! that uniquely identifies each configuration — used as the configuration
+//! component of registry `cell_id`s and, when results are exported, as part of
+//! the output filename.
 
 use schedulers::scheduler::MultiCursorScheduler;
 use schedulers::scheduler::cursor::{
@@ -230,7 +233,7 @@ impl EstRunConfig {
             .map_err(|e| format!("invalid EST configuration for {}: {e}", self.slug()))
     }
 
-    /// Returns a short, filesystem-safe string that uniquely encodes all EST
+    /// Returns a short, deterministic string that uniquely encodes all EST
     /// configuration axes (e.g. `"e2-k5-b3"` or `"e2-k5-b3-future_flexibility"`).
     ///
     /// The FOM suffix is omitted when it is the default (`soft_constraint`) so
@@ -254,7 +257,8 @@ impl EstRunConfig {
 ///
 /// LST uses the same parameter axes as EST (figure of merit, endangered
 /// threshold, beam count, branching factor), but schedules tasks as *late* as
-/// possible by mirroring the horizon before running EST.
+/// possible by running a single backward cursor through the shared cursor
+/// engine.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct LstRunConfig {
     /// Figure-of-merit variant used to rank candidate placements.
@@ -279,8 +283,8 @@ impl Default for LstRunConfig {
 }
 
 impl LstRunConfig {
-    /// Returns the [`EstConfiguration`] struct used internally by the LST
-    /// scheduler (which drives EST on a mirrored problem).
+    /// Returns the shared beam-search configuration used by the underlying
+    /// single-backward cursor-engine wrapper.
     pub const fn est_config(self) -> EstConfiguration {
         EstConfiguration {
             k_beams: self.k_beams,
@@ -295,7 +299,7 @@ impl LstRunConfig {
             .map_err(|e| format!("invalid LST configuration for {}: {e}", self.slug()))
     }
 
-    /// Returns a short, filesystem-safe string that uniquely encodes all LST
+    /// Returns a short, deterministic string that uniquely encodes all LST
     /// configuration axes.  Uses the same format as [`EstRunConfig::slug`]
     /// since the algorithm kind is already encoded in the cell ID.
     pub fn slug(self) -> String {
@@ -476,7 +480,7 @@ impl MultiCursorRunConfig {
         })
     }
 
-    /// Returns a short, filesystem-safe string encoding the layout and beam
+    /// Returns a short, deterministic string encoding the layout and beam
     /// axes (e.g. `"est_lst_split-e1-k4-b2"`).
     pub fn slug(self) -> String {
         let fom_suffix = if self.fom == FomKind::default() {
@@ -572,7 +576,7 @@ impl HapRunConfig {
         Ok(HapScheduler::new(self.planner_config()))
     }
 
-    /// Returns a short, filesystem-safe string that uniquely encodes all HAP
+    /// Returns a short, deterministic string that uniquely encodes all HAP
     /// configuration axes (e.g. `"hap-i64-r2-p8-pareto5-s42"`).
     pub fn slug(self) -> String {
         let survivor = match self.survivor_mode {
@@ -632,7 +636,8 @@ impl RunConfig {
         }
     }
 
-    /// Returns the compact filename stem used for schedule output files.
+    /// Returns the compact configuration slug used in registry `cell_id`s and
+    /// exported schedule filenames.
     pub fn schedule_file_stem(self) -> String {
         self.slug()
     }

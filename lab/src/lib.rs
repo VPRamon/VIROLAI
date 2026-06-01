@@ -1,7 +1,7 @@
 //! `lab` — experiment runner for the PhD scheduling workspace.
 //!
 //! This crate provides the tooling to run parameter-sweep experiments
-//! against the [`scheduler`] library crate.  It is intentionally
+//! against the `schedulers` library crate. It is intentionally
 //! decoupled from the main crate so it can evolve and be tested
 //! independently.
 //!

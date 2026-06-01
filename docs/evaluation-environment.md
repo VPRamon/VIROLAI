@@ -1,12 +1,11 @@
 # Algorithm Evaluation Environment
 
-A test-matrix harness for designing, comparing, and evolving scheduling
-algorithms in this repository. It runs every combination of
-**datasets × algorithms × per-algorithm sweep axes**, records a rich set
-of schedule metrics for each run, and exposes them through the webapp
-for interactive analysis.
+> **Status:** legacy design note. The current experiment runner is DB-only and
+> is documented in [README.md](../README.md) and
+> [docs/algorithms/sweep-configuration.md](algorithms/sweep-configuration.md).
+> This file no longer describes the canonical implementation.
 
-The pipeline is built around four layers, each independently testable:
+The historical design was built around four layers:
 
 ```
 ┌──────────────────┐   ┌─────────────────────┐   ┌────────────────────┐   ┌──────────────────────┐
@@ -38,12 +37,14 @@ All fields implement `Serialize`/`Deserialize` so cells can be persisted
 and round-tripped without recomputing schedules. **Do not duplicate
 objective metric computation** anywhere else in the tree — extend this module.
 
-## 2. Matrix runner — `lab`
+## 2. Matrix runner — `lab` (historical)
+
+Today the runner writes into the SQLite registry via:
 
 ```bash
-cargo run --release -p lab --bin lab -- \
+cargo run --release -p lab --bin phd -- sweep \
     --spec my-experiment.json \
-    --output-dir ./experiments
+    --run-db .lab/runs.sqlite
 ```
 
 ### Spec shape
@@ -52,14 +53,14 @@ cargo run --release -p lab --bin lab -- \
 product of:
 
 - `datasets: Vec<DatasetRef>` — by id or path
-- `algorithms: Vec<AlgorithmEntry>` — each entry carries a per-algorithm
-  sweep axes block (EST and HAP today, additive going forward)
+- `algorithms: Vec<AlgorithmEntry>` — current kinds are `est`, `lst`,
+  `multi_cursor`, and `hap`
 
 The runner produces one **cell** per
 `(dataset, algorithm, config)` triple. Cells run in parallel through a
 bounded rayon pool with one shared `PreparedProblem` per dataset.
 
-### On-disk layout
+### Historical on-disk layout
 
 ```
 <output_dir>/<experiment_slug>/run-<ts>/
@@ -85,7 +86,7 @@ bounded rayon pool with one shared `PreparedProblem` per dataset.
 | `--resume <run-dir>` | Skip cells already marked `CellCompleted`. |
 | `migrate --legacy <dir> --output <dir>` | Port pre-existing `est_experiment` runs. |
 
-## 3. Backend — `webapp` Experiments domain
+## 3. Backend — `webapp` Experiments domain (historical)
 
 Lives entirely in `webapp/src/experiments/` (the upstream TSI
 submodule under `webapp/TSI/` is **not** modified). Mounted into the

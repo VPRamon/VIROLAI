@@ -29,21 +29,23 @@ pub struct CursorPosition {
 
 /// Context passed to every [`ScheduleFom::evaluate`] call during beam search.
 ///
-/// # Single-cursor schedulers (EST/LST)
+/// # `FomContext::single_cursor`
 ///
 /// `SoftConstraintFom` ignores this context. `FutureFlexibilityFom` uses
-/// `cursor`, `horizon`, and `possible_periods` to analyse the residual
-/// scheduling capacity from `cursor` to `horizon.end`. The multi-cursor fields
-/// are `None` for the single-cursor schedulers, so their behaviour is unchanged.
+/// `cursor`, `horizon`, and `possible_periods` to analyse residual scheduling
+/// capacity from `cursor` to `horizon.end`. [`FomContext::single_cursor`]
+/// preserves exactly that legacy shape: the multi-cursor fields are `None`.
 ///
 /// # Multi-cursor scheduler
 ///
 /// The multi-cursor engine populates the optional fields with a *formal*,
 /// complete view of the search frontier:
 /// * `cursor` carries the schedule-time end of the most recent placement (the
-///   same single-frontier signal the single-cursor schedulers expose);
+///   same single-frontier signal exposed by legacy single-cursor paths);
 /// * `last_action_cursor` identifies which cursor made that placement;
-/// * `cursor_positions` lists every cursor's live frontier in the child state;
+/// * `cursor_positions` lists every cursor's live frontier in the child state
+///   (including single-entry EST/LST wrapper runs executed by the shared cursor
+///   engine);
 /// * `active_periods` lists every cursor's active region for the round that
 ///   produced this child, index-parallel to `cursor_positions` (`None` for a
 ///   cursor with no active region that round).
@@ -63,20 +65,22 @@ pub struct FomContext<'a> {
     /// tests that use the flat-tasks entry point). `FutureFlexibilityFom` treats
     /// all unplaced tasks as *not* recoverable when this is absent.
     pub possible_periods: Option<&'a TaskPeriodMap>,
-    /// Live frontier of every cursor (multi-cursor only; `None` otherwise).
+    /// Live frontier of every cursor (`None` only for legacy single-frontier
+    /// contexts built with [`FomContext::single_cursor`]).
     pub cursor_positions: Option<&'a [CursorPosition]>,
     /// Live schedule-time active region of every cursor, index-parallel to
-    /// `cursor_positions` (multi-cursor only; `None` otherwise). An entry is
-    /// `None` when that cursor had no active region this round (exhausted or
-    /// squeezed out by a neighbouring cursor).
+    /// `cursor_positions`. `None` only for legacy single-frontier contexts. An
+    /// entry is `None` when that cursor had no active region this round
+    /// (exhausted or squeezed out by a neighbouring cursor).
     pub active_periods: Option<&'a [Option<Period<MJD>>]>,
     /// Identifier of the cursor that made the most recent placement
-    /// (multi-cursor only; `None` otherwise).
+    /// (`None` only for legacy single-frontier contexts).
     pub last_action_cursor: Option<usize>,
 }
 
 impl<'a> FomContext<'a> {
-    /// Build a single-cursor context (EST/LST and unit tests).
+    /// Build a legacy single-frontier context (unit tests and compatibility
+    /// call sites).
     ///
     /// The multi-cursor fields are left empty, so figures of merit see exactly
     /// the same context they did before the multi-cursor fields were added.

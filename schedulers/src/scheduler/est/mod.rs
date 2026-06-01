@@ -1,17 +1,17 @@
 //! Earliest-Start-Time (EST) scheduler implementation.
 //!
 //! `EstScheduler` is a thin wrapper that preconfigures the shared cursor
-//! engine as a single forward cursor over the whole horizon.  The actual
-//! beam-search execution lives in [`crate::scheduler::cursor::engine`].
+//! engine as a single forward cursor over the whole horizon. The actual
+//! beam-search execution lives in the shared cursor-engine module.
 //!
 //! The sub-modules in this crate are shared utilities consumed by the cursor
 //! engine:
-//! - [`context`]: problem-aware dependency helpers (`check_block_dependencies`).
-//! - [`configuration`]: EST tunable parameters.
-//! - [`algorithm`]: scheduler public entry points.
-//! - [`candidate`]: per-task EST metadata.
-//! - [`ordering`]: candidate queue ordering rules.
-//! - [`queue`]: refresh and queue maintenance.
+//! - `context`: problem-aware dependency helpers (`check_block_dependencies`)
+//! - `configuration`: EST tunable parameters
+//! - `algorithm`: scheduler public entry points
+//! - `candidate`: per-task EST metadata
+//! - `ordering`: candidate queue ordering rules
+//! - `queue`: test-only queue maintenance helpers
 
 mod algorithm;
 mod candidate;

@@ -7,17 +7,17 @@
 //! ## Direction and multi-cursor awareness
 //!
 //! When the cursor engine supplies `ctx.active_periods`, each non-`None` entry
-//! is the post-placement residual region of the corresponding cursor.  The FOM
-//! evaluates residual flexibility for each unplaced task over **all** active
-//! regions and takes the best (maximum) per task:
+//! is the post-placement residual region of the corresponding cursor. The FOM
+//! evaluates each unplaced task in every active region, then assigns that task
+//! to the region where it retains the **maximum** residual flexibility:
 //!
 //! * Single-forward (EST): one region `[placement.end, horizon.end]` —
 //!   identical to the legacy single-frontier behaviour.
 //! * Single-backward (LST): one region `[horizon.start, placement.start]` —
 //!   correctly covers the backward-filling zone.
-//! * Multi-cursor (e.g. `dynamic_est_lst_meet`): two regions, one per cursor.
-//!   A task is recoverable if **any** cursor can still schedule it; density is
-//!   computed over the union of all active regions.
+//! * Multi-cursor (e.g. `dynamic_est_lst_meet`): several regions, one per
+//!   cursor. A task is recoverable if **any** region can still schedule it, and
+//!   density is normalized by the total active-region duration.
 //!
 //! ## Fallback
 //!
