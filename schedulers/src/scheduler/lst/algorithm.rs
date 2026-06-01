@@ -15,19 +15,20 @@ use std::sync::Arc;
 /// A FOM wrapper that unmirrored the schedule and context before delegating
 /// to an inner figure of merit.
 ///
-/// This type is kept for backward compatibility. It is no longer used by the
-/// production [`LstScheduler`] (which delegates to the cursor engine directly
-/// via [`run_with_config`]). It may be useful for custom or test setups that
-/// need to evaluate a FOM in original time from within a mirrored context.
+/// This type is **no longer used by production code**. `LstScheduler` now
+/// delegates directly to the cursor engine via [`run_with_config`]. This
+/// struct is retained for backward compatibility with tests that verify the
+/// mirroring round-trip. It is not part of the public crate API.
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
-pub struct MirroredFom {
+pub(crate) struct MirroredFom {
     inner: Arc<dyn ScheduleFom>,
     horizon: Period<MJD>,
 }
 
 impl MirroredFom {
-    pub fn new(inner: Arc<dyn ScheduleFom>, horizon: Period<MJD>) -> Self {
+    #[allow(dead_code)]
+    pub(crate) fn new(inner: Arc<dyn ScheduleFom>, horizon: Period<MJD>) -> Self {
         Self { inner, horizon }
     }
 }

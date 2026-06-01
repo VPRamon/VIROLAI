@@ -1,18 +1,18 @@
 //! Latest-Start-Time (LST) scheduler implementation.
 //!
-//! This module wraps the EST beam search by mirroring the scheduling horizon:
-//! tasks are reflected about the midpoint of the horizon before being passed
-//! to EST, and the resulting schedule is reflected back.  The net effect is
-//! that tasks are placed as *late* as possible rather than as early as
-//! possible.
+//! `LstScheduler` is a preconfigured **single-backward cursor** wrapper around
+//! the shared cursor engine (see [`crate::scheduler::cursor`]).  Tasks are
+//! placed as *late* as possible; the backward direction is handled internally
+//! by the engine via `CursorFrame::Mirrored`.
 //!
-//! - [`transform`]: pure mirroring / unmirroring utilities.
-//! - [`algorithm`]: `LstScheduler` entry points and `MirroredFom` wrapper.
+//! - [`transform`]: pure mirroring / unmirroring utilities (used by tests and
+//!   the crate-internal `MirroredFom`).
+//! - [`algorithm`]: `LstScheduler` entry points.
 
 mod algorithm;
 pub mod transform;
 
-pub use algorithm::{LstScheduler, MirroredFom, run_scheduler};
+pub use algorithm::{LstScheduler, run_scheduler};
 
 #[cfg(test)]
 mod tests;

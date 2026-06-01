@@ -4,20 +4,26 @@
 //! schedule states by how well they preserve the ability to schedule remaining
 //! tasks, rather than purely by the quality already captured.
 //!
-//! ## Direction awareness
+//! ## Direction and multi-cursor awareness
 //!
-//! When the multi-cursor engine supplies `ctx.active_periods`, the first
-//! non-`None` entry is the cursor's **post-placement residual region** for the
-//! acting cursor:
+//! When the cursor engine supplies `ctx.active_periods`, each non-`None` entry
+//! is the post-placement residual region of the corresponding cursor.  The FOM
+//! evaluates residual flexibility for each unplaced task over **all** active
+//! regions and takes the best (maximum) per task:
 //!
-//! * Single-forward (EST): `[placement.end, horizon.end]` — identical to
-//!   the legacy single-frontier behaviour.
-//! * Single-backward (LST): `[horizon.start, placement.start]` — the
-//!   flexibility measurement correctly covers the backward-filling zone.
+//! * Single-forward (EST): one region `[placement.end, horizon.end]` —
+//!   identical to the legacy single-frontier behaviour.
+//! * Single-backward (LST): one region `[horizon.start, placement.start]` —
+//!   correctly covers the backward-filling zone.
+//! * Multi-cursor (e.g. `dynamic_est_lst_meet`): two regions, one per cursor.
+//!   A task is recoverable if **any** cursor can still schedule it; density is
+//!   computed over the union of all active regions.
+//!
+//! ## Fallback
 //!
 //! When `active_periods` is absent (unit tests, legacy call sites) the FOM
-//! falls back to `[ctx.cursor, ctx.horizon.end]`, preserving the historic
-//! single-frontier behaviour exactly.
+//! falls back to a single synthetic region `[ctx.cursor, ctx.horizon.end]`,
+//! preserving historic single-frontier behaviour exactly.
 //!
 //! ## References
 //!
@@ -77,57 +83,82 @@ impl ScheduleFom for FutureFlexibilityFom {
             return schedule.len() as f64;
         };
 
-        // Determine the effective scheduling horizon for residual-flexibility
-        // analysis. When the cursor engine supplies post-placement active periods
-        // (via `ctx.active_periods`), the first non-None entry is the acting
-        // cursor's residual region, e.g.
-        //   single-forward (EST): [placement.end, horizon.end]
-        //   single-backward (LST): [horizon.start, placement.start]
-        // When absent (unit tests, legacy paths), fall back to the legacy
-        // [cursor, horizon.end] single-frontier behaviour.
-        let (active_start, active_end) = ctx
-            .active_periods
-            .and_then(|aps| aps.iter().flatten().copied().next())
-            .map(|ap| (ap.start, ap.end))
-            .unwrap_or((ctx.cursor, ctx.horizon.end));
-        let effective_horizon = Period::new(active_start, active_end);
+        // Collect all active regions supplied by the cursor engine.
+        //
+        // `ctx.active_periods` is index-parallel to the cursor list; each
+        // non-`None` entry is that cursor's post-placement residual region.
+        // We collect all non-None entries to evaluate recoverability over the
+        // *union* of active regions (any cursor can place any remaining task).
+        //
+        // When `active_periods` is absent (unit tests, legacy paths), fall back
+        // to the legacy `[cursor, horizon.end]` single-frontier region.
+        let active_regions: Vec<Period<MJD>> = match ctx.active_periods {
+            Some(aps) => {
+                let v: Vec<Period<MJD>> = aps.iter().flatten().copied().collect();
+                if v.is_empty() {
+                    vec![Period::new(ctx.cursor, ctx.horizon.end)]
+                } else {
+                    v
+                }
+            }
+            None => vec![Period::new(ctx.cursor, ctx.horizon.end)],
+        };
 
         let placed_count = schedule.len() as f64;
         let task_count = problem.task_count();
 
-        // Classify each unplaced task and compute its residual flexibility.
-        let mut residual_tasks: Vec<(TaskId, f64, Time<MJD>)> = Vec::new();
+        // Classify each unplaced task and compute its best residual flexibility
+        // across all active cursor regions.
+        //
+        // Each entry is (task_id, best_flex, eff_cursor, region_end) where
+        // `eff_cursor` and `region_end` come from the active region in which
+        // the task achieves the highest flexibility.
+        let mut residual_tasks: Vec<(TaskId, f64, Time<MJD>, Time<MJD>)> = Vec::new();
 
         for task in problem.iter_tasks() {
             if schedule.get(task.id).is_some() {
                 continue; // already placed
             }
 
-            // Determine effective cursor accounting for placed predecessors.
-            // Use `active_start` as the baseline: for forward this equals
-            // `placement.end`; for backward it equals `horizon.start`.
-            let Some(eff_cursor) = effective_cursor_for(task.id, active_start, schedule, problem)
-            else {
-                // At least one predecessor is unscheduled → task is blocked.
-                continue;
-            };
-
             let windows = match possible_periods.get(&task.id) {
                 Some(w) => w,
                 None => continue,
             };
 
-            let eff_horizon = Period::new(eff_cursor, active_end);
-            let flex = residual_flexibility_for(task, windows.as_slice(), eff_horizon);
+            let mut best_flex = 0.0_f64;
+            let mut best_eff_cursor = active_regions[0].start;
+            let mut best_region_end = active_regions[0].end;
 
-            if flex >= 1.0 {
-                residual_tasks.push((task.id, flex, eff_cursor));
+            for active in &active_regions {
+                // Determine effective cursor accounting for placed predecessors.
+                // `active.start` is the baseline for this cursor's region:
+                //   forward  → `placement.end`
+                //   backward → `horizon.start`
+                let Some(eff_cursor) =
+                    effective_cursor_for(task.id, active.start, schedule, problem)
+                else {
+                    // At least one predecessor is unscheduled → task is blocked
+                    // regardless of which cursor we consider.
+                    continue;
+                };
+
+                let eff_horizon = Period::new(eff_cursor, active.end);
+                let flex = residual_flexibility_for(task, windows.as_slice(), eff_horizon);
+
+                if flex > best_flex {
+                    best_flex = flex;
+                    best_eff_cursor = eff_cursor;
+                    best_region_end = active.end;
+                }
+            }
+
+            if best_flex >= 1.0 {
+                residual_tasks.push((task.id, best_flex, best_eff_cursor, best_region_end));
             }
         }
 
         let recoverable_count = placed_count + residual_tasks.len() as f64;
-        let density_term =
-            compute_density_term(&residual_tasks, possible_periods, effective_horizon);
+        let density_term = compute_density_term(&residual_tasks, possible_periods, &active_regions);
         let reserve_term = compute_reserve_term(&residual_tasks);
         let soft_term = compute_soft_term(schedule, problem, task_count);
 
@@ -215,16 +246,22 @@ pub(crate) fn residual_flexibility_for(
 /// Build an event-sweep load profile and return the density term.
 ///
 /// Each recoverable unplaced task with flexibility `F` contributes uniform
-/// load `1/F` across all of its usable windows. The overload area is the
-/// time-integral of `max(load − 1, 0)` over the remaining horizon.
+/// load `1/F` across all of its usable windows within its assigned active
+/// region.  The overload area is the time-integral of `max(load − 1, 0)`.
 ///
 /// `density_term = 1 / (1 + overload_area / remaining_horizon)`
+///
+/// `remaining_horizon` is the **sum** of all active-region durations so
+/// that multi-cursor layouts are normalised correctly.
 fn compute_density_term(
-    residual_tasks: &[(TaskId, f64, Time<MJD>)],
+    residual_tasks: &[(TaskId, f64, Time<MJD>, Time<MJD>)],
     possible_periods: &TaskPeriodMap,
-    horizon: Period<MJD>,
+    active_regions: &[Period<MJD>],
 ) -> f64 {
-    let remaining_horizon = (horizon.end.value() - horizon.start.value()).max(0.0);
+    let remaining_horizon: f64 = active_regions
+        .iter()
+        .map(|r| (r.end.value() - r.start.value()).max(0.0))
+        .sum();
     if remaining_horizon == 0.0 || residual_tasks.is_empty() {
         return 1.0;
     }
@@ -232,19 +269,19 @@ fn compute_density_term(
     // Build (time_value, load_delta) events for a temporal endpoint sweep.
     let mut events: Vec<(f64, f64)> = Vec::new();
 
-    for &(task_id, flexibility, eff_cursor) in residual_tasks {
+    for &(task_id, flexibility, eff_cursor, region_end) in residual_tasks {
         let density = 1.0 / flexibility;
         let windows = match possible_periods.get(&task_id) {
             Some(w) => w,
             None => continue,
         };
-        let eff_horizon = Period::new(eff_cursor, horizon.end);
+        let eff_horizon = Period::new(eff_cursor, region_end);
 
         for window in windows.as_slice() {
             if window.end <= eff_cursor {
                 continue;
             }
-            if window.start >= horizon.end {
+            if window.start >= region_end {
                 break;
             }
             let Some(overlap) = window.intersection(&eff_horizon) else {
@@ -263,12 +300,17 @@ fn compute_density_term(
     // additions (+delta) to avoid transient over-counting.
     events.sort_by(|a, b| a.0.total_cmp(&b.0).then_with(|| a.1.total_cmp(&b.1)));
 
+    let min_active_start = active_regions
+        .iter()
+        .map(|r| r.start.value())
+        .fold(f64::INFINITY, f64::min);
+
     let mut load = 0.0_f64;
-    let mut prev_t = events[0].0.max(horizon.start.value());
+    let mut prev_t = events[0].0.max(min_active_start);
     let mut overload_area = 0.0_f64;
 
     for (t, delta) in &events {
-        let t = t.max(horizon.start.value());
+        let t = t.max(min_active_start);
         let dt = t - prev_t;
         if dt > 0.0 && load > 1.0 {
             overload_area += (load - 1.0) * dt;
@@ -286,13 +328,13 @@ fn compute_density_term(
 /// (flexibility ≈ 1), approaching 1 when many placements remain.
 ///
 /// Returns 0.0 when there are no recoverable unplaced tasks.
-fn compute_reserve_term(residual_tasks: &[(TaskId, f64, Time<MJD>)]) -> f64 {
+fn compute_reserve_term(residual_tasks: &[(TaskId, f64, Time<MJD>, Time<MJD>)]) -> f64 {
     if residual_tasks.is_empty() {
         return 0.0;
     }
     let sum: f64 = residual_tasks
         .iter()
-        .map(|&(_, flex, _)| 1.0 - 1.0 / flex)
+        .map(|&(_, flex, _, _)| 1.0 - 1.0 / flex)
         .sum();
     sum / residual_tasks.len() as f64
 }
