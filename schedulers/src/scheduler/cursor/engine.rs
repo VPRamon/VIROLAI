@@ -386,6 +386,23 @@ fn build_child<'a>(
 
     child.cursors[pos].advance_to(frame_end);
 
+    // Compute post-placement active periods: after the acting cursor has
+    // advanced, re-snapshot all frontiers and resolve each cursor's active
+    // region. Passing these to the FOM means direction-aware figures of merit
+    // (e.g. FutureFlexibilityFom) receive the correct residual region:
+    //   single-forward: [placement.end, horizon.end]   — legacy EST behaviour.
+    //   single-backward (LST): [horizon.start, placement.start] — correct LST.
+    let post_world = CursorWorld::snapshot(&child.cursors);
+    let mut post_actives: Vec<Option<Period<MJD>>> = Vec::with_capacity(child.cursors.len());
+    for cursor in &child.cursors {
+        post_actives.push(
+            cursor
+                .schedule_active_period(&post_world, horizon)
+                .ok()
+                .flatten(),
+        );
+    }
+
     // A task scheduled by one cursor must become unavailable to all others.
     for (other_pos, other) in child.cursors.iter_mut().enumerate() {
         if other_pos != pos {
@@ -418,7 +435,7 @@ fn build_child<'a>(
         horizon: *horizon,
         possible_periods: Some(possible_periods),
         cursor_positions: Some(&cursor_positions),
-        active_periods: Some(sched_actives),
+        active_periods: Some(&post_actives),
         last_action_cursor: child.last_action_cursor,
     };
     child.score = fom.evaluate(&child.schedule, problem, &fom_ctx);

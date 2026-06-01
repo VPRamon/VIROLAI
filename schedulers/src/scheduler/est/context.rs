@@ -1,23 +1,7 @@
 use crate::error::ScheduleError;
-use crate::prescheduler::TaskPeriodMap;
 use crate::schedule::Schedule;
 use crate::schedule::SchedulingProblem;
 use crate::time::{MJD, TaskId, Time};
-
-/// Domain context passed into the beam search when a [`crate::schedule::SchedulingProblem`]
-/// is available. Carrying it here allows the EST inner loop to validate
-/// dependency ordering rather than bypassing domain invariants with a raw
-/// `insert_placement`.
-///
-/// Hard-constraint coverage is intentionally not re-checked here: the
-/// pre-scheduler already guarantees that every window in `possible_periods`
-/// is constraint-feasible, and EST only proposes starts within those windows.
-pub(super) struct ProblemCtx<'p> {
-    /// The full problem definition used for dependency lookups.
-    pub(super) problem: &'p SchedulingProblem,
-    /// Pre-computed per-task feasibility windows, forwarded to FOM evaluation.
-    pub(super) possible_periods: &'p TaskPeriodMap,
-}
 
 /// Check that all predecessor tasks in the same block are already scheduled
 /// and end before `candidate_start`.

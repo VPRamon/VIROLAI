@@ -4,6 +4,21 @@
 //! schedule states by how well they preserve the ability to schedule remaining
 //! tasks, rather than purely by the quality already captured.
 //!
+//! ## Direction awareness
+//!
+//! When the multi-cursor engine supplies `ctx.active_periods`, the first
+//! non-`None` entry is the cursor's **post-placement residual region** for the
+//! acting cursor:
+//!
+//! * Single-forward (EST): `[placement.end, horizon.end]` — identical to
+//!   the legacy single-frontier behaviour.
+//! * Single-backward (LST): `[horizon.start, placement.start]` — the
+//!   flexibility measurement correctly covers the backward-filling zone.
+//!
+//! When `active_periods` is absent (unit tests, legacy call sites) the FOM
+//! falls back to `[ctx.cursor, ctx.horizon.end]`, preserving the historic
+//! single-frontier behaviour exactly.
+//!
 //! ## References
 //!
 //! - Policella et al. 2004 — robustness as retained temporal flexibility.
@@ -62,6 +77,21 @@ impl ScheduleFom for FutureFlexibilityFom {
             return schedule.len() as f64;
         };
 
+        // Determine the effective scheduling horizon for residual-flexibility
+        // analysis. When the cursor engine supplies post-placement active periods
+        // (via `ctx.active_periods`), the first non-None entry is the acting
+        // cursor's residual region, e.g.
+        //   single-forward (EST): [placement.end, horizon.end]
+        //   single-backward (LST): [horizon.start, placement.start]
+        // When absent (unit tests, legacy paths), fall back to the legacy
+        // [cursor, horizon.end] single-frontier behaviour.
+        let (active_start, active_end) = ctx
+            .active_periods
+            .and_then(|aps| aps.iter().flatten().copied().next())
+            .map(|ap| (ap.start, ap.end))
+            .unwrap_or((ctx.cursor, ctx.horizon.end));
+        let effective_horizon = Period::new(active_start, active_end);
+
         let placed_count = schedule.len() as f64;
         let task_count = problem.task_count();
 
@@ -74,7 +104,9 @@ impl ScheduleFom for FutureFlexibilityFom {
             }
 
             // Determine effective cursor accounting for placed predecessors.
-            let Some(eff_cursor) = effective_cursor_for(task.id, ctx.cursor, schedule, problem)
+            // Use `active_start` as the baseline: for forward this equals
+            // `placement.end`; for backward it equals `horizon.start`.
+            let Some(eff_cursor) = effective_cursor_for(task.id, active_start, schedule, problem)
             else {
                 // At least one predecessor is unscheduled → task is blocked.
                 continue;
@@ -85,7 +117,7 @@ impl ScheduleFom for FutureFlexibilityFom {
                 None => continue,
             };
 
-            let eff_horizon = Period::new(eff_cursor, ctx.horizon.end);
+            let eff_horizon = Period::new(eff_cursor, active_end);
             let flex = residual_flexibility_for(task, windows.as_slice(), eff_horizon);
 
             if flex >= 1.0 {
@@ -94,7 +126,8 @@ impl ScheduleFom for FutureFlexibilityFom {
         }
 
         let recoverable_count = placed_count + residual_tasks.len() as f64;
-        let density_term = compute_density_term(&residual_tasks, possible_periods, ctx.horizon);
+        let density_term =
+            compute_density_term(&residual_tasks, possible_periods, effective_horizon);
         let reserve_term = compute_reserve_term(&residual_tasks);
         let soft_term = compute_soft_term(schedule, problem, task_count);
 

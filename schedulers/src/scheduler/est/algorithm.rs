@@ -1,12 +1,10 @@
-use super::beam;
 use super::configuration::Configuration;
-use super::context::ProblemCtx;
-use super::queue::CandidateQueue;
 use crate::error::ScheduleError;
 use crate::prescheduler::TaskPeriodMap;
 use crate::schedule::{Schedule, SchedulingProblem};
+use crate::scheduler::SchedulingAlgorithm;
+use crate::scheduler::cursor::{MultiCursorConfig, run_with_config};
 use crate::scheduler::fom::{ScheduleFom, SoftConstraintFom};
-use crate::scheduler::{SchedulingAlgorithm, filter_task_refs};
 use crate::scheduling_block::SchedulingBlock;
 use crate::task::Task;
 use crate::time::{MJD, Period, SchedulingBlockId};
@@ -55,6 +53,11 @@ impl<F: ScheduleFom> EstScheduler<F> {
     }
 
     /// Run beam-search EST on a full scheduling problem.
+    ///
+    /// Delegates to the cursor engine configured as a single-forward cursor
+    /// over the whole horizon. This is the formal definition of EST: it produces
+    /// exactly the same schedule as
+    /// [`MultiCursorScheduler::single_forward`](crate::scheduler::cursor::MultiCursorScheduler::single_forward).
     pub fn run(
         &self,
         problem: &SchedulingProblem,
@@ -73,37 +76,18 @@ impl<F: ScheduleFom> EstScheduler<F> {
             self.fom.label(),
         );
 
-        let filtered_tasks = filter_task_refs(problem.iter_tasks(), possible_periods);
-
-        log::debug!(
-            "est: {} tasks remain after feasibility filter",
-            filtered_tasks.len()
-        );
-
-        let initial_candidates = CandidateQueue::build(
-            &filtered_tasks,
-            possible_periods,
-            horizon,
+        let config = MultiCursorConfig::single_forward(
+            self.config.k_beams,
+            self.config.branching_factor,
             self.config.endangered_threshold,
         );
-
-        let initial_state = super::ScheduleState {
-            cursor: horizon.start,
-            schedule: Schedule::new(),
-            candidates: initial_candidates,
-            score: 0.0,
-        };
-
-        Ok(beam::run_search(
-            self,
-            initial_state,
-            horizon,
+        run_with_config(
+            &config,
+            &self.fom as &dyn ScheduleFom,
             problem,
-            Some(&ProblemCtx {
-                problem,
-                possible_periods,
-            }),
-        ))
+            possible_periods,
+            horizon,
+        )
     }
 
     /// Convenience entry point that wraps flat tasks into singleton blocks.

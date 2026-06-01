@@ -11,9 +11,13 @@
 //!
 //! # Mental model
 //!
-//! * **EST** is a single forward cursor over the whole horizon.
-//! * **LST** is a single backward cursor over the whole horizon (realised by
-//!   mirroring the horizon and running EST, exactly as [`LstScheduler`] does).
+//! * **EST** is a preconfigured single-forward cursor wrapper over the whole
+//!   horizon.  [`EstScheduler`] delegates its `run` method to this engine.
+//! * **LST** is a preconfigured single-backward cursor wrapper over the whole
+//!   horizon.  [`LstScheduler`] delegates its `run` method to this engine.
+//!   The backward direction is handled inside the engine via
+//!   [`CursorFrame::Mirrored`](frame::CursorFrame); there is no separate
+//!   LST-specific mirroring pass.
 //! * **Plan A** runs several cursors with disjoint fixed territories that share
 //!   one global schedule; a task scheduled by one cursor becomes unavailable to
 //!   all others, and no placement may escape its cursor's territory.
@@ -22,9 +26,9 @@
 //!
 //! [`MultiCursorScheduler::single_forward`] reproduces [`EstScheduler`] exactly
 //! and [`MultiCursorScheduler::single_backward`] reproduces [`LstScheduler`]
-//! exactly (see the tests in this module). The single-forward path runs the
-//! generic engine with one identity-frame cursor; the single-backward path
-//! mirrors the problem and runs that same engine, then unmirrors the result.
+//! exactly (see the tests in this module).  Both wrappers delegate to the same
+//! generic engine; direction is handled via the cursor frame, not via external
+//! mirroring.
 
 mod action;
 mod config;
@@ -42,8 +46,6 @@ use crate::prescheduler::TaskPeriodMap;
 use crate::schedule::{Schedule, SchedulingProblem};
 use crate::scheduler::SchedulingAlgorithm;
 use crate::scheduler::est::{Configuration, ScheduleFom, SoftConstraintFom};
-use crate::scheduler::lst::MirroredFom;
-use crate::scheduler::lst::transform::{mirror_task_periods, unmirror_schedule};
 use crate::time::{MJD, Period};
 use std::sync::Arc;
 
@@ -104,15 +106,17 @@ impl MultiCursorScheduler {
     }
 
     /// Run the scheduler on a full problem.
+    ///
+    /// All cursor configurations — including a lone backward cursor (the
+    /// LST-equivalent case) — run through the same generic beam engine. There
+    /// is no special-case execution path: reverse cursors are handled inside the
+    /// engine via their mirrored [`CursorFrame`](frame::CursorFrame).
     pub fn run(
         &self,
         problem: &SchedulingProblem,
         possible_periods: &TaskPeriodMap,
         horizon: &Period<MJD>,
     ) -> Result<Schedule, ScheduleError> {
-        if let Some(schedule) = self.try_run_single_backward(problem, possible_periods, horizon)? {
-            return Ok(schedule);
-        }
         engine::run_multi_cursor(
             &self.config,
             self.fom.as_ref(),
@@ -120,57 +124,6 @@ impl MultiCursorScheduler {
             possible_periods,
             horizon,
         )
-    }
-
-    /// LST-equivalent fast path for a lone backward cursor.
-    ///
-    /// A single backward cursor is executed by mirroring the problem about the
-    /// cursor's territory, running the forward engine in mirrored space with a
-    /// [`MirroredFom`] wrapper, then unmirroring the result. This reproduces
-    /// [`LstScheduler`] exactly when the territory spans the full horizon.
-    fn try_run_single_backward(
-        &self,
-        problem: &SchedulingProblem,
-        possible_periods: &TaskPeriodMap,
-        horizon: &Period<MJD>,
-    ) -> Result<Option<Schedule>, ScheduleError> {
-        if self.config.cursors.len() != 1 {
-            return Ok(None);
-        }
-        let cursor = &self.config.cursors[0];
-        if cursor.direction != CursorDirection::Backward {
-            return Ok(None);
-        }
-
-        let territory = cursor.territory.extent(horizon)?;
-        let mirrored_periods = mirror_task_periods(possible_periods, &territory);
-        let mirrored_fom: Arc<dyn ScheduleFom> =
-            Arc::new(MirroredFom::new(Arc::clone(&self.fom), territory));
-
-        // One forward identity cursor over `territory`, in mirrored space.
-        let forward = MultiCursorConfig {
-            cursors: vec![CursorConfig::forward(
-                cursor.id.0,
-                CursorTerritory::Fixed {
-                    start: territory.start,
-                    end: territory.end,
-                },
-            )],
-            k_beams: self.config.k_beams,
-            branching_factor: self.config.branching_factor,
-            endangered_threshold: self.config.endangered_threshold,
-            cursor_policy: self.config.cursor_policy,
-        };
-
-        let mirrored_schedule = engine::run_multi_cursor(
-            &forward,
-            mirrored_fom.as_ref(),
-            problem,
-            &mirrored_periods,
-            &territory,
-        )?;
-
-        Ok(Some(unmirror_schedule(&mirrored_schedule, &territory)))
     }
 }
 
@@ -192,6 +145,21 @@ impl SchedulingAlgorithm for MultiCursorScheduler {
     ) -> Result<Schedule, ScheduleError> {
         MultiCursorScheduler::run(self, problem, possible_periods, horizon)
     }
+}
+
+/// Run the cursor engine with a borrowed figure of merit.
+///
+/// Used by [`EstScheduler`](crate::scheduler::est::EstScheduler) and
+/// [`LstScheduler`](crate::scheduler::lst::LstScheduler) to delegate to the
+/// cursor engine without requiring an `Arc` allocation.
+pub(crate) fn run_with_config(
+    config: &MultiCursorConfig,
+    fom: &dyn ScheduleFom,
+    problem: &SchedulingProblem,
+    possible_periods: &TaskPeriodMap,
+    horizon: &Period<MJD>,
+) -> Result<Schedule, ScheduleError> {
+    engine::run_multi_cursor(config, fom, problem, possible_periods, horizon)
 }
 
 #[cfg(test)]

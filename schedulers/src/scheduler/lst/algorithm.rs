@@ -4,7 +4,8 @@ use crate::prescheduler::TaskPeriodMap;
 use crate::schedule::{Schedule, SchedulingProblem};
 use crate::scheduler::SchedulingAlgorithm;
 use crate::scheduler::algorithm::validate_task_refs;
-use crate::scheduler::est::{Configuration, EstScheduler, ScheduleFom, SoftConstraintFom};
+use crate::scheduler::cursor::{MultiCursorConfig, run_with_config};
+use crate::scheduler::est::{Configuration, ScheduleFom, SoftConstraintFom};
 use crate::scheduler::fom::FomContext;
 use crate::scheduling_block::SchedulingBlock;
 use crate::task::Task;
@@ -14,10 +15,11 @@ use std::sync::Arc;
 /// A FOM wrapper that unmirrored the schedule and context before delegating
 /// to an inner figure of merit.
 ///
-/// Necessary because EST beam search operates in mirrored time and scores
-/// partial states at mirrored positions. `MirroredFom` converts both the
-/// schedule and the evaluation context back to original time so the inner
-/// FOM sees correct start times and feasibility windows.
+/// This type is kept for backward compatibility. It is no longer used by the
+/// production [`LstScheduler`] (which delegates to the cursor engine directly
+/// via [`run_with_config`]). It may be useful for custom or test setups that
+/// need to evaluate a FOM in original time from within a mirrored context.
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct MirroredFom {
     inner: Arc<dyn ScheduleFom>,
@@ -70,10 +72,15 @@ impl ScheduleFom for MirroredFom {
 
 /// Latest-Start-Time (LST) scheduler.
 ///
-/// Internally mirrors each task's feasibility windows, runs the EST beam
-/// search in the reflected time domain, then unmirrors the resulting schedule
-/// back to original time. This has the effect of scheduling tasks as *late* as
-/// possible rather than as early as possible.
+/// Delegates to the cursor engine configured as a single-backward cursor over
+/// the whole horizon. This is the formal definition of LST: it produces
+/// exactly the same schedule as
+/// [`MultiCursorScheduler::single_backward`](crate::scheduler::cursor::MultiCursorScheduler::single_backward).
+///
+/// The backward direction is handled inside the shared cursor engine via a
+/// [`CursorFrame::Mirrored`](crate::scheduler::cursor::CursorConfig) frame;
+/// this scheduler does **not** mirror feasibility windows manually or
+/// construct an intermediate [`EstScheduler`](crate::scheduler::est::EstScheduler).
 ///
 /// All tuning parameters (`k_beams`, `branching_factor`,
 /// `endangered_threshold`, `fom`) are taken from the shared
@@ -119,6 +126,11 @@ impl LstScheduler {
     }
 
     /// Run beam-search LST on a full scheduling problem.
+    ///
+    /// Delegates to the cursor engine configured as a single-backward cursor
+    /// over the whole horizon. This is the formal definition of LST: it
+    /// produces exactly the same schedule as
+    /// [`MultiCursorScheduler::single_backward`](crate::scheduler::cursor::MultiCursorScheduler::single_backward).
     pub fn run(
         &self,
         problem: &SchedulingProblem,
@@ -137,13 +149,18 @@ impl LstScheduler {
             self.fom.label(),
         );
 
-        let mirrored_periods = transform::mirror_task_periods(possible_periods, horizon);
-        let mirrored_fom = MirroredFom::new(Arc::clone(&self.fom), *horizon);
-        let est = EstScheduler::from_parts(self.config, mirrored_fom)?;
-
-        let mirrored_schedule = est.run(problem, &mirrored_periods, horizon)?;
-
-        Ok(transform::unmirror_schedule(&mirrored_schedule, horizon))
+        let config = MultiCursorConfig::single_backward(
+            self.config.k_beams,
+            self.config.branching_factor,
+            self.config.endangered_threshold,
+        );
+        run_with_config(
+            &config,
+            self.fom.as_ref(),
+            problem,
+            possible_periods,
+            horizon,
+        )
     }
 
     /// Convenience entry point that wraps flat tasks into singleton blocks.

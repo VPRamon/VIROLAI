@@ -1,31 +1,31 @@
 //! Earliest-Start-Time (EST) scheduler implementation.
 //!
-//! This module contains the beam-search EST variant used by the scheduler.
-//! The code is split by concern so the decision rules stay explicit:
-//! - [`context`]: problem-aware beam-search helpers.
+//! `EstScheduler` is a thin wrapper that preconfigures the shared cursor
+//! engine as a single forward cursor over the whole horizon.  The actual
+//! beam-search execution lives in [`crate::scheduler::cursor::engine`].
+//!
+//! The sub-modules in this crate are shared utilities consumed by the cursor
+//! engine:
+//! - [`context`]: problem-aware dependency helpers (`check_block_dependencies`).
 //! - [`configuration`]: EST tunable parameters.
-//! - [`algorithm`]: scheduler setup and entry points.
-//! - [`beam`]: beam-search expansion and pruning loop.
+//! - [`algorithm`]: scheduler public entry points.
 //! - [`candidate`]: per-task EST metadata.
 //! - [`ordering`]: candidate queue ordering rules.
 //! - [`queue`]: refresh and queue maintenance.
-//! - [`schedule_state`]: one live beam state.
 
 mod algorithm;
-mod beam;
 mod candidate;
 mod configuration;
 mod context;
 mod ordering;
+#[cfg(test)]
 mod queue;
-mod schedule_state;
 
 pub use crate::scheduler::fom::{CompositeFom, FomKind, ScheduleFom, SoftConstraintFom};
 pub use algorithm::{EstScheduler, run_scheduler};
 pub use candidate::{Candidate, IntoTaskPlacement};
 pub use configuration::Configuration;
 pub use ordering::{compare_candidates, sort_candidates};
-pub use schedule_state::ScheduleState;
 
 pub(crate) use context::check_block_dependencies;
 

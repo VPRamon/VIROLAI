@@ -191,6 +191,10 @@ fn soft_constraint_scenario() -> Scenario {
 }
 
 fn run_est(s: &Scenario) -> Schedule {
+    // Since EstScheduler::run now delegates to the cursor engine, this helper
+    // and run_mc(forward_config) exercise the exact same code path. The tests
+    // that compare them serve as smoke tests verifying the wrapper delegation
+    // is wired correctly.
     let problem = problem_from_tasks(s.tasks());
     EstScheduler::from_parts(s.config, SoftConstraintFom)
         .expect("est config valid")
@@ -199,6 +203,10 @@ fn run_est(s: &Scenario) -> Schedule {
 }
 
 fn run_lst(s: &Scenario) -> Schedule {
+    // Since LstScheduler::run now delegates to the cursor engine, this helper
+    // and run_mc(backward_config) exercise the exact same code path. The tests
+    // that compare them serve as smoke tests verifying the wrapper delegation
+    // is wired correctly.
     let problem = problem_from_tasks(s.tasks());
     LstScheduler::from_parts(s.config, fom())
         .expect("lst config valid")
@@ -214,7 +222,7 @@ fn run_mc(config: MultiCursorConfig, s: &Scenario) -> Schedule {
         .expect("mc run")
 }
 
-// --- M6: single forward cursor == EST ----------------------------------------
+// --- M6: EST wrapper delegates to cursor engine (single-forward) --------------
 
 fn forward_config(s: &Scenario) -> MultiCursorConfig {
     MultiCursorConfig::single_forward(
@@ -225,25 +233,25 @@ fn forward_config(s: &Scenario) -> MultiCursorConfig {
 }
 
 #[test]
-fn est_current_equals_multicursor_single_forward_basic() {
+fn est_wrapper_matches_multicursor_single_forward_basic() {
     let s = basic_scenario();
     assert_same_schedule(&run_est(&s), &run_mc(forward_config(&s), &s));
 }
 
 #[test]
-fn est_current_equals_multicursor_single_forward_endangered() {
+fn est_wrapper_matches_multicursor_single_forward_endangered() {
     let s = endangered_scenario();
     assert_same_schedule(&run_est(&s), &run_mc(forward_config(&s), &s));
 }
 
 #[test]
-fn est_current_equals_multicursor_single_forward_beam() {
+fn est_wrapper_matches_multicursor_single_forward_beam() {
     let s = beam_scenario();
     assert_same_schedule(&run_est(&s), &run_mc(forward_config(&s), &s));
 }
 
 #[test]
-fn est_current_equals_multicursor_single_forward_soft_constraints() {
+fn est_wrapper_matches_multicursor_single_forward_soft_constraints() {
     let s = soft_constraint_scenario();
     assert_same_schedule(&run_est(&s), &run_mc(forward_config(&s), &s));
 }
@@ -259,7 +267,7 @@ fn single_forward_constructor_matches_est() {
     assert_same_schedule(&run_est(&s), &mc);
 }
 
-// --- M7: single backward cursor == LST ---------------------------------------
+// --- M7: LST wrapper delegates to cursor engine (single-backward) -------------
 
 fn backward_config(s: &Scenario) -> MultiCursorConfig {
     MultiCursorConfig::single_backward(
@@ -270,25 +278,25 @@ fn backward_config(s: &Scenario) -> MultiCursorConfig {
 }
 
 #[test]
-fn lst_current_equals_multicursor_single_backward_basic() {
+fn lst_wrapper_matches_multicursor_single_backward_basic() {
     let s = basic_scenario();
     assert_same_schedule(&run_lst(&s), &run_mc(backward_config(&s), &s));
 }
 
 #[test]
-fn lst_current_equals_multicursor_single_backward_endangered() {
+fn lst_wrapper_matches_multicursor_single_backward_endangered() {
     let s = endangered_scenario();
     assert_same_schedule(&run_lst(&s), &run_mc(backward_config(&s), &s));
 }
 
 #[test]
-fn lst_current_equals_multicursor_single_backward_beam() {
+fn lst_wrapper_matches_multicursor_single_backward_beam() {
     let s = beam_scenario();
     assert_same_schedule(&run_lst(&s), &run_mc(backward_config(&s), &s));
 }
 
 #[test]
-fn lst_current_equals_multicursor_single_backward_soft_constraints() {
+fn lst_wrapper_matches_multicursor_single_backward_soft_constraints() {
     let s = soft_constraint_scenario();
     assert_same_schedule(&run_lst(&s), &run_mc(backward_config(&s), &s));
 }

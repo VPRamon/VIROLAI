@@ -353,20 +353,24 @@ encodes the layout and distinguishes fixed from dynamic layouts, e.g.
 
 ## Scheduling model
 
-All beam-search schedulers in this workspace share one underlying model: a
-*cursor* sweeps the horizon placing tasks, ordered by earliest feasible start
-with endangered-task protection.
+All beam-search schedulers in this workspace share one underlying engine: the
+**cursor engine** (`schedulers::scheduler::cursor`). A cursor sweeps the horizon
+placing tasks, ordered by earliest feasible start with endangered-task
+protection.
 
-- **EST** (`est`) is a **single forward cursor** over the full horizon: it
-  schedules the earliest-feasible task first.
-- **LST** (`lst`) is a **single backward cursor** over the full horizon. It is
-  realised by mirroring the horizon, running EST in mirrored time, then
-  unmirroring the schedule — so latest-feasible tasks are placed first.
+- **EST** (`est`) is a **preconfigured single-forward cursor wrapper** over the
+  full horizon: `EstScheduler::run` delegates to the cursor engine with a single
+  forward cursor. It schedules the earliest-feasible task first.
+- **LST** (`lst`) is a **preconfigured single-backward cursor wrapper** over the
+  full horizon: `LstScheduler::run` delegates to the cursor engine with a single
+  backward cursor. The backward direction is handled inside the engine via a
+  mirrored `CursorFrame`; there is no separate mirroring pass in `LstScheduler`.
 - **Multi-cursor** (`multi_cursor`) runs several cursors that share one global
-  schedule. A task placed by one cursor becomes unavailable to all others, no
-  placement may escape its cursor's **active region**, and placements never
-  overlap. A cursor's active region is resolved in a single place each round, so
-  the beam-search core never special-cases territory shape or cursor count.
+  schedule via the same engine. A task placed by one cursor becomes unavailable
+  to all others, no placement may escape its cursor's **active region**, and
+  placements never overlap. A cursor's active region is resolved in a single
+  place each round, so the beam-search core never special-cases territory shape
+  or cursor count.
   - **Plan A — fixed territories.** Each cursor owns a static half of the
     horizon. Built-in layouts:
     - `est_lst_split` — forward cursor over `[0, 0.5)` + backward cursor over
@@ -385,12 +389,17 @@ with endangered-task protection.
       end follows a second forward cursor anchored at the midpoint. The front
       cursor may never invade the middle cursor's live region.
 
-Programmatically, `MultiCursorScheduler::single_forward(...)` is exactly
-equivalent to `EstScheduler` and `MultiCursorScheduler::single_backward(...)` is
-exactly equivalent to `LstScheduler` (proven by equivalence tests). `EstScheduler`
-and `LstScheduler` remain the public single-cursor APIs; LST additionally keeps a
-mirrored fast path so cursor-sensitive figures of merit and intra-block
-dependencies match the legacy engine exactly.
+`EstScheduler` and `LstScheduler` remain the public single-cursor APIs and are
+the recommended entry points for single-cursor experiments. Under the hood they
+are thin wrappers that call `MultiCursorScheduler::single_forward` and
+`MultiCursorScheduler::single_backward` respectively, both of which run the same
+shared cursor engine. Equivalence is enforced by a suite of wrapper-matching
+tests in `scheduler::cursor::tests`.
+
+> **Note**: The standalone `schedulers` binary and `phd run` expose
+> `est`, `lst`, and `hap` algorithms only. Multi-cursor experiments are
+> available through the `lab run` / `phd sweep` workflow with a sweep spec
+> containing `"kind": "multi_cursor"` cells.
 
 ---
 

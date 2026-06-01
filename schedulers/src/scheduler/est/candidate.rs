@@ -133,10 +133,9 @@ impl<'a> Candidate<'a> {
             .unwrap_or(0.0)
     }
 
-    /// Update the cached sort fields used by [`CandidateQueue`].
-    ///
-    /// Must be called after [`Self::refresh`] and after `endangered` has been
-    /// collected for the current beam step.
+    /// Update the cached sort fields.  Only called from test helpers via
+    /// [`super::queue::CandidateQueue::refresh`].
+    #[cfg(test)]
     pub(super) fn update_caches(
         &mut self,
         priority_at: Time<MJD>,
@@ -154,9 +153,6 @@ impl<'a> Candidate<'a> {
             self.est.map(|est| {
                 let est_days = est.value();
                 let dur = self.duration().value();
-                // Effective EST is the latest endangered EST that falls strictly
-                // inside this candidate's scheduling window; keeps endangered
-                // tasks from being leapfrogged.
                 endangered
                     .iter()
                     .copied()
