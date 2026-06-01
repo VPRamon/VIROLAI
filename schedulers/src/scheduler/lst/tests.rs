@@ -263,11 +263,7 @@ fn mirrored_fom_evaluates_at_original_start_time() {
     });
 
     let soft_fom = SoftConstraintFom;
-    let ctx = FomContext {
-        cursor: t(1.0),
-        horizon,
-        possible_periods: None,
-    };
+    let ctx = FomContext::single_cursor(t(1.0), horizon, None);
 
     let mirrored_fom = MirroredFom::new(Arc::new(SoftConstraintFom), horizon);
 

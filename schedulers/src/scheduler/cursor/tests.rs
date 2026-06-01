@@ -554,18 +554,437 @@ fn multi_cursor_respects_block_dependencies() {
     assert_no_overlap(&schedule);
 }
 
-#[test]
-fn dynamic_territory_is_unsupported() {
-    use super::config::BoundaryRef;
-    let territory = CursorTerritory::Dynamic {
-        left: BoundaryRef::HorizonStart,
-        right: BoundaryRef::HorizonEnd,
+// --- Plan B: dynamic territories --------------------------------------------
+
+use super::config::{BoundaryRef, CursorDirection, CursorId};
+use super::frame::CursorFrame;
+use super::state::{CursorRuntime, CursorWorld};
+
+/// Build a bare cursor runtime (empty queue) for boundary-resolution unit tests.
+fn bare_cursor(
+    id: usize,
+    direction: CursorDirection,
+    territory: CursorTerritory,
+    extent: Period<MJD>,
+    frame_cursor: Time<MJD>,
+) -> CursorRuntime<'static> {
+    let frame = match direction {
+        CursorDirection::Forward => CursorFrame::Identity,
+        CursorDirection::Backward => CursorFrame::Mirrored { territory: extent },
     };
-    let err = territory.resolve(&period(0.0, 1.0)).unwrap_err();
+    CursorRuntime {
+        id: CursorId(id),
+        direction,
+        frame,
+        territory,
+        extent,
+        frame_cursor,
+        candidates: Vec::new(),
+        exhausted: false,
+    }
+}
+
+#[test]
+fn dynamic_boundary_to_horizon_start_resolves() {
+    let horizon = period(0.0, 10.0);
+    let cursor = bare_cursor(
+        0,
+        CursorDirection::Forward,
+        CursorTerritory::Dynamic {
+            start: BoundaryRef::HorizonStart,
+            end: BoundaryRef::HorizonEnd,
+            min_gap: None,
+        },
+        horizon,
+        Time::<MJD>::new(0.0),
+    );
+    let world = CursorWorld::snapshot(std::slice::from_ref(&cursor));
+    let active = cursor
+        .schedule_active_period(&world, &horizon)
+        .expect("resolves")
+        .expect("non-empty");
+    assert_eq!(active.start.value(), 0.0);
+    assert_eq!(active.end.value(), 10.0);
+}
+
+#[test]
+fn dynamic_boundary_to_horizon_end_resolves() {
+    let horizon = period(0.0, 10.0);
+    // A backward cursor anchored at the horizon end: own position is the end.
+    let cursor = bare_cursor(
+        0,
+        CursorDirection::Backward,
+        CursorTerritory::Dynamic {
+            start: BoundaryRef::HorizonStart,
+            end: BoundaryRef::HorizonEnd,
+            min_gap: None,
+        },
+        horizon,
+        Time::<MJD>::new(0.0),
+    );
+    assert_eq!(cursor.schedule_position().value(), 10.0);
+    let world = CursorWorld::snapshot(std::slice::from_ref(&cursor));
+    let active = cursor
+        .schedule_active_period(&world, &horizon)
+        .expect("resolves")
+        .expect("non-empty");
+    assert_eq!(active.start.value(), 0.0);
+    assert_eq!(active.end.value(), 10.0);
+}
+
+#[test]
+fn dynamic_boundary_to_cursor_position_updates_after_placement() {
+    let horizon = period(0.0, 10.0);
+    let front = bare_cursor(
+        0,
+        CursorDirection::Forward,
+        CursorTerritory::Dynamic {
+            start: BoundaryRef::HorizonStart,
+            end: BoundaryRef::Cursor(CursorId(1)),
+            min_gap: None,
+        },
+        horizon,
+        Time::<MJD>::new(0.0),
+    );
+
+    // Probe cursor 1 sitting at t = 7.
+    let back_far = bare_cursor(
+        1,
+        CursorDirection::Forward,
+        CursorTerritory::Fixed {
+            start: Time::<MJD>::new(0.0),
+            end: Time::<MJD>::new(10.0),
+        },
+        horizon,
+        Time::<MJD>::new(7.0),
+    );
+    let world = CursorWorld::snapshot(&[front.clone(), back_far]);
+    let active = front
+        .schedule_active_period(&world, &horizon)
+        .expect("resolves")
+        .expect("non-empty");
+    assert_eq!(active.end.value(), 7.0, "end follows cursor 1");
+
+    // Cursor 1 advances to t = 4: the front cursor's end must shrink with it.
+    let back_near = bare_cursor(
+        1,
+        CursorDirection::Forward,
+        CursorTerritory::Fixed {
+            start: Time::<MJD>::new(0.0),
+            end: Time::<MJD>::new(10.0),
+        },
+        horizon,
+        Time::<MJD>::new(4.0),
+    );
+    let world = CursorWorld::snapshot(&[front.clone(), back_near]);
+    let active = front
+        .schedule_active_period(&world, &horizon)
+        .expect("resolves")
+        .expect("non-empty");
+    assert_eq!(active.end.value(), 4.0, "end tracks the moved cursor");
+}
+
+#[test]
+fn dynamic_boundary_rejects_crossed_or_empty_active_period() {
+    let horizon = period(0.0, 10.0);
+    // Front cursor at t = 5, its end follows cursor 1 which is at t = 5: the
+    // region [5, 5) is empty, so the cursor has no active period.
+    let front = bare_cursor(
+        0,
+        CursorDirection::Forward,
+        CursorTerritory::Dynamic {
+            start: BoundaryRef::HorizonStart,
+            end: BoundaryRef::Cursor(CursorId(1)),
+            min_gap: None,
+        },
+        horizon,
+        Time::<MJD>::new(5.0),
+    );
+    let back = bare_cursor(
+        1,
+        CursorDirection::Forward,
+        CursorTerritory::Fixed {
+            start: Time::<MJD>::new(0.0),
+            end: Time::<MJD>::new(10.0),
+        },
+        horizon,
+        Time::<MJD>::new(5.0),
+    );
+    let world = CursorWorld::snapshot(&[front.clone(), back]);
+    assert!(
+        front
+            .schedule_active_period(&world, &horizon)
+            .expect("resolves")
+            .is_none(),
+        "crossed cursors yield no active region"
+    );
+}
+
+#[test]
+fn dynamic_min_gap_keeps_cursors_apart() {
+    let horizon = period(0.0, 10.0);
+    let front = bare_cursor(
+        0,
+        CursorDirection::Forward,
+        CursorTerritory::Dynamic {
+            start: BoundaryRef::HorizonStart,
+            end: BoundaryRef::Cursor(CursorId(1)),
+            min_gap: Some(1.0),
+        },
+        horizon,
+        Time::<MJD>::new(0.0),
+    );
+    let back = bare_cursor(
+        1,
+        CursorDirection::Forward,
+        CursorTerritory::Fixed {
+            start: Time::<MJD>::new(0.0),
+            end: Time::<MJD>::new(10.0),
+        },
+        horizon,
+        Time::<MJD>::new(6.0),
+    );
+    let world = CursorWorld::snapshot(&[front.clone(), back]);
+    let active = front
+        .schedule_active_period(&world, &horizon)
+        .expect("resolves")
+        .expect("non-empty");
+    assert_eq!(active.end.value(), 5.0, "min_gap keeps a 1-day buffer");
+}
+
+#[test]
+fn dynamic_config_rejects_self_reference() {
+    let config = MultiCursorConfig {
+        cursors: vec![CursorConfig::forward(
+            0,
+            CursorTerritory::Dynamic {
+                start: BoundaryRef::HorizonStart,
+                end: BoundaryRef::Cursor(CursorId(0)),
+                min_gap: None,
+            },
+        )],
+        k_beams: 1,
+        branching_factor: 1,
+        endangered_threshold: 1,
+        cursor_policy: CursorPolicy::BestCandidateGlobal,
+    };
+    let err = MultiCursorScheduler::new(config, fom()).unwrap_err();
     assert!(matches!(
         err,
-        crate::error::ScheduleError::UnsupportedConfiguration(_)
+        crate::error::ScheduleError::InvalidConfiguration(_)
     ));
+}
+
+#[test]
+fn dynamic_config_rejects_unknown_cursor_reference() {
+    let config = MultiCursorConfig {
+        cursors: vec![CursorConfig::forward(
+            0,
+            CursorTerritory::Dynamic {
+                start: BoundaryRef::HorizonStart,
+                end: BoundaryRef::Cursor(CursorId(9)),
+                min_gap: None,
+            },
+        )],
+        k_beams: 1,
+        branching_factor: 1,
+        endangered_threshold: 1,
+        cursor_policy: CursorPolicy::BestCandidateGlobal,
+    };
+    let err = MultiCursorScheduler::new(config, fom()).unwrap_err();
+    assert!(matches!(
+        err,
+        crate::error::ScheduleError::InvalidConfiguration(_)
+    ));
+}
+
+// --- Plan B: dynamic EST+LST meet layout -------------------------------------
+
+/// `n` unit tasks each feasible anywhere within `[0, n)`.
+fn tiling_scenario(n: u64) -> Scenario {
+    let mut possible = TaskPeriodMap::new();
+    let mut specs = Vec::new();
+    for id in 1..=n {
+        possible.insert(TaskId(id), windows(&[(0.0, n as f64)]));
+        specs.push((id, 1.0, 1.0));
+    }
+    Scenario {
+        task_specs: specs,
+        possible,
+        horizon: period(0.0, n as f64),
+        config: Configuration::default(),
+    }
+}
+
+#[test]
+fn dynamic_est_lst_cursors_move_until_meeting() {
+    let s = tiling_scenario(6);
+    let schedule = run_mc(MultiCursorConfig::dynamic_est_lst_meet(4, 2, 1), &s);
+    assert_eq!(schedule.len(), 6, "two cursors tile the whole horizon");
+    assert_no_overlap(&schedule);
+}
+
+#[test]
+fn dynamic_est_lst_never_crosses() {
+    let s = tiling_scenario(6);
+    let schedule = run_mc(MultiCursorConfig::dynamic_est_lst_meet(4, 2, 1), &s);
+    // Never crossing is observable as a valid, non-overlapping tiling: if the
+    // cursors had crossed they would have double-booked or overlapped.
+    assert_no_overlap(&schedule);
+    assert_eq!(schedule.len(), 6);
+}
+
+#[test]
+fn dynamic_est_lst_no_overlap() {
+    let mut possible = TaskPeriodMap::new();
+    possible.insert(TaskId(1), windows(&[(0.0, 3.0)]));
+    possible.insert(TaskId(2), windows(&[(2.0, 6.0)]));
+    possible.insert(TaskId(3), windows(&[(4.0, 8.0)]));
+    possible.insert(TaskId(4), windows(&[(7.0, 10.0)]));
+    let s = Scenario {
+        task_specs: vec![(1, 1.0, 1.0), (2, 1.0, 1.0), (3, 1.0, 1.0), (4, 1.0, 1.0)],
+        possible,
+        horizon: period(0.0, 10.0),
+        config: Configuration::default(),
+    };
+    let schedule = run_mc(MultiCursorConfig::dynamic_est_lst_meet(4, 2, 1), &s);
+    assert_no_overlap(&schedule);
+}
+
+#[test]
+fn dynamic_est_lst_both_cursors_contribute() {
+    // Task 1 only fits at the very start, task 2 only at the very end.
+    let mut possible = TaskPeriodMap::new();
+    possible.insert(TaskId(1), windows(&[(0.0, 1.0)]));
+    possible.insert(TaskId(2), windows(&[(9.0, 10.0)]));
+    let s = Scenario {
+        task_specs: vec![(1, 1.0, 1.0), (2, 1.0, 1.0)],
+        possible,
+        horizon: period(0.0, 10.0),
+        config: Configuration::default(),
+    };
+    let schedule = run_mc(MultiCursorConfig::dynamic_est_lst_meet(4, 2, 1), &s);
+    assert_eq!(schedule.len(), 2);
+    assert!(schedule.get(TaskId(1)).is_some());
+    assert!(schedule.get(TaskId(2)).is_some());
+    assert_no_overlap(&schedule);
+}
+
+#[test]
+fn dynamic_est_lst_exhausted_cursor_does_not_stop_other_cursor() {
+    // Every task is feasible only in the late region: the forward cursor's
+    // active region collapses once the backward cursor advances past it, yet the
+    // backward cursor must keep scheduling the remaining tasks.
+    let mut possible = TaskPeriodMap::new();
+    possible.insert(TaskId(1), windows(&[(7.0, 10.0)]));
+    possible.insert(TaskId(2), windows(&[(7.0, 10.0)]));
+    possible.insert(TaskId(3), windows(&[(7.0, 10.0)]));
+    let s = Scenario {
+        task_specs: vec![(1, 1.0, 1.0), (2, 1.0, 1.0), (3, 1.0, 1.0)],
+        possible,
+        horizon: period(0.0, 10.0),
+        config: Configuration::default(),
+    };
+    let schedule = run_mc(MultiCursorConfig::dynamic_est_lst_meet(4, 2, 1), &s);
+    assert_eq!(schedule.len(), 3, "all late tasks scheduled");
+    assert_no_overlap(&schedule);
+}
+
+#[test]
+fn dynamic_est_lst_does_not_duplicate_tasks() {
+    let s = tiling_scenario(4);
+    let schedule = run_mc(MultiCursorConfig::dynamic_est_lst_meet(4, 2, 1), &s);
+    // Exactly four placements means none of the four tasks was double-booked.
+    assert_eq!(schedule.len(), 4);
+    assert_no_overlap(&schedule);
+}
+
+#[test]
+fn dynamic_est_lst_respects_block_dependencies() {
+    let mut possible = TaskPeriodMap::new();
+    possible.insert(TaskId(1), windows(&[(0.0, 6.0)]));
+    possible.insert(TaskId(2), windows(&[(0.0, 10.0)]));
+
+    let mut block = SchedulingBlock::from_tasks(
+        SchedulingBlockId(1),
+        vec![task(1, 1.0, 1.0), task(2, 1.0, 1.0)],
+    )
+    .expect("block valid");
+    block
+        .add_dependency(TaskId(1), TaskId(2), Dependency::DependsOn)
+        .expect("dependency valid");
+    let problem = SchedulingProblem::from_blocks(vec![block]).expect("problem valid");
+
+    let horizon = period(0.0, 10.0);
+    let schedule =
+        MultiCursorScheduler::new(MultiCursorConfig::dynamic_est_lst_meet(4, 2, 1), fom())
+            .expect("config valid")
+            .run(&problem, &possible, &horizon)
+            .expect("run");
+
+    if let (Some(p1), Some(p2)) = (schedule.get(TaskId(1)), schedule.get(TaskId(2))) {
+        assert!(
+            p1.end.value() <= p2.start.value() + 1e-9,
+            "dependency violated across cursors"
+        );
+    }
+    assert_no_overlap(&schedule);
+}
+
+// --- Plan B: dynamic start+middle forward layout -----------------------------
+
+#[test]
+fn dynamic_start_mid_forward_front_respects_mid_cursor() {
+    let s = tiling_scenario(6);
+    let schedule = run_mc(MultiCursorConfig::dynamic_start_mid_forward(4, 2, 1), &s);
+    // The front cursor may never invade the middle cursor's live region, so the
+    // combined schedule stays overlap-free.
+    assert_no_overlap(&schedule);
+    assert!(schedule.len() >= 3);
+}
+
+#[test]
+fn dynamic_start_mid_forward_mid_continues_to_horizon() {
+    // Tasks only feasible in the far second half: only the middle cursor (which
+    // owns [0.5, 1.0)) can reach them; the front cursor cannot.
+    let mut possible = TaskPeriodMap::new();
+    possible.insert(TaskId(1), windows(&[(7.0, 8.0)]));
+    possible.insert(TaskId(2), windows(&[(8.0, 9.0)]));
+    possible.insert(TaskId(3), windows(&[(9.0, 10.0)]));
+    let s = Scenario {
+        task_specs: vec![(1, 1.0, 1.0), (2, 1.0, 1.0), (3, 1.0, 1.0)],
+        possible,
+        horizon: period(0.0, 10.0),
+        config: Configuration::default(),
+    };
+    let schedule = run_mc(MultiCursorConfig::dynamic_start_mid_forward(4, 2, 1), &s);
+    assert_eq!(schedule.len(), 3, "middle cursor reaches the horizon end");
+    assert_no_overlap(&schedule);
+}
+
+#[test]
+fn dynamic_start_mid_forward_no_overlap() {
+    let mut possible = TaskPeriodMap::new();
+    possible.insert(TaskId(1), windows(&[(0.0, 4.0)]));
+    possible.insert(TaskId(2), windows(&[(2.0, 7.0)]));
+    possible.insert(TaskId(3), windows(&[(5.0, 10.0)]));
+    let s = Scenario {
+        task_specs: vec![(1, 1.0, 1.0), (2, 1.0, 1.0), (3, 1.0, 1.0)],
+        possible,
+        horizon: period(0.0, 10.0),
+        config: Configuration::default(),
+    };
+    let schedule = run_mc(MultiCursorConfig::dynamic_start_mid_forward(4, 2, 1), &s);
+    assert_no_overlap(&schedule);
+}
+
+#[test]
+fn dynamic_start_mid_forward_does_not_duplicate_tasks() {
+    let s = tiling_scenario(4);
+    let schedule = run_mc(MultiCursorConfig::dynamic_start_mid_forward(4, 2, 1), &s);
+    assert_no_overlap(&schedule);
+    // No task may appear twice; the placement count never exceeds the task count.
+    assert!(schedule.len() <= 4);
 }
 
 #[test]

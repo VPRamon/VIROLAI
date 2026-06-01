@@ -359,11 +359,7 @@ mod tests {
         horizon_e: f64,
         periods: &'a TaskPeriodMap,
     ) -> FomContext<'a> {
-        FomContext {
-            cursor: t(cursor),
-            horizon: period(horizon_s, horizon_e),
-            possible_periods: Some(periods),
-        }
+        FomContext::single_cursor(t(cursor), period(horizon_s, horizon_e), Some(periods))
     }
 
     // ── residual_flexibility_for ─────────────────────────────────────────────
@@ -530,11 +526,7 @@ mod tests {
         let mut schedule = Schedule::new();
         place(&mut schedule, 50, 0.0, 1.0);
 
-        let ctx = FomContext {
-            cursor: t(1.0),
-            horizon: period(0.0, 5.0),
-            possible_periods: None,
-        };
+        let ctx = FomContext::single_cursor(t(1.0), period(0.0, 5.0), None);
         let score = fom.evaluate(&schedule, &problem, &ctx);
         assert!(
             (score - 1.0).abs() < 1e-9,

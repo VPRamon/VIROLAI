@@ -45,19 +45,19 @@ impl ScheduleFom for MirroredFom {
         if let Some(mirrored_periods) = ctx.possible_periods {
             let original_periods =
                 transform::unmirror_task_periods(mirrored_periods, &self.horizon);
-            let original_ctx = FomContext {
-                cursor: self.horizon.start,
-                horizon: Period::new(self.horizon.start, original_horizon_end),
-                possible_periods: Some(&original_periods),
-            };
+            let original_ctx = FomContext::single_cursor(
+                self.horizon.start,
+                Period::new(self.horizon.start, original_horizon_end),
+                Some(&original_periods),
+            );
             self.inner
                 .evaluate(&original_schedule, problem, &original_ctx)
         } else {
-            let original_ctx = FomContext {
-                cursor: self.horizon.start,
-                horizon: Period::new(self.horizon.start, original_horizon_end),
-                possible_periods: None,
-            };
+            let original_ctx = FomContext::single_cursor(
+                self.horizon.start,
+                Period::new(self.horizon.start, original_horizon_end),
+                None,
+            );
             self.inner
                 .evaluate(&original_schedule, problem, &original_ctx)
         }

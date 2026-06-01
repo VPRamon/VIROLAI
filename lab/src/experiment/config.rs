@@ -14,7 +14,7 @@
 
 use schedulers::scheduler::MultiCursorScheduler;
 use schedulers::scheduler::cursor::{
-    CursorConfig, CursorTerritory, MultiCursorConfig as CursorEngineConfig,
+    BoundaryRef, CursorConfig, CursorId, CursorTerritory, MultiCursorConfig as CursorEngineConfig,
 };
 use schedulers::scheduler::est::{Configuration as EstConfiguration, EstScheduler, FomKind};
 use schedulers::scheduler::fom::ScheduleFom;
@@ -316,16 +316,33 @@ impl LstRunConfig {
 /// Predefined multi-cursor cursor layouts.
 ///
 /// A *layout* fixes how many cursors exist and which territory/direction each
-/// owns. Both layouts split the horizon at the midpoint. Single-cursor layouts
-/// (plain EST / LST) are intentionally **not** included here — they remain the
-/// dedicated [`RunConfig::Est`] / [`RunConfig::Lst`] variants.
+/// owns. Single-cursor layouts (plain EST / LST) are intentionally **not**
+/// included here — they remain the dedicated [`RunConfig::Est`] /
+/// [`RunConfig::Lst`] variants.
+///
+/// Layouts come in two families:
+/// * **Fixed** (Plan A) — the horizon is split at the midpoint and each cursor
+///   owns a static half.
+/// * **Dynamic** (Plan B) — a cursor boundary follows another cursor's live
+///   position, recomputed after every placement, so the split point is decided
+///   by the search rather than fixed in advance.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MultiCursorLayout {
-    /// Forward cursor over `[0, 0.5)` and a backward cursor over `[0.5, 1.0)`.
+    /// Fixed: forward cursor over `[0, 0.5)` and a backward cursor over
+    /// `[0.5, 1.0)`.
     EstLstSplit,
-    /// Forward cursor over `[0, 0.5)` and a forward cursor over `[0.5, 1.0)`.
+    /// Fixed: forward cursor over `[0, 0.5)` and a forward cursor over
+    /// `[0.5, 1.0)`.
     StartMidForward,
+    /// Dynamic: a forward cursor from the horizon start and a backward cursor
+    /// from the horizon end advance towards each other until they meet. Each
+    /// cursor's inner boundary follows the other cursor's live position.
+    DynamicEstLstMeet,
+    /// Dynamic: a forward cursor from the horizon start whose end follows a
+    /// second forward cursor anchored at the midpoint. The front cursor may
+    /// never invade the middle cursor's live region.
+    DynamicStartMidForward,
 }
 
 impl MultiCursorLayout {
@@ -334,6 +351,8 @@ impl MultiCursorLayout {
         match self {
             Self::EstLstSplit => "est_lst_split",
             Self::StartMidForward => "start_mid_forward",
+            Self::DynamicEstLstMeet => "dynamic_est_lst_meet",
+            Self::DynamicStartMidForward => "dynamic_start_mid_forward",
         }
     }
 
@@ -357,6 +376,39 @@ impl MultiCursorLayout {
             Self::StartMidForward => {
                 vec![
                     CursorConfig::forward(0, front),
+                    CursorConfig::forward(1, back),
+                ]
+            }
+            Self::DynamicEstLstMeet => {
+                vec![
+                    CursorConfig::forward(
+                        0,
+                        CursorTerritory::Dynamic {
+                            start: BoundaryRef::HorizonStart,
+                            end: BoundaryRef::Cursor(CursorId(1)),
+                            min_gap: None,
+                        },
+                    ),
+                    CursorConfig::backward(
+                        1,
+                        CursorTerritory::Dynamic {
+                            start: BoundaryRef::Cursor(CursorId(0)),
+                            end: BoundaryRef::HorizonEnd,
+                            min_gap: None,
+                        },
+                    ),
+                ]
+            }
+            Self::DynamicStartMidForward => {
+                vec![
+                    CursorConfig::forward(
+                        0,
+                        CursorTerritory::Dynamic {
+                            start: BoundaryRef::HorizonStart,
+                            end: BoundaryRef::Cursor(CursorId(1)),
+                            min_gap: None,
+                        },
+                    ),
                     CursorConfig::forward(1, back),
                 ]
             }

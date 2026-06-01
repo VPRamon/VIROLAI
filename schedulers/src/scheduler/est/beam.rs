@@ -203,11 +203,8 @@ fn build_child_state<'a, F: ScheduleFom>(
 
     // FOM scoring is the pruning signal: higher-scoring child beams are more
     // likely to survive into the next round.
-    let fom_ctx = FomContext {
-        cursor: child.cursor,
-        horizon: *horizon,
-        possible_periods: ctx.map(|c| c.possible_periods),
-    };
+    let fom_ctx =
+        FomContext::single_cursor(child.cursor, *horizon, ctx.map(|c| c.possible_periods));
     child.score = scheduler.fom.evaluate(&child.schedule, problem, &fom_ctx);
     Some(child)
 }

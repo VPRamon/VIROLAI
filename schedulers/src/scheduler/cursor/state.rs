@@ -5,50 +5,144 @@
 //! ordering is identical to the single-cursor EST queue. [`MultiCursorState`]
 //! is one live beam: the shared schedule plus every cursor's queue and the
 //! cached figure-of-merit score.
+//!
+//! # Territory resolution
+//!
+//! A cursor's *active period* — the schedule-time region it may place into this
+//! round — is resolved in [`CursorRuntime::schedule_active_period`]. This is the
+//! **single** place territory bounds become a concrete region. Fixed (Plan A)
+//! and dynamic (Plan B) territories both flow through it; dynamic boundaries are
+//! resolved against the live positions of other cursors carried in a
+//! [`CursorWorld`]. The beam engine never special-cases territory shape.
 
-use super::config::{CursorDirection, CursorId};
+use super::config::{BoundarySide, CursorDirection, CursorId, CursorTerritory};
 use super::frame::CursorFrame;
+use crate::error::ScheduleError;
 use crate::schedule::Schedule;
 use crate::scheduler::est::{Candidate, sort_candidates};
 use crate::time::{MJD, Period, TaskId, Time};
+
+/// Snapshot of every cursor's live schedule-time frontier for one beam state.
+///
+/// Built immediately before each beam expansion so dynamic boundaries resolve
+/// against the *current* state, never a stale or cross-beam view.
+pub(super) struct CursorWorld {
+    positions: Vec<(CursorId, Time<MJD>)>,
+}
+
+impl CursorWorld {
+    /// Build a world snapshot from a state's cursors.
+    pub(super) fn snapshot(cursors: &[CursorRuntime<'_>]) -> Self {
+        Self {
+            positions: cursors
+                .iter()
+                .map(|c| (c.id, c.schedule_position()))
+                .collect(),
+        }
+    }
+
+    /// Live schedule-time position of a referenced cursor.
+    fn position(&self, id: CursorId) -> Result<Time<MJD>, ScheduleError> {
+        self.positions
+            .iter()
+            .find(|(cid, _)| *cid == id)
+            .map(|(_, t)| *t)
+            .ok_or_else(|| {
+                ScheduleError::InvalidConfiguration(format!(
+                    "dynamic boundary references unknown cursor {}",
+                    id.0
+                ))
+            })
+    }
+}
 
 /// One cursor's live search state.
 #[derive(Clone)]
 pub(super) struct CursorRuntime<'a> {
     /// Stable id (deterministic tie-breaks, logging).
     pub(super) id: CursorId,
+    /// Direction of travel (forward or backward).
+    pub(super) direction: CursorDirection,
     /// Frame mapping between this cursor's local time and schedule time.
     pub(super) frame: CursorFrame,
-    /// Territory in schedule time. The frame-space territory shares the same
-    /// `[start, end)` bounds because the mirror axis is the territory itself.
-    pub(super) territory: Period<MJD>,
+    /// Territory definition (fixed or dynamic), resolved live each round.
+    pub(super) territory: CursorTerritory,
+    /// Maximal fixed extent of the territory in schedule time (frame axis and
+    /// fallback bound).
+    pub(super) extent: Period<MJD>,
     /// Current cursor position in frame time.
     pub(super) frame_cursor: Time<MJD>,
     /// Candidate queue in EST order (schedulable candidates first).
     pub(super) candidates: Vec<Candidate<'a>>,
+    /// `true` when the cursor had no active region last refresh (exhausted or
+    /// squeezed out by a neighbouring cursor). Skips destructive queue refresh.
+    pub(super) exhausted: bool,
 }
 
 impl<'a> CursorRuntime<'a> {
-    /// Resolve the cursor's active region in frame time.
-    ///
-    /// This is the **single** place a cursor's territory is turned into the
-    /// region it may schedule into. Plan B (dynamic territories) only needs to
-    /// change this method, not the engine.
-    pub(super) fn active_period(&self) -> Period<MJD> {
-        Period::new(self.frame_cursor, self.territory.end)
+    /// The cursor's live frontier in schedule time.
+    pub(super) fn schedule_position(&self) -> Time<MJD> {
+        self.frame.to_schedule_time(self.frame_cursor)
     }
 
-    /// Refresh and re-sort the queue against the current active region.
-    pub(super) fn refresh(&mut self, threshold: u32) {
-        let active = self.active_period();
-        for candidate in &mut self.candidates {
-            candidate.refresh(&active);
+    /// Resolve the cursor's active region in **schedule** time for this round.
+    ///
+    /// This is the single place a territory becomes a concrete schedulable
+    /// region. Dynamic boundaries are resolved against `world`; the cursor's own
+    /// advancing frontier clamps the near edge. Returns `None` when the region
+    /// is empty (the cursor is exhausted or has been squeezed out).
+    pub(super) fn schedule_active_period(
+        &self,
+        world: &CursorWorld,
+        horizon: &Period<MJD>,
+    ) -> Result<Option<Period<MJD>>, ScheduleError> {
+        let (start_side, end_side) = self.territory.sides(horizon)?;
+        let gap = self.territory.min_gap();
+
+        let mut start = match start_side {
+            BoundarySide::Fixed(t) => t,
+            BoundarySide::Cursor(id) => Time::<MJD>::new(world.position(id)?.value() + gap),
+        };
+        let mut end = match end_side {
+            BoundarySide::Fixed(t) => t,
+            BoundarySide::Cursor(id) => Time::<MJD>::new(world.position(id)?.value() - gap),
+        };
+
+        let own = self.schedule_position();
+        match self.direction {
+            CursorDirection::Forward => start = max_time(start, own),
+            CursorDirection::Backward => end = min_time(end, own),
         }
-        sort_candidates(&mut self.candidates, active.start, threshold);
+
+        if end.value() <= start.value() {
+            Ok(None)
+        } else {
+            Ok(Some(Period::new(start, end)))
+        }
+    }
+
+    /// Refresh and re-sort the queue against a frame-time active region.
+    ///
+    /// `None` marks the cursor exhausted for this round without mutating the
+    /// queue's window cursor (which must only advance monotonically).
+    pub(super) fn refresh(&mut self, frame_active: Option<&Period<MJD>>, threshold: u32) {
+        match frame_active {
+            Some(active) => {
+                self.exhausted = false;
+                for candidate in &mut self.candidates {
+                    candidate.refresh(active);
+                }
+                sort_candidates(&mut self.candidates, active.start, threshold);
+            }
+            None => self.exhausted = true,
+        }
     }
 
     /// Number of schedulable candidates at the front of the queue.
     pub(super) fn count_schedulable(&self) -> usize {
+        if self.exhausted {
+            return 0;
+        }
         self.candidates
             .iter()
             .take_while(|c| !c.is_impossible())
@@ -119,6 +213,8 @@ pub(super) struct MultiCursorState<'a> {
     /// Schedule-time position of the cursor that last placed a task, used to
     /// build the figure-of-merit context. Starts at the horizon start.
     pub(super) last_cursor_schedule_time: Time<MJD>,
+    /// Id of the cursor that last placed a task (figure-of-merit context).
+    pub(super) last_action_cursor: Option<usize>,
 }
 
 impl MultiCursorState<'_> {
@@ -128,13 +224,19 @@ impl MultiCursorState<'_> {
     }
 }
 
-/// Convenience used by the engine when seeding the initial state.
-pub(super) fn initial_cursor_time(
-    _direction: CursorDirection,
-    territory: &Period<MJD>,
-) -> Time<MJD> {
-    // Every cursor runs forward in frame time, starting at the near edge of its
-    // territory. For a backward cursor that frame edge maps to the territory end
-    // in schedule time (scheduling latest-feasible first).
-    territory.start
+/// Initial frame-time position of a cursor: the near edge of its extent.
+///
+/// Every cursor runs forward in frame time, starting at the near edge of its
+/// extent. For a backward cursor that frame edge maps to the extent end in
+/// schedule time (scheduling latest-feasible first).
+pub(super) fn initial_cursor_time(extent: &Period<MJD>) -> Time<MJD> {
+    extent.start
+}
+
+fn max_time(a: Time<MJD>, b: Time<MJD>) -> Time<MJD> {
+    if a.value() >= b.value() { a } else { b }
+}
+
+fn min_time(a: Time<MJD>, b: Time<MJD>) -> Time<MJD> {
+    if a.value() <= b.value() { a } else { b }
 }

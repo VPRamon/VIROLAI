@@ -36,6 +36,22 @@ impl CursorFrame {
         }
     }
 
+    /// Map a single schedule-time period into frame time.
+    pub(super) fn to_frame_period(self, period: &Period<MJD>) -> Period<MJD> {
+        match self {
+            Self::Identity => *period,
+            Self::Mirrored { territory } => mirror_period(period, &territory),
+        }
+    }
+
+    /// Map a single frame-time instant back into schedule time.
+    pub(super) fn to_schedule_time(self, t: Time<MJD>) -> Time<MJD> {
+        match self {
+            Self::Identity => t,
+            Self::Mirrored { territory } => mirror(t, &territory),
+        }
+    }
+
     /// Convert a placement computed in frame time back into schedule time.
     pub(super) fn to_schedule_placement(self, placement: TaskPlacement) -> TaskPlacement {
         match self {

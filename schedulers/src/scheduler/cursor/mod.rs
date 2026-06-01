@@ -1,11 +1,13 @@
 //! Configurable multi-cursor scheduler.
 //!
 //! This module generalises the EST/LST beam search into a configurable model
-//! with one or more *cursors*, each owning a fixed territory of the scheduling
-//! horizon. It implements **Plan A** (multiple simultaneous cursors with fixed
-//! territories) and is structured so that **Plan B** (dynamic territories) can
-//! be added later by changing only [`config::CursorTerritory::resolve`] and
-//! [`state::CursorRuntime::active_period`] — not the beam-search engine.
+//! with one or more *cursors*, each owning a territory of the scheduling
+//! horizon. It implements both **Plan A** (multiple simultaneous cursors with
+//! fixed territories) and **Plan B** (dynamic territories whose boundaries
+//! follow the live position of another cursor). Territory shape is resolved in
+//! one place — [`config::CursorTerritory`] plus
+//! [`state::CursorRuntime::schedule_active_period`] — never in the beam-search
+//! engine.
 //!
 //! # Mental model
 //!
@@ -140,7 +142,7 @@ impl MultiCursorScheduler {
             return Ok(None);
         }
 
-        let territory = cursor.territory.resolve(horizon)?;
+        let territory = cursor.territory.extent(horizon)?;
         let mirrored_periods = mirror_task_periods(possible_periods, &territory);
         let mirrored_fom: Arc<dyn ScheduleFom> =
             Arc::new(MirroredFom::new(Arc::clone(&self.fom), territory));

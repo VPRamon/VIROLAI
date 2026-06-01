@@ -9,19 +9,27 @@
 //! For a single forward cursor spanning the whole horizon the loop reduces
 //! exactly to EST: same candidate ordering, same dominance pruning, same global
 //! top-`k` pruning, same figure-of-merit context.
+//!
+//! # Territory resolution
+//!
+//! Before every expansion the engine snapshots each cursor's live frontier into
+//! a [`CursorWorld`] and asks every cursor for its active region this round
+//! (see [`CursorRuntime::schedule_active_period`]). Fixed (Plan A) and dynamic
+//! (Plan B) territories share that one resolution path; the engine never
+//! special-cases territory shape or cursor count.
 
 use std::cmp::Ordering;
 
 use super::action::{ActionRank, CursorAction};
 use super::config::{CursorDirection, CursorPolicy, MultiCursorConfig};
 use super::frame::CursorFrame;
-use super::state::{CursorRuntime, MultiCursorState, initial_cursor_time};
+use super::state::{CursorRuntime, CursorWorld, MultiCursorState, initial_cursor_time};
 use crate::error::ScheduleError;
 use crate::prescheduler::TaskPeriodMap;
 use crate::schedule::{Schedule, SchedulingProblem, TaskPlacement};
 use crate::scheduler::est::{Candidate, IntoTaskPlacement, check_block_dependencies};
 use crate::scheduler::filter_task_refs;
-use crate::scheduler::fom::{FomContext, ScheduleFom};
+use crate::scheduler::fom::{CursorPosition, FomContext, ScheduleFom};
 use crate::task::Task;
 use crate::time::{MJD, Period};
 
@@ -36,11 +44,11 @@ struct CursorArena {
     /// Frame-time feasibility windows, one map per cursor (parallel to
     /// `MultiCursorConfig::cursors`).
     framed: Vec<TaskPeriodMap>,
-    /// Resolved territory (schedule time) per cursor.
-    territory: Vec<Period<MJD>>,
+    /// Maximal fixed extent (schedule time) per cursor — the frame axis.
+    extent: Vec<Period<MJD>>,
     /// Frame per cursor.
     frame: Vec<CursorFrame>,
-    /// Direction per cursor (logging / introspection).
+    /// Direction per cursor.
     direction: Vec<CursorDirection>,
 }
 
@@ -70,7 +78,7 @@ pub(super) fn run_multi_cursor(
         fom.label(),
     );
 
-    let best = beam_loop(config, fom, problem, possible_periods, horizon, initial);
+    let best = beam_loop(config, fom, problem, possible_periods, horizon, initial)?;
     Ok(best)
 }
 
@@ -82,12 +90,12 @@ fn build_arena(
     filtered_tasks: &[&Task],
 ) -> Result<CursorArena, ScheduleError> {
     let mut framed = Vec::with_capacity(config.cursors.len());
-    let mut territory = Vec::with_capacity(config.cursors.len());
+    let mut extent = Vec::with_capacity(config.cursors.len());
     let mut frame = Vec::with_capacity(config.cursors.len());
     let mut direction = Vec::with_capacity(config.cursors.len());
 
     for cursor in &config.cursors {
-        let region = cursor.territory.resolve(horizon)?;
+        let region = cursor.territory.extent(horizon)?;
         let cursor_frame = match cursor.direction {
             CursorDirection::Forward => CursorFrame::Identity,
             CursorDirection::Backward => CursorFrame::Mirrored { territory: region },
@@ -102,14 +110,14 @@ fn build_arena(
         }
 
         framed.push(map);
-        territory.push(region);
+        extent.push(region);
         frame.push(cursor_frame);
         direction.push(cursor.direction);
     }
 
     Ok(CursorArena {
         framed,
-        territory,
+        extent,
         frame,
         direction,
     })
@@ -125,9 +133,11 @@ fn seed_state<'a>(
     let mut cursors = Vec::with_capacity(config.cursors.len());
 
     for (pos, cfg) in config.cursors.iter().enumerate() {
-        let territory = arena.territory[pos];
+        let extent = arena.extent[pos];
         let frame = arena.frame[pos];
-        let initial_active = Period::new(territory.start, territory.end);
+        // Seed the queue against the maximal frame window; the first expansion
+        // refreshes every queue against its live active region.
+        let initial_active = Period::new(extent.start, extent.end);
 
         let candidates: Vec<Candidate<'a>> = filtered_tasks
             .iter()
@@ -139,10 +149,13 @@ fn seed_state<'a>(
 
         cursors.push(CursorRuntime {
             id: cfg.id,
+            direction: arena.direction[pos],
             frame,
-            territory,
-            frame_cursor: initial_cursor_time(arena.direction[pos], &territory),
+            territory: cfg.territory,
+            extent,
+            frame_cursor: initial_cursor_time(&extent),
             candidates,
+            exhausted: false,
         });
     }
 
@@ -151,6 +164,7 @@ fn seed_state<'a>(
         cursors,
         score: 0.0,
         last_cursor_schedule_time: horizon.start,
+        last_action_cursor: None,
     }
 }
 
@@ -162,7 +176,7 @@ fn beam_loop<'a>(
     possible_periods: &TaskPeriodMap,
     horizon: &Period<MJD>,
     initial: MultiCursorState<'a>,
-) -> Schedule {
+) -> Result<Schedule, ScheduleError> {
     let mut live: Vec<MultiCursorState<'a>> = vec![initial];
     let mut terminal: Vec<MultiCursorState<'a>> = Vec::new();
 
@@ -184,7 +198,7 @@ fn beam_loop<'a>(
                 b,
                 round,
                 state,
-            ) {
+            )? {
                 BeamExpansion::Terminal(state) => terminal.push(state),
                 BeamExpansion::Children(children) => next.extend(children),
             }
@@ -207,7 +221,7 @@ fn beam_loop<'a>(
         round,
     );
 
-    best.schedule
+    Ok(best.schedule)
 }
 
 /// Expand one live beam into a terminal state or scored children.
@@ -222,13 +236,21 @@ fn expand<'a>(
     branching_factor: usize,
     round: u32,
     mut state: MultiCursorState<'a>,
-) -> BeamExpansion<'a> {
-    for cursor in &mut state.cursors {
-        cursor.refresh(threshold);
+) -> Result<BeamExpansion<'a>, ScheduleError> {
+    // Snapshot every cursor's live frontier, then resolve and refresh each
+    // queue against its active region for this round.
+    let world = CursorWorld::snapshot(&state.cursors);
+    let mut sched_actives: Vec<Option<Period<MJD>>> = Vec::with_capacity(state.cursors.len());
+    for cursor in &state.cursors {
+        sched_actives.push(cursor.schedule_active_period(&world, horizon)?);
+    }
+    for (pos, cursor) in state.cursors.iter_mut().enumerate() {
+        let frame_active = sched_actives[pos].map(|p| cursor.frame.to_frame_period(&p));
+        cursor.refresh(frame_active.as_ref(), threshold);
     }
 
     if state.total_schedulable() == 0 {
-        return BeamExpansion::Terminal(state);
+        return Ok(BeamExpansion::Terminal(state));
     }
 
     let actions = ranked_actions(config, &state);
@@ -255,6 +277,7 @@ fn expand<'a>(
             possible_periods,
             horizon,
             &state,
+            &sched_actives,
             action,
             round,
         ) {
@@ -269,10 +292,10 @@ fn expand<'a>(
     }
 
     if children.is_empty() {
-        return BeamExpansion::Terminal(state);
+        return Ok(BeamExpansion::Terminal(state));
     }
 
-    BeamExpansion::Children(children)
+    Ok(BeamExpansion::Children(children))
 }
 
 /// Collect and rank candidate actions across all cursors.
@@ -311,12 +334,14 @@ fn ranked_actions(config: &MultiCursorConfig, state: &MultiCursorState<'_>) -> V
 
 /// Build and score one child beam from a chosen action, or `None` when the
 /// placement is rejected by domain validation.
+#[allow(clippy::too_many_arguments)]
 fn build_child<'a>(
     fom: &dyn ScheduleFom,
     problem: &SchedulingProblem,
     possible_periods: &TaskPeriodMap,
     horizon: &Period<MJD>,
     state: &MultiCursorState<'a>,
+    sched_actives: &[Option<Period<MJD>>],
     action: CursorAction,
     round: u32,
 ) -> Option<MultiCursorState<'a>> {
@@ -324,12 +349,16 @@ fn build_child<'a>(
 
     let pos = action.cursor_pos;
     let frame = child.cursors[pos].frame;
-    let territory = child.cursors[pos].territory;
+    let extent = child.cursors[pos].extent;
+
+    // The live active region this cursor was refreshed against (pre-placement).
+    // A schedulable candidate implies a non-empty region, but stay defensive.
+    let active = sched_actives[pos]?;
 
     let candidate = child.cursors[pos].pop_at(action.candidate_idx);
     let task_id = candidate.task_id();
 
-    let frame_placement = candidate.into_task_placement(territory.end);
+    let frame_placement = candidate.into_task_placement(extent.end);
     let frame_end = frame_placement.end;
     let placement = frame.to_schedule_placement(frame_placement);
 
@@ -343,8 +372,7 @@ fn build_child<'a>(
         placement.end.value(),
     );
 
-    if let Err(err) =
-        validate_multi_cursor_placement(&child.schedule, &placement, problem, &territory)
+    if let Err(err) = validate_multi_cursor_placement(&child.schedule, &placement, problem, &active)
     {
         log::debug!(
             "cursor: round={} cursor={} task={} rejected: {}",
@@ -368,37 +396,49 @@ fn build_child<'a>(
     let schedule_cursor_time = placement.end;
     child.schedule.insert_placement(placement);
     child.last_cursor_schedule_time = schedule_cursor_time;
+    child.last_action_cursor = Some(action.cursor_id.0);
 
-    // NOTE: `FomContext.cursor` models a single global forward frontier. This is
-    // exact for the single-forward (EST) and single-backward (LST, via the
-    // mirrored fast path) cases. For Plan A multi-cursor layouts the frontier is
-    // a best-effort signal used only for beam *ranking* — it never affects
-    // schedule validity (overlap/duplicate/territory/dependency are all enforced
-    // by `validate_multi_cursor_placement`). Cursor-sensitive figures of merit
-    // (e.g. future-flexibility) may therefore prune sub-optimally under
-    // multi-cursor layouts; the default soft-constraint FOM is context-free.
+    // Build the multi-cursor figure-of-merit context. `cursor` keeps the legacy
+    // single-frontier signal (exact for single-forward EST / single-backward
+    // LST); `cursor_positions` / `active_periods` / `last_action_cursor` expose
+    // the full multi-cursor frontier for cursor-sensitive figures of merit.
+    // None of these affect schedule validity, which is enforced entirely by
+    // `validate_multi_cursor_placement`.
+    let cursor_positions: Vec<CursorPosition> = child
+        .cursors
+        .iter()
+        .map(|c| CursorPosition {
+            id: c.id.0,
+            position: c.schedule_position(),
+        })
+        .collect();
+
     let fom_ctx = FomContext {
         cursor: child.last_cursor_schedule_time,
         horizon: *horizon,
         possible_periods: Some(possible_periods),
+        cursor_positions: Some(&cursor_positions),
+        active_periods: Some(sched_actives),
+        last_action_cursor: child.last_action_cursor,
     };
     child.score = fom.evaluate(&child.schedule, problem, &fom_ctx);
 
     Some(child)
 }
 
-/// Validate a placement against the shared schedule and the cursor's territory.
+/// Validate a placement against the shared schedule and the cursor's live
+/// active region.
 ///
 /// Checks, in order:
 /// 1. the task is not already scheduled,
 /// 2. block dependencies are satisfied,
-/// 3. the placement lies within the cursor's territory,
+/// 3. the placement lies within the cursor's active region this round,
 /// 4. the placement does not overlap any existing placement.
 pub(super) fn validate_multi_cursor_placement(
     schedule: &Schedule,
     placement: &TaskPlacement,
     problem: &SchedulingProblem,
-    territory: &Period<MJD>,
+    active: &Period<MJD>,
 ) -> Result<(), ScheduleError> {
     if schedule.contains(placement.task_id) {
         return Err(ScheduleError::ConstraintViolation(format!(
@@ -409,16 +449,15 @@ pub(super) fn validate_multi_cursor_placement(
 
     check_block_dependencies(schedule, placement.task_id, placement.start, problem)?;
 
-    if placement.start.value() < territory.start.value()
-        || placement.end.value() > territory.end.value()
+    if placement.start.value() < active.start.value() || placement.end.value() > active.end.value()
     {
         return Err(ScheduleError::ConstraintViolation(format!(
-            "task {} placement [{:.4}, {:.4}) escapes cursor territory [{:.4}, {:.4})",
+            "task {} placement [{:.4}, {:.4}) escapes cursor active region [{:.4}, {:.4})",
             placement.task_id.0,
             placement.start.value(),
             placement.end.value(),
-            territory.start.value(),
-            territory.end.value(),
+            active.start.value(),
+            active.end.value(),
         )));
     }
 

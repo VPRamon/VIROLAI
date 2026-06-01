@@ -472,6 +472,8 @@ mod tests {
                     layouts: vec![
                         MultiCursorLayout::EstLstSplit,
                         MultiCursorLayout::StartMidForward,
+                        MultiCursorLayout::DynamicEstLstMeet,
+                        MultiCursorLayout::DynamicStartMidForward,
                     ],
                     endangered_thresholds: vec![1],
                     k_beams: vec![4],
@@ -484,7 +486,7 @@ mod tests {
             output_dir: Some(PathBuf::from("out")),
         };
         let cells = resolve_cells(&spec).unwrap();
-        assert_eq!(cells.len(), 2);
+        assert_eq!(cells.len(), 4);
         assert!(cells.iter().all(|c| c.algorithm == "multi_cursor"));
         assert!(
             cells
@@ -495,6 +497,16 @@ mod tests {
             cells
                 .iter()
                 .any(|c| c.cell_id == "d1__multi_cursor__start_mid_forward-e1-k4-b2")
+        );
+        assert!(
+            cells
+                .iter()
+                .any(|c| c.cell_id == "d1__multi_cursor__dynamic_est_lst_meet-e1-k4-b2")
+        );
+        assert!(
+            cells
+                .iter()
+                .any(|c| c.cell_id == "d1__multi_cursor__dynamic_start_mid_forward-e1-k4-b2")
         );
     }
 
