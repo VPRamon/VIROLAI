@@ -29,6 +29,9 @@ pub enum ScheduleError {
     #[error("invalid configuration: {0}")]
     InvalidConfiguration(String),
 
+    #[error("unsupported configuration: {0}")]
+    UnsupportedConfiguration(String),
+
     #[error("constraint violated: {0}")]
     ConstraintViolation(String),
 

@@ -28,7 +28,9 @@ use schedulers::metrics::RankingWeights;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-use crate::experiment::config::{EstSweepAxes, HapSweepAxes, HorizonOverride};
+use crate::experiment::config::{
+    EstSweepAxes, HapSweepAxes, HorizonOverride, MultiCursorSweepAxes,
+};
 
 /// Top-level experiment specification, typically loaded from a JSON file.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -101,15 +103,22 @@ pub enum AlgorithmSweep {
         #[serde(default)]
         axes: EstSweepAxes,
     },
+    /// Multi-cursor sweep block (Plan A fixed-territory layouts).
+    MultiCursor {
+        /// Parameter axes to expand.
+        #[serde(default)]
+        axes: MultiCursorSweepAxes,
+    },
 }
 
 impl AlgorithmSweep {
-    /// Returns `"est"`, `"hap"`, or `"lst"`.
+    /// Returns `"est"`, `"hap"`, `"lst"`, or `"multi_cursor"`.
     pub const fn algorithm(&self) -> &'static str {
         match self {
             Self::Est { .. } => "est",
             Self::Hap { .. } => "hap",
             Self::Lst { .. } => "lst",
+            Self::MultiCursor { .. } => "multi_cursor",
         }
     }
 }

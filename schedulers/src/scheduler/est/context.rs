@@ -24,7 +24,7 @@ pub(super) struct ProblemCtx<'p> {
 ///
 /// Returns `Ok(())` if the placement is dependency-safe, or a
 /// [`ScheduleError`] describing the violation.
-pub(super) fn check_block_dependencies(
+pub(crate) fn check_block_dependencies(
     schedule: &Schedule,
     task_id: TaskId,
     candidate_start: Time<MJD>,

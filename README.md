@@ -311,6 +311,72 @@ Each EST cell is the cartesian product of all three axes.
 | Survivor cap | `survivor_caps` | Hard cap on the survivor pool between rounds |
 | Seeds | `seeds` | RNG seeds for reproducible stochastic runs |
 
+#### Multi-cursor algorithm axes
+
+The `multi_cursor` algorithm generalises EST/LST into several cursors that share
+one schedule, each owning a fixed sub-region ("territory") of the horizon
+(**Plan A**). See [Scheduling model](#scheduling-model) for the conceptual
+background.
+
+```json
+{
+  "kind": "multi_cursor",
+  "axes": {
+    "layouts":               ["est_lst_split", "start_mid_forward"],
+    "endangered_thresholds": [1],
+    "k_beams":               [4],
+    "branching_factors":     [2]
+  }
+}
+```
+
+| Axis | Key | Description |
+|---|---|---|
+| Layouts | `layouts` | Cursor arrangement: `"est_lst_split"` or `"start_mid_forward"` |
+| Endangered threshold | `endangered_thresholds` | Same semantics as EST |
+| K-beams | `k_beams` | Beam width |
+| Branching factor | `branching_factors` | Candidates explored per beam per round |
+| FOMs | `foms` | Figure-of-merit variants (default `soft_constraint`) |
+
+Each multi-cursor cell is the cartesian product of all axes. The cell slug
+encodes the layout, e.g. `est_lst_split-e1-k4-b2`.
+
+> Plain single-cursor EST and LST keep their dedicated `est` / `lst` algorithm
+> kinds; `multi_cursor` is only for genuinely multi-cursor layouts. Cursor-aware
+> figures of merit (e.g. `future_flexibility`) are best used with the single
+> `est`/`lst` kinds; under multi-cursor layouts they only affect beam ranking,
+> never schedule validity.
+
+---
+
+## Scheduling model
+
+All beam-search schedulers in this workspace share one underlying model: a
+*cursor* sweeps the horizon placing tasks, ordered by earliest feasible start
+with endangered-task protection.
+
+- **EST** (`est`) is a **single forward cursor** over the full horizon: it
+  schedules the earliest-feasible task first.
+- **LST** (`lst`) is a **single backward cursor** over the full horizon. It is
+  realised by mirroring the horizon, running EST in mirrored time, then
+  unmirroring the schedule — so latest-feasible tasks are placed first.
+- **Multi-cursor** (`multi_cursor`, **Plan A**) runs several cursors with
+  disjoint **fixed territories** that share one global schedule. A task placed
+  by one cursor becomes unavailable to all others, no placement may escape its
+  cursor's territory, and placements never overlap. Built-in layouts:
+  - `est_lst_split` — forward cursor over `[0, 0.5)` + backward cursor over
+    `[0.5, 1.0)` (fractions of the horizon).
+  - `start_mid_forward` — forward cursor over `[0, 0.5)` + forward cursor over
+    `[0.5, 1.0)`.
+- **Plan B** (dynamic territories whose boundaries follow other cursors) is
+  *not yet implemented*; configuring it returns an unsupported-configuration
+  error. The engine is structured so Plan B only needs changes to per-cursor
+  active-region resolution, not to the beam-search core.
+
+Programmatically, `MultiCursorScheduler::single_forward(...)` is exactly
+equivalent to `EstScheduler` and `MultiCursorScheduler::single_backward(...)` is
+exactly equivalent to `LstScheduler` (proven by equivalence tests).
+
 ---
 
 ## Scheduler Options

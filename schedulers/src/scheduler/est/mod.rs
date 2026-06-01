@@ -27,5 +27,7 @@ pub use configuration::Configuration;
 pub use ordering::{compare_candidates, sort_candidates};
 pub use schedule_state::ScheduleState;
 
+pub(crate) use context::check_block_dependencies;
+
 #[cfg(test)]
 mod tests;

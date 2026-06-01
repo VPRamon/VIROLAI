@@ -263,6 +263,16 @@ fn run_cell_inner(
                 )
                 .map_err(|e| format!("LST run {} failed: {e}", cell.cell_id))?
         }
+        RunConfig::MultiCursor(config) => {
+            let scheduler = config.build_scheduler()?;
+            scheduler
+                .run(
+                    &prepared.problem,
+                    &prepared.possible_periods,
+                    &prepared.horizon,
+                )
+                .map_err(|e| format!("multi-cursor run {} failed: {e}", cell.cell_id))?
+        }
     };
     let scheduler_runtime_ms = scheduler_started.elapsed().as_secs_f64() * 1000.0;
 
@@ -415,6 +425,13 @@ fn build_schedule_metadata_from_parts(
             })
         }
         RunConfig::Lst(c) => serde_json::json!({
+            "k_beams": c.k_beams,
+            "branching_factor": c.branching_factor,
+            "endangered_threshold": c.endangered_threshold,
+            "fom": c.fom.to_string(),
+        }),
+        RunConfig::MultiCursor(c) => serde_json::json!({
+            "layout": c.layout.to_string(),
             "k_beams": c.k_beams,
             "branching_factor": c.branching_factor,
             "endangered_threshold": c.endangered_threshold,

@@ -26,7 +26,7 @@ use std::path::PathBuf;
 
 use crate::experiment::config::{
     EstRunConfig, EstSweepAxes, HapRunConfig, HapSweepAxes, HorizonOverride, LstRunConfig,
-    RunConfig,
+    MultiCursorLayout, MultiCursorRunConfig, MultiCursorSweepAxes, RunConfig,
 };
 use crate::experiment::spec::{AlgorithmSweep, DatasetEntry, ExperimentSpec};
 
@@ -136,6 +136,7 @@ fn resolve_configs(sweep: &AlgorithmSweep) -> Result<Vec<RunConfig>, String> {
         AlgorithmSweep::Est { axes } => insert_est_configs(axes, &mut set),
         AlgorithmSweep::Hap { axes } => insert_hap_configs(axes, &mut set),
         AlgorithmSweep::Lst { axes } => insert_lst_configs(axes, &mut set),
+        AlgorithmSweep::MultiCursor { axes } => insert_multi_cursor_configs(axes, &mut set),
     }
     let configs: Vec<_> = set.into_iter().collect();
     if configs.is_empty() {
@@ -245,11 +246,47 @@ fn pick_or_default<T: Copy>(values: &[T], default: T) -> Vec<T> {
     }
 }
 
+fn insert_multi_cursor_configs(axes: &MultiCursorSweepAxes, set: &mut BTreeSet<RunConfig>) {
+    let def = MultiCursorRunConfig::default();
+    let layouts: Vec<MultiCursorLayout> = if axes.layouts.is_empty() {
+        vec![def.layout]
+    } else {
+        axes.layouts.clone()
+    };
+    let endangered = pick_or_default(&axes.endangered_thresholds, def.endangered_threshold);
+    let k_beams = pick_or_default(&axes.k_beams, def.k_beams);
+    let branching = pick_or_default(&axes.branching_factors, def.branching_factor);
+    let foms = if axes.foms.is_empty() {
+        vec![def.fom]
+    } else {
+        axes.foms.clone()
+    };
+
+    for &layout in &layouts {
+        for &e in &endangered {
+            for &k in &k_beams {
+                for &b in &branching {
+                    for &fom in &foms {
+                        set.insert(RunConfig::MultiCursor(MultiCursorRunConfig {
+                            fom,
+                            endangered_threshold: e,
+                            k_beams: k,
+                            branching_factor: b,
+                            layout,
+                        }));
+                    }
+                }
+            }
+        }
+    }
+}
+
 fn validate_config(cfg: RunConfig) -> Result<(), String> {
     match cfg {
         RunConfig::Est(c) => c.build_scheduler().map(|_| ()),
         RunConfig::Hap(c) => c.build_scheduler().map(|_| ()),
         RunConfig::Lst(c) => c.build_scheduler().map(|_| ()),
+        RunConfig::MultiCursor(c) => c.build_scheduler().map(|_| ()),
     }
 }
 
@@ -417,6 +454,48 @@ mod tests {
         let cells = resolve_cells(&spec).unwrap();
         assert_eq!(cells.len(), 1);
         assert_eq!(cells[0].cell_id, "d1__lst__e1-k4-b2-future_flexibility");
+    }
+
+    #[test]
+    fn multi_cursor_sweep_resolves_layouts_and_axes() {
+        use crate::experiment::config::{MultiCursorLayout, MultiCursorSweepAxes};
+        let spec = ExperimentSpec {
+            name: "x".into(),
+            datasets: vec![DatasetEntry {
+                id: "d1".into(),
+                path: PathBuf::from("d1.json"),
+                label: None,
+                horizon_override: None,
+            }],
+            algorithms: vec![AlgorithmSweep::MultiCursor {
+                axes: MultiCursorSweepAxes {
+                    layouts: vec![
+                        MultiCursorLayout::EstLstSplit,
+                        MultiCursorLayout::StartMidForward,
+                    ],
+                    endangered_thresholds: vec![1],
+                    k_beams: vec![4],
+                    branching_factors: vec![2],
+                    foms: vec![],
+                },
+            }],
+            ranking: None,
+            max_parallel: None,
+            output_dir: Some(PathBuf::from("out")),
+        };
+        let cells = resolve_cells(&spec).unwrap();
+        assert_eq!(cells.len(), 2);
+        assert!(cells.iter().all(|c| c.algorithm == "multi_cursor"));
+        assert!(
+            cells
+                .iter()
+                .any(|c| c.cell_id == "d1__multi_cursor__est_lst_split-e1-k4-b2")
+        );
+        assert!(
+            cells
+                .iter()
+                .any(|c| c.cell_id == "d1__multi_cursor__start_mid_forward-e1-k4-b2")
+        );
     }
 
     #[test]

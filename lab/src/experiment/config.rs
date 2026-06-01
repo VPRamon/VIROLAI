@@ -12,6 +12,10 @@
 //! string that uniquely identifies each configuration — used as the stem of
 //! schedule output files and as the last component of `cell_id` strings.
 
+use schedulers::scheduler::MultiCursorScheduler;
+use schedulers::scheduler::cursor::{
+    CursorConfig, CursorTerritory, MultiCursorConfig as CursorEngineConfig,
+};
 use schedulers::scheduler::est::{Configuration as EstConfiguration, EstScheduler, FomKind};
 use schedulers::scheduler::fom::ScheduleFom;
 use schedulers::scheduler::hap::{
@@ -54,6 +58,31 @@ pub struct EstSweepAxes {
     ///
     /// Empty falls back to the default (`soft_constraint`). The FOM is
     /// included in the cell slug only when it is not the default.
+    #[serde(default)]
+    pub foms: Vec<FomKind>,
+}
+
+// ── Multi-cursor sweep axes ──────────────────────────────────────────────────
+
+/// Multi-cursor parameter axes to sweep.
+///
+/// Shares the EST beam axes and adds a list of [`MultiCursorLayout`] values.
+/// The runner takes the Cartesian product of all axes.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct MultiCursorSweepAxes {
+    /// Cursor layouts to sweep. Empty falls back to `est_lst_split`.
+    #[serde(default)]
+    pub layouts: Vec<MultiCursorLayout>,
+    /// Values of `endangered_threshold` (ε) to sweep.
+    #[serde(default)]
+    pub endangered_thresholds: Vec<u32>,
+    /// Values of beam count (k) to sweep.
+    #[serde(default)]
+    pub k_beams: Vec<usize>,
+    /// Values of branching factor (b) to sweep.
+    #[serde(default)]
+    pub branching_factors: Vec<usize>,
+    /// FOM variants to sweep. Empty falls back to the default.
     #[serde(default)]
     pub foms: Vec<FomKind>,
 }
@@ -282,6 +311,138 @@ impl LstRunConfig {
     }
 }
 
+// ── Multi-cursor run configuration ───────────────────────────────────────────
+
+/// Predefined multi-cursor cursor layouts.
+///
+/// A *layout* fixes how many cursors exist and which territory/direction each
+/// owns. Both layouts split the horizon at the midpoint. Single-cursor layouts
+/// (plain EST / LST) are intentionally **not** included here — they remain the
+/// dedicated [`RunConfig::Est`] / [`RunConfig::Lst`] variants.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MultiCursorLayout {
+    /// Forward cursor over `[0, 0.5)` and a backward cursor over `[0.5, 1.0)`.
+    EstLstSplit,
+    /// Forward cursor over `[0, 0.5)` and a forward cursor over `[0.5, 1.0)`.
+    StartMidForward,
+}
+
+impl MultiCursorLayout {
+    /// Stable slug fragment encoding the layout.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::EstLstSplit => "est_lst_split",
+            Self::StartMidForward => "start_mid_forward",
+        }
+    }
+
+    /// Build the two-cursor list (in horizon-relative fractions) for this layout.
+    fn cursors(self) -> Vec<CursorConfig> {
+        let front = CursorTerritory::FractionRange {
+            start: 0.0,
+            end: 0.5,
+        };
+        let back = CursorTerritory::FractionRange {
+            start: 0.5,
+            end: 1.0,
+        };
+        match self {
+            Self::EstLstSplit => {
+                vec![
+                    CursorConfig::forward(0, front),
+                    CursorConfig::backward(1, back),
+                ]
+            }
+            Self::StartMidForward => {
+                vec![
+                    CursorConfig::forward(0, front),
+                    CursorConfig::forward(1, back),
+                ]
+            }
+        }
+    }
+}
+
+impl std::fmt::Display for MultiCursorLayout {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Fully resolved, immutable configuration for one multi-cursor scheduler run.
+///
+/// Shares the EST-style beam parameters (figure of merit, endangered threshold,
+/// beam count, branching factor) and adds a [`MultiCursorLayout`] selecting the
+/// cursor arrangement. Arbitrary cursor lists are intentionally not exposed
+/// here so [`RunConfig`] stays `Copy` and sweep-friendly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct MultiCursorRunConfig {
+    /// Figure-of-merit variant used to rank candidate placements.
+    pub fom: FomKind,
+    /// Minimum number of competing tasks required to trigger beam splitting.
+    pub endangered_threshold: u32,
+    /// Number of parallel beams maintained during the search.
+    pub k_beams: usize,
+    /// Maximum branching factor applied at each decision point.
+    pub branching_factor: usize,
+    /// Cursor arrangement.
+    pub layout: MultiCursorLayout,
+}
+
+impl Default for MultiCursorRunConfig {
+    fn default() -> Self {
+        Self {
+            fom: FomKind::SoftConstraint,
+            endangered_threshold: 1,
+            k_beams: 1,
+            branching_factor: 1,
+            layout: MultiCursorLayout::EstLstSplit,
+        }
+    }
+}
+
+impl MultiCursorRunConfig {
+    /// Build the engine-level [`CursorEngineConfig`] for this run.
+    pub fn cursor_config(self) -> CursorEngineConfig {
+        CursorEngineConfig {
+            cursors: self.layout.cursors(),
+            k_beams: self.k_beams,
+            branching_factor: self.branching_factor,
+            endangered_threshold: self.endangered_threshold,
+            cursor_policy: schedulers::scheduler::cursor::CursorPolicy::BestCandidateGlobal,
+        }
+    }
+
+    /// Instantiates a [`MultiCursorScheduler`] for this configuration.
+    pub fn build_scheduler(self) -> Result<MultiCursorScheduler, String> {
+        MultiCursorScheduler::new(self.cursor_config(), self.fom.into_fom()).map_err(|e| {
+            format!(
+                "invalid multi-cursor configuration for {}: {e}",
+                self.slug()
+            )
+        })
+    }
+
+    /// Returns a short, filesystem-safe string encoding the layout and beam
+    /// axes (e.g. `"est_lst_split-e1-k4-b2"`).
+    pub fn slug(self) -> String {
+        let fom_suffix = if self.fom == FomKind::default() {
+            String::new()
+        } else {
+            format!("-{}", self.fom.as_str())
+        };
+        format!(
+            "{}-e{}-k{}-b{}{}",
+            self.layout.as_str(),
+            self.endangered_threshold,
+            self.k_beams,
+            self.branching_factor,
+            fom_suffix
+        )
+    }
+}
+
 // ── HAP run configuration ────────────────────────────────────────────────────
 
 /// Fully resolved, immutable configuration for one HAP scheduler run.
@@ -386,6 +547,8 @@ pub enum RunConfig {
     Hap(HapRunConfig),
     /// An LST (Latest Start Time) run.
     Lst(LstRunConfig),
+    /// A multi-cursor run (Plan A: fixed-territory cursors).
+    MultiCursor(MultiCursorRunConfig),
 }
 
 impl Default for RunConfig {
@@ -395,22 +558,25 @@ impl Default for RunConfig {
 }
 
 impl RunConfig {
-    /// Returns `"est"`, `"hap"`, or `"lst"`.
+    /// Returns `"est"`, `"hap"`, `"lst"`, or `"multi_cursor"`.
     pub const fn algorithm(self) -> &'static str {
         match self {
             Self::Est(_) => "est",
             Self::Hap(_) => "hap",
             Self::Lst(_) => "lst",
+            Self::MultiCursor(_) => "multi_cursor",
         }
     }
 
     /// Returns the unique configuration slug (see [`EstRunConfig::slug`],
-    /// [`HapRunConfig::slug`], and [`LstRunConfig::slug`]).
+    /// [`HapRunConfig::slug`], [`LstRunConfig::slug`], and
+    /// [`MultiCursorRunConfig::slug`]).
     pub fn slug(self) -> String {
         match self {
             Self::Est(config) => config.slug(),
             Self::Hap(config) => config.slug(),
             Self::Lst(config) => config.slug(),
+            Self::MultiCursor(config) => config.slug(),
         }
     }
 
@@ -458,6 +624,38 @@ mod tests {
             branching_factor: 3,
         });
         assert_eq!(run.slug(), "e2-k5-b3");
+    }
+
+    #[test]
+    fn multi_cursor_slug_encodes_layout_and_axes() {
+        let run = RunConfig::MultiCursor(MultiCursorRunConfig {
+            fom: FomKind::SoftConstraint,
+            endangered_threshold: 1,
+            k_beams: 4,
+            branching_factor: 2,
+            layout: MultiCursorLayout::EstLstSplit,
+        });
+        assert_eq!(run.slug(), "est_lst_split-e1-k4-b2");
+        assert_eq!(run.algorithm(), "multi_cursor");
+    }
+
+    #[test]
+    fn multi_cursor_slug_distinguishes_layouts() {
+        let split = MultiCursorRunConfig {
+            layout: MultiCursorLayout::EstLstSplit,
+            ..MultiCursorRunConfig::default()
+        };
+        let start_mid = MultiCursorRunConfig {
+            layout: MultiCursorLayout::StartMidForward,
+            ..MultiCursorRunConfig::default()
+        };
+        assert_ne!(split.slug(), start_mid.slug());
+        assert_eq!(start_mid.slug(), "start_mid_forward-e1-k1-b1");
+    }
+
+    #[test]
+    fn multi_cursor_build_scheduler_succeeds() {
+        assert!(MultiCursorRunConfig::default().build_scheduler().is_ok());
     }
 
     #[test]
