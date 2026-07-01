@@ -2,7 +2,7 @@
 //!
 //! The first two groups prove *exact* equivalence with the existing EST and LST
 //! schedulers (single forward cursor == EST, single backward cursor == LST).
-//! The remaining group exercises Plan A: multiple fixed-territory cursors that
+//! The remaining group exercises Static Partitioning: multiple fixed-territory cursors that
 //! share one schedule.
 
 use super::MultiCursorScheduler;
@@ -312,7 +312,7 @@ fn single_backward_constructor_matches_lst() {
     assert_same_schedule(&run_lst(&s), &mc);
 }
 
-// --- M8: Plan A fixed territories --------------------------------------------
+// --- M8: Static Partitioning fixed territories --------------------------------------------
 
 fn two_cursor_config(
     cursor0: CursorConfig,
@@ -665,7 +665,7 @@ fn multi_cursor_respects_block_dependencies() {
     assert_no_overlap(&schedule);
 }
 
-// --- Plan B: dynamic territories --------------------------------------------
+// --- Dynamic Frontiering: dynamic territories --------------------------------------------
 
 use super::config::{BoundaryRef, CursorDirection, CursorId};
 use super::frame::CursorFrame;
@@ -909,7 +909,7 @@ fn dynamic_config_rejects_unknown_cursor_reference() {
     ));
 }
 
-// --- Plan B: dynamic EST+LST meet layout -------------------------------------
+// --- Dynamic Frontiering: dynamic EST+LST meet layout -------------------------------------
 
 /// `n` unit tasks each feasible anywhere within `[0, n)`.
 fn tiling_scenario(n: u64) -> Scenario {
@@ -1042,7 +1042,7 @@ fn dynamic_est_lst_respects_block_dependencies() {
     assert_no_overlap(&schedule);
 }
 
-// --- Plan B: dynamic start+middle forward layout -----------------------------
+// --- Dynamic Frontiering: dynamic start+middle forward layout -----------------------------
 
 #[test]
 fn dynamic_start_mid_forward_front_respects_mid_cursor() {

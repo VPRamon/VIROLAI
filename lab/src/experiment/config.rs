@@ -325,27 +325,27 @@ impl LstRunConfig {
 /// [`RunConfig::Lst`] variants.
 ///
 /// Layouts come in two families:
-/// * **Fixed** (Plan A) — the horizon is split at the midpoint and each cursor
-///   owns a static half.
-/// * **Dynamic** (Plan B) — a cursor boundary follows another cursor's live
+/// * **Static Partitioning** — the horizon is split at the midpoint and each
+///   cursor owns a static half.
+/// * **Dynamic Frontiering** — a cursor boundary follows another cursor's live
 ///   position, recomputed after every placement, so the split point is decided
 ///   by the search rather than fixed in advance.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MultiCursorLayout {
-    /// Fixed: forward cursor over `[0, 0.5)` and a backward cursor over
+    /// Static Partitioning: forward cursor over `[0, 0.5)` and a backward cursor over
     /// `[0.5, 1.0)`.
     EstLstSplit,
-    /// Fixed: forward cursor over `[0, 0.5)` and a forward cursor over
+    /// Static Partitioning: forward cursor over `[0, 0.5)` and a forward cursor over
     /// `[0.5, 1.0)`.
     StartMidForward,
-    /// Fixed: four forward cursors over contiguous quarter-horizon territories.
+    /// Static Partitioning: four forward cursors over contiguous quarter-horizon territories.
     FourQuarterForward,
-    /// Dynamic: a forward cursor from the horizon start and a backward cursor
+    /// Dynamic Frontiering: a forward cursor from the horizon start and a backward cursor
     /// from the horizon end advance towards each other until they meet. Each
     /// cursor's inner boundary follows the other cursor's live position.
     DynamicEstLstMeet,
-    /// Dynamic: a forward cursor from the horizon start whose end follows a
+    /// Dynamic Frontiering: a forward cursor from the horizon start whose end follows a
     /// second forward cursor anchored at the midpoint. The front cursor may
     /// never invade the middle cursor's live region.
     DynamicStartMidForward,
@@ -365,30 +365,30 @@ impl MultiCursorLayout {
 
     /// Build the cursor list (in horizon-relative fractions) for this layout.
     fn cursors(self) -> Vec<CursorConfig> {
-        let front = CursorTerritory::FractionRange {
+        let front = CursorTerritory::Static(StaticPartitioning::FractionRange {
             start: 0.0,
             end: 0.5,
-        };
-        let back = CursorTerritory::FractionRange {
+        });
+        let back = CursorTerritory::Static(StaticPartitioning::FractionRange {
             start: 0.5,
             end: 1.0,
-        };
-        let quarter_1 = CursorTerritory::FractionRange {
+        });
+        let quarter_1 = CursorTerritory::Static(StaticPartitioning::FractionRange {
             start: 0.0,
             end: 0.25,
-        };
-        let quarter_2 = CursorTerritory::FractionRange {
+        });
+        let quarter_2 = CursorTerritory::Static(StaticPartitioning::FractionRange {
             start: 0.25,
             end: 0.5,
-        };
-        let quarter_3 = CursorTerritory::FractionRange {
+        });
+        let quarter_3 = CursorTerritory::Static(StaticPartitioning::FractionRange {
             start: 0.5,
             end: 0.75,
-        };
-        let quarter_4 = CursorTerritory::FractionRange {
+        });
+        let quarter_4 = CursorTerritory::Static(StaticPartitioning::FractionRange {
             start: 0.75,
             end: 1.0,
-        };
+        });
         match self {
             Self::EstLstSplit => {
                 vec![
@@ -414,19 +414,19 @@ impl MultiCursorLayout {
                 vec![
                     CursorConfig::forward(
                         0,
-                        CursorTerritory::Dynamic {
+                        CursorTerritory::Dynamic(DynamicFrontiering {
                             start: BoundaryRef::HorizonStart,
                             end: BoundaryRef::Cursor(CursorId(1)),
                             min_gap: None,
-                        },
+                        }),
                     ),
                     CursorConfig::backward(
                         1,
-                        CursorTerritory::Dynamic {
+                        CursorTerritory::Dynamic(DynamicFrontiering {
                             start: BoundaryRef::Cursor(CursorId(0)),
                             end: BoundaryRef::HorizonEnd,
                             min_gap: None,
-                        },
+                        }),
                     ),
                 ]
             }
@@ -434,11 +434,11 @@ impl MultiCursorLayout {
                 vec![
                     CursorConfig::forward(
                         0,
-                        CursorTerritory::Dynamic {
+                        CursorTerritory::Dynamic(DynamicFrontiering {
                             start: BoundaryRef::HorizonStart,
                             end: BoundaryRef::Cursor(CursorId(1)),
                             min_gap: None,
-                        },
+                        }),
                     ),
                     CursorConfig::forward(1, back),
                 ]
@@ -630,7 +630,7 @@ pub enum RunConfig {
     Hap(HapRunConfig),
     /// An LST (Latest Start Time) run.
     Lst(LstRunConfig),
-    /// A multi-cursor run (Plan A: fixed-territory cursors).
+    /// A multi-cursor run (Static Partitioning or Dynamic Frontiering).
     MultiCursor(MultiCursorRunConfig),
 }
 

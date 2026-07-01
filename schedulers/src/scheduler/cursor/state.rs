@@ -10,9 +10,9 @@
 //!
 //! A cursor's *active period* — the schedule-time region it may place into this
 //! round — is resolved in [`CursorRuntime::schedule_active_period`]. This is the
-//! **single** place territory bounds become a concrete region. Fixed (Plan A)
-//! and dynamic (Plan B) territories both flow through it; dynamic boundaries are
-//! resolved against the live positions of other cursors carried in a
+//! **single** place territory bounds become a concrete region. Static
+//! Partitioning and Dynamic Frontiering both flow through it; dynamic boundaries
+//! are resolved against the live positions of other cursors carried in a
 //! [`CursorWorld`]. The beam engine never special-cases territory shape.
 
 use super::config::{BoundarySide, CursorDirection, CursorId, CursorTerritory};

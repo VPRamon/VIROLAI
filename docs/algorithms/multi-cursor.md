@@ -22,7 +22,7 @@ Production multi-cursor scheduling always goes through:
 
 The same engine also powers EST and LST wrappers.
 
-## Fixed layouts (Plan A)
+## Fixed layouts (Static Partitioning)
 
 ### `est_lst_split`
 
@@ -47,7 +47,7 @@ Useful when you want two forward frontiers with a static split.
 
 Useful when you want one fixed forward starting point per quarter of the horizon.
 
-## Dynamic layouts (Plan B)
+## Dynamic layouts (Dynamic Frontiering)
 
 ### `dynamic_est_lst_meet`
 

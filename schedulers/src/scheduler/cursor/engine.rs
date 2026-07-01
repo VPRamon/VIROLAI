@@ -14,8 +14,8 @@
 //!
 //! Before every expansion the engine snapshots each cursor's live frontier into
 //! a [`CursorWorld`] and asks every cursor for its active region this round
-//! (see [`CursorRuntime::schedule_active_period`]). Fixed (Plan A) and dynamic
-//! (Plan B) territories share that one resolution path; the engine never
+//! (see [`CursorRuntime::schedule_active_period`]). Static Partitioning and
+//! Dynamic Frontiering share that one resolution path; the engine never
 //! special-cases territory shape or cursor count.
 
 use std::cmp::Ordering;

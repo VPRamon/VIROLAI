@@ -28,8 +28,8 @@ Each cursor proposes placements inside its own current **active region**.
 
 A cursor territory is the schedule-time region it is allowed to use.
 
-- **Fixed territory (Plan A)**: absolute or fractional `[start, end)` region
-- **Dynamic territory (Plan B)**: one or both boundaries follow another cursor's live position via `BoundaryRef::{HorizonStart, HorizonEnd, Cursor(id)}`
+- **Static Partitioning**: absolute or fractional `[start, end)` region
+- **Dynamic Frontiering**: one or both boundaries follow another cursor's live position via `BoundaryRef::{HorizonStart, HorizonEnd, Cursor(id)}`
 
 Dynamic territories may also enforce a `min_gap`.
 
@@ -104,9 +104,9 @@ Inside one cursor, candidate ordering is inherited from the EST ordering helpers
 6. higher soft priority
 7. lower task id
 
-## Plan A vs Plan B
+## Territory Models
 
-### Plan A: fixed territories
+### Static Partitioning
 
 The territory is static for the whole run.
 
@@ -118,7 +118,7 @@ Examples:
 
 These layouts split the horizon at fixed boundaries.
 
-### Plan B: dynamic territories
+### Dynamic Frontiering
 
 The territory boundary may depend on another cursor's live position. The engine:
 

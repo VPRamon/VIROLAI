@@ -35,11 +35,11 @@
     {
       "kind": "est",
       "axes": {
-        "endangered_thresholds": [0, 1, 2, 4, 8, 16],
+        "endangered_thresholds": [1, 2, 4, 8, 16],
         "k_beams": [1, 2, 4, 8, 16],
         "branching_factors": [1, 2, 4, 8, 16],
         "foms": [
-            "soft_constraint"
+          "soft_constraint"
         ]
       }
     },
@@ -50,7 +50,22 @@
         "k_beams": [1, 2, 4, 8, 16],
         "branching_factors": [1, 2, 4, 8, 16],
         "foms": [
-            "soft_constraint"
+          "soft_constraint"
+        ]
+      }
+    },
+    {
+      "kind": "multi_cursor",
+      "axes": {
+        "layouts": [
+          "est_lst_split",
+          "four_quarter_forward"
+        ],
+        "endangered_thresholds": [1, 2, 4, 8, 16],
+        "k_beams": [1, 2, 4, 8, 16],
+        "branching_factors": [1, 2, 4, 8, 16],
+        "foms": [
+          "soft_constraint"
         ]
       }
     }

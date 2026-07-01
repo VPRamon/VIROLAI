@@ -2,10 +2,10 @@
 //!
 //! This module generalises the EST/LST beam search into a configurable model
 //! with one or more *cursors*, each owning a territory of the scheduling
-//! horizon. It implements both **Plan A** (multiple simultaneous cursors with
-//! fixed territories) and **Plan B** (dynamic territories whose boundaries
-//! follow the live position of another cursor). Territory shape is resolved in
-//! one place — [`config::CursorTerritory`] plus
+//! horizon. It implements both **Static Partitioning** (multiple simultaneous
+//! cursors with fixed territories) and **Dynamic Frontiering** (dynamic
+//! territories whose boundaries follow the live position of another cursor).
+//! Territory shape is resolved in one place — [`config::CursorTerritory`] plus
 //! `CursorRuntime::schedule_active_period` — never in the beam-search engine.
 //!
 //! # Mental model
@@ -18,9 +18,10 @@
 //!   method to this engine.
 //!   The backward direction is handled inside the engine via
 //!   `CursorFrame::Mirrored`; there is no separate LST-specific mirroring pass.
-//! * **Plan A** runs several cursors with disjoint fixed territories that share
-//!   one global schedule; a task scheduled by one cursor becomes unavailable to
-//!   all others, and no placement may escape its cursor's territory.
+//! * **Static Partitioning** runs several cursors with disjoint fixed territories
+//!   that share one global schedule; a task scheduled by one cursor becomes
+//!   unavailable to all others, and no placement may escape its cursor's
+//!   territory.
 //!
 //! # Equivalence
 //!
@@ -36,10 +37,11 @@ mod config;
 mod engine;
 mod frame;
 mod state;
+mod territory;
 
 pub use config::{
     BoundaryRef, CursorAnchor, CursorConfig, CursorDirection, CursorId, CursorPolicy,
-    CursorTerritory, MultiCursorConfig,
+    CursorTerritory, MultiCursorConfig, StaticPartitioning, DynamicFrontiering,
 };
 
 use crate::error::ScheduleError;

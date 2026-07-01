@@ -320,7 +320,7 @@ Each `est` or `lst` cell is the cartesian product of all axes.
 
 The `multi_cursor` algorithm generalises EST/LST into several cursors that share
 one schedule, each owning a sub-region ("territory") of the horizon. Territories
-can be **fixed** (Plan A) or **dynamic** (Plan B), where a cursor boundary
+can be **Static Partitioning** (fixed) or **Dynamic Frontiering** (dynamic), where a cursor boundary
 follows another cursor's live position. See
 [Scheduling model](#scheduling-model) for the conceptual background.
 
@@ -363,7 +363,7 @@ The formal beam-search engine is the shared **cursor engine**
 - **EST** is a single forward cursor over the full horizon
 - **LST** is a single backward cursor over the full horizon
 - **Multi-cursor** runs several cursors over one shared schedule, with either
-  fixed territories (Plan A) or live cursor-relative boundaries (Plan B)
+  Static Partitioning (fixed territories) or Dynamic Frontiering (live cursor-relative boundaries)
 
 Backward behavior is handled inside the shared engine through
 `CursorFrame::Mirrored`, so there is no separate production LST fast path.
