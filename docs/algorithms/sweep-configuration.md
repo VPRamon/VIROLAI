@@ -1,13 +1,13 @@
-# Sweep Configuration
+# Sweep configuration
 
-Sweeps are **DB-only**. They write results into the SQLite registry and materialize schedule JSON later with `lab registry export`.
+VIROLAI sweeps are DB-only. They store run data in the SQLite registry and materialize schedule JSON files later through `lab registry export`.
 
 ## Workflow
 
-1. write an experiment spec
-2. run `phd sweep --spec ... --run-db ...` or `lab run --spec ... --run-db ...`
-3. inspect registry rows
-4. export selected schedules when needed
+1. Write an experiment specification.
+2. Run `virolai sweep --spec ... --run-db ...` or `lab run --spec ... --run-db ...`.
+3. Inspect the registry.
+4. Export selected schedules when needed.
 
 ## Top-level fields
 
@@ -15,27 +15,28 @@ Sweeps are **DB-only**. They write results into the SQLite registry and material
 {
   "name": "paper-sweep",
   "max_parallel": 8,
-  "output_dir": "out/legacy-only",
   "datasets": [],
   "algorithms": []
 }
 ```
 
 | Field | Meaning |
-|---|---|
+| --- | --- |
 | `name` | Human-readable experiment name |
-| `max_parallel` | Optional worker cap |
+| `max_parallel` | Optional worker limit |
 | `output_dir` | Legacy field; accepted but ignored by the DB-only runner |
-| `datasets` | Dataset entries |
-| `algorithms` | Per-algorithm sweep blocks |
+| `datasets` | Scheduling problem inputs |
+| `algorithms` | Algorithm sweep definitions |
 
 ## Dataset entries
 
+A dataset entry identifies any scheduling problem compatible with the common schema:
+
 ```json
 {
-  "id": "isdc_n",
+  "id": "sample",
   "path": "data/isdc_n.json",
-  "label": "SDC North",
+  "label": "Sample dataset",
   "horizon_override": {
     "start_mjd": 61771.0,
     "end_mjd": 61781.0
@@ -43,16 +44,18 @@ Sweeps are **DB-only**. They write results into the SQLite registry and material
 }
 ```
 
-## Corrected minimal example
+The scheduler does not attach domain-specific meaning to the dataset identifier or path.
+
+## Minimal example
 
 ```json
 {
   "name": "my-experiment",
   "datasets": [
     {
-      "id": "isdc_n",
+      "id": "sample",
       "path": "data/isdc_n.json",
-      "label": "SDC North"
+      "label": "Sample dataset"
     }
   ],
   "algorithms": [
@@ -68,11 +71,11 @@ Sweeps are **DB-only**. They write results into the SQLite registry and material
 }
 ```
 
-This produces **1 dataset × 2 × 2 × 2 EST cells = 8 registry rows** when all runs succeed.
+This example defines eight EST cells when all axis values are combined.
 
 ## Algorithm blocks
 
-### EST
+### EST and LST
 
 ```json
 {
@@ -86,21 +89,7 @@ This produces **1 dataset × 2 × 2 × 2 EST cells = 8 registry rows** when all 
 }
 ```
 
-### LST
-
-LST uses the same axes as EST:
-
-```json
-{
-  "kind": "lst",
-  "axes": {
-    "endangered_thresholds": [0, 1, 2],
-    "k_beams": [1, 4],
-    "branching_factors": [1, 2],
-    "foms": ["soft_constraint", "future_flexibility"]
-  }
-}
-```
+Use `"kind": "lst"` for the equivalent LST sweep.
 
 ### Multi-cursor
 
@@ -133,23 +122,14 @@ LST uses the same axes as EST:
 }
 ```
 
-## What sweeps produce
+## Outputs
 
-Sweeps create:
+Sweeps create one run row per executed configuration and one deduplicated schedule row per semantically unique schedule body. They do not write schedule files directly.
 
-- one **run row** per executed configuration
-- one **deduplicated schedule row** per semantically unique schedule body
-
-They do **not** directly create schedule files. Files appear only after:
+Export files explicitly:
 
 ```bash
-lab registry export --out-dir out/my-sweep --run-db .lab/runs.sqlite
+lab registry export \
+  --out-dir out/my-sweep \
+  --run-db .lab/runs.sqlite
 ```
-
-## Related docs
-
-- [README.md](README.md)
-- [est.md](est.md)
-- [lst.md](lst.md)
-- [multi-cursor.md](multi-cursor.md)
-- [hap.md](hap.md)

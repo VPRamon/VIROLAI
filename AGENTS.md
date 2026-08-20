@@ -2,30 +2,29 @@
 
 ## Project overview
 
-This repository is a Rust scheduling project.
+VIROLAI (Versatile Infrastructure for Resource Optimization Leveraging Artificial Intelligence) is a Rust resource scheduling and optimization project.
 
-- Workspace crates:
-  - `schedulers` library/binary in `schedulers/`
-  - `lab` in `lab/` for parameter sweeps, manifests, publishing, and the top-level CLI
-  - `webapp` in `webapp/` for the PhD-TSI backend integration
-- Binaries:
-  - `schedulers` in `schedulers/src/main.rs`
-  - `lab` in `lab/src/main.rs`
-  - `phd` in `lab/src/bin/phd/main.rs`
-  - `lab-ctao-adapter` in `lab/src/bin/lab_ctao_adapter/main.rs`
-  - `webapp` in `webapp/src/main.rs`
-- Webapp integration assets under `webapp/`:
-  - TSI submodule in `webapp/TSI/`
-  - Adapted Docker stack in `webapp/docker/`
-  - PhD adapter server sources in `webapp/src/`
-- `lab/`: lab crate sources plus runnable sweep specs such as `hap_sweep.json` and `paper_sweep.json`
-- `data/`: example ctao_n.json / Cctao_s.json datasets and convenience JSON files
-- `schemas/`: modular JSON schemas for scheduling problems, blocks, algorithms, statistics, and schedules
-- `siderust/`: local dependency crate (astronomy/time/coordinate utilities)
+- `schedulers/`: scheduling library and standalone scheduler binary
+- `lab/`: experiment runner, SQLite registry, dataset adapters, and workflow CLI
+- `webapp/`: result inspection and TSI integration
+- `schemas/`: JSON schemas for scheduling problems, blocks, algorithms, metrics, and schedules
+- `siderust/`: astronomy, time, and coordinate utilities used by current integrations
 
-## Minimum QA requirements (for any task)
+Main binaries:
 
-From the repository root, these must pass:
+- `schedulers` in `schedulers/src/main.rs`
+- `lab` in `lab/src/main.rs`
+- `virolai` in `lab/src/bin/virolai/main.rs`
+- `lab-ctao-adapter` in `lab/src/bin/lab_ctao_adapter/main.rs`
+- `webapp` in `webapp/src/main.rs`
+
+The scheduler consumes the generic `scheduling_problem.json` model. CTAO support is an optional dataset adapter and evaluation integration; do not introduce CTAO-specific assumptions into scheduler architecture or algorithm APIs.
+
+Historical source paths under `webapp/phd-extensions/` and `webapp/src/phd_tsi_adapter.rs` remain for compatibility. New user-facing branding should use VIROLAI.
+
+## Minimum QA requirements
+
+From the repository root, these commands must pass:
 
 ```bash
 cargo clippy --workspace --exclude tsi-rust --all-targets -- -D warnings
@@ -33,13 +32,13 @@ cargo fmt --all -- --check
 cargo test --workspace --exclude tsi-rust --all-features
 ```
 
-Equivalent:
+Equivalent command:
 
 ```bash
 ./scripts/qa-pipeline.sh
 ```
 
-If formatting fails, run:
+If formatting fails:
 
 ```bash
 cargo fmt --all

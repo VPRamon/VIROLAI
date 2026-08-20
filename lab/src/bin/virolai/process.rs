@@ -55,7 +55,7 @@ fn cargo_run_command(name: &str) -> Command {
         "schedulers" => {
             cmd.args(["-p", "schedulers", "--bin", "schedulers"]);
         }
-        "lab" | "phd" | "lab-ctao-adapter" => {
+        "lab" | "virolai" | "lab-ctao-adapter" => {
             cmd.args(["-p", "lab", "--bin", name]);
         }
         _ => {

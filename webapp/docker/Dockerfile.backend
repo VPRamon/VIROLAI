@@ -1,5 +1,5 @@
-# PhD-TSI backend Dockerfile
-# Builds the custom backend binary that adapts PhD scheduling_problem payloads to TSI.
+# VIROLAI-TSI backend Dockerfile
+# Builds the custom backend binary that adapts VIROLAI scheduling_problem payloads to TSI.
 #
 # Uses cargo-chef + BuildKit cache mounts to keep cold rebuilds fast and
 # avoid rebuilding the dependency graph when only application sources
@@ -55,7 +55,7 @@ COPY webapp/TSI/backend/Cargo.toml webapp/TSI/backend/Cargo.lock* webapp/TSI/bac
 COPY schedulers/src /app/schedulers/src
 COPY lab/src /app/lab/src
 COPY webapp/src /app/webapp/src
-COPY webapp/TSI/backend/src webapp/TSI/backend/src
+COPY webapp/TSI/backend/src /app/webapp/TSI/backend/src
 COPY schemas /app/schemas
 
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
@@ -77,13 +77,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY --from=builder /usr/local/bin/webapp /usr/local/bin/webapp
 
-RUN useradd -r -s /bin/false phd \
+RUN useradd -r -s /bin/false virolai \
     && mkdir -p /data/experiments /data/workspaces \
-    && chown phd:phd /data/experiments /data/workspaces
-USER phd
+    && chown virolai:virolai /data/experiments /data/workspaces
+USER virolai
 
-ENV PHD_EXPERIMENTS_DIR=/data/experiments \
-    PHD_WORKSPACES_DIR=/data/workspaces
+ENV VIROLAI_EXPERIMENTS_DIR=/data/experiments \
+    VIROLAI_WORKSPACES_DIR=/data/workspaces
 
 EXPOSE 8080
 

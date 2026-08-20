@@ -48,7 +48,7 @@ check_registry_dns() {
     echo "  3) Restart resolver and Docker: sudo systemctl restart systemd-resolved docker" >&2
     echo "  4) Verify: docker pull rust:latest" >&2
     echo >&2
-    echo "Set PHD_SKIP_DNS_PREFLIGHT=1 to bypass this check." >&2
+    echo "Set VIROLAI_SKIP_DNS_PREFLIGHT=1 to bypass this check." >&2
     exit 1
   fi
 }
@@ -65,7 +65,8 @@ if [[ "${1:-}" == "down" ]]; then
   exec docker compose -f webapp/docker/docker-compose.yml down "$@"
 fi
 
-if [[ "${PHD_SKIP_DNS_PREFLIGHT:-0}" != "1" ]]; then
+SKIP_DNS_PREFLIGHT="${VIROLAI_SKIP_DNS_PREFLIGHT:-${PHD_SKIP_DNS_PREFLIGHT:-0}}"
+if [[ "${SKIP_DNS_PREFLIGHT}" != "1" ]]; then
   check_registry_dns
 fi
 

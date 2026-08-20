@@ -1,4 +1,4 @@
-//! `phd sweep` wrapper around `lab run`.
+//! `virolai sweep` wrapper around `lab run`.
 
 use super::process::sibling_command;
 use std::fs;

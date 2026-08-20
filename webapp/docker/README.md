@@ -1,18 +1,16 @@
-# Adapted TSI Docker Setup
+# VIROLAI-TSI Docker setup
 
-This directory contains the Docker assets for running TSI with the PhD schema adapter backend.
+This directory contains Docker assets for running the TSI frontend with the VIROLAI integration backend and PostgreSQL.
 
 ## Files
 
-- docker-compose.yml: frontend + adapted backend + postgres stack
-- Dockerfile.backend: builds the webapp binary
-- Dockerfile.frontend: builds and serves the TSI frontend
-- Dockerfile.backend.dockerignore: backend-specific Docker ignore rules
-- Dockerfile.frontend.dockerignore: frontend-specific Docker ignore rules
-- ../setup.sh: helper script to start the stack
-- ../teardown.sh: helper script to stop/remove the stack
+- `docker-compose.yml`: frontend, backend, and PostgreSQL stack
+- `Dockerfile.backend`: builds the VIROLAI integration backend
+- `Dockerfile.frontend`: builds and serves the TSI frontend
+- `../setup.sh`: starts the stack
+- `../teardown.sh`: stops the stack
 
-## Quick Start
+## Start
 
 From the repository root:
 
@@ -20,76 +18,57 @@ From the repository root:
 ./webapp/setup.sh
 ```
 
-This runs:
-
-```bash
-docker compose -f webapp/docker/docker-compose.yml up --build
-```
-
-Services:
-
-- Frontend: http://localhost:3000
-- Backend health: http://localhost:8080/health
-
-## Useful Commands
-
 Detached mode:
 
 ```bash
 ./webapp/setup.sh -d
 ```
 
-Stop services:
+Default endpoints:
+
+- frontend: `http://localhost:3000`
+- backend health: `http://localhost:8080/health`
+
+## Stop
 
 ```bash
 ./webapp/teardown.sh
 ```
 
-Stop services and delete database data:
+Delete the database volume as well:
 
 ```bash
 ./webapp/teardown.sh --purge-db
 ```
 
-Follow logs:
+## Configuration
 
-```bash
-docker compose -f webapp/docker/docker-compose.yml logs -f
-```
+Common variables:
 
-## Optional Environment Variables
+- `BACKEND_PORT`, default `8080`
+- `FRONTEND_PORT`, default `3000`
+- `POSTGRES_PORT`, default `5432`
+- `POSTGRES_USER`, default `tsi`
+- `POSTGRES_PASSWORD`, default `tsi`
+- `POSTGRES_DB`, default `tsi`
+- `RUST_LOG`, default `info`
+- `VIROLAI_WORKSPACES_DIR`, default `./workspaces` outside Docker
 
-- BACKEND_PORT (default: 8080)
-- FRONTEND_PORT (default: 3000)
-- POSTGRES_PORT (default: 5432)
-- POSTGRES_USER (default: tsi)
-- POSTGRES_PASSWORD (default: tsi)
-- POSTGRES_DB (default: tsi)
-- RUST_LOG (default: info)
+The backend still accepts `PHD_WORKSPACES_DIR` as a compatibility fallback.
 
-## Database Persistence
+Set `VIROLAI_SKIP_DNS_PREFLIGHT=1` to bypass the registry DNS check in `webapp/setup.sh`. The former `PHD_SKIP_DNS_PREFLIGHT` name is also accepted as a fallback.
 
-PostgreSQL data is stored in the named Docker volume `postgres_data`, so data survives restarts and normal teardown (`./webapp/teardown.sh`).
+## Database persistence
 
-## Troubleshooting: Registry DNS Failures
+PostgreSQL data is stored in the `postgres_data` Docker volume, so normal teardown does not remove database contents.
 
-If `./webapp/setup.sh` fails before build starts with errors like `failed to resolve source metadata` or `lookup registry-1.docker.io ... no such host`, the host resolver cannot resolve container registry domains.
+## Registry DNS failures
 
-Quick checks:
+If setup fails before the build with a Docker registry name-resolution error, verify that the host can resolve Docker Hub and any configured registry mirror:
 
 ```bash
 getent hosts registry-1.docker.io
 docker pull rust:latest
 ```
 
-If these fail but `nslookup registry-1.docker.io 8.8.8.8` works, your local resolver path (systemd-resolved/network DNS policy) is the issue.
-
-Typical remediation:
-
-1. Ensure system DNS can resolve registry domains.
-2. Remove unreachable registry mirrors from `/etc/docker/daemon.json`.
-3. Restart services:
-
-```bash
-sudo systemctl restart systemd-resolved docker
-```
+If public DNS works but Docker does not, check the host resolver configuration and `/etc/docker/daemon.json`, then restart the resolver and Docker services.

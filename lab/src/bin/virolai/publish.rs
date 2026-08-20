@@ -1,4 +1,4 @@
-//! `phd publish` webapp upload workflow.
+//! `virolai publish` webapp upload workflow.
 
 use clap::Parser;
 use std::fs;
@@ -13,10 +13,10 @@ pub(crate) struct PublishArgs {
     /// Directory containing schedule JSON files (searched recursively).
     #[arg(long, value_name = "DIR")]
     dir: PathBuf,
-    /// Webapp base URL (default: http://localhost:8080 or $PHD_WEBAPP_URL).
+    /// Webapp base URL (default: http://localhost:8080 or $VIROLAI_WEBAPP_URL).
     #[arg(long, value_name = "URL")]
     url: Option<String>,
-    /// Optional bearer token (or set $PHD_WEBAPP_TOKEN).
+    /// Optional bearer token (or set $VIROLAI_WEBAPP_TOKEN).
     #[arg(long, value_name = "TOKEN")]
     token: Option<String>,
     /// Create the workspace if it doesn't exist.
@@ -34,12 +34,14 @@ pub(crate) fn publish(args: PublishArgs) -> Result<ExitCode, String> {
     let base = args
         .url
         .clone()
+        .or_else(|| std::env::var("VIROLAI_WEBAPP_URL").ok())
         .or_else(|| std::env::var("PHD_WEBAPP_URL").ok())
         .unwrap_or_else(|| "http://localhost:8080".to_string());
     let base = base.trim_end_matches('/').to_string();
     let token = args
         .token
         .clone()
+        .or_else(|| std::env::var("VIROLAI_WEBAPP_TOKEN").ok())
         .or_else(|| std::env::var("PHD_WEBAPP_TOKEN").ok());
 
     let agent = ureq::AgentBuilder::new()
@@ -69,7 +71,7 @@ pub(crate) fn publish(args: PublishArgs) -> Result<ExitCode, String> {
         ));
     }
     println!(
-        "phd publish: {} schedule(s) found under `{}`",
+        "virolai publish: {} schedule(s) found under `{}`",
         schedule_paths.len(),
         args.dir.display()
     );
@@ -105,7 +107,7 @@ pub(crate) fn publish(args: PublishArgs) -> Result<ExitCode, String> {
     }
 
     println!(
-        "phd publish: {} created, {} deduplicated, {} failed -> {} (workspace `{}`)",
+        "virolai publish: {} created, {} deduplicated, {} failed -> {} (workspace `{}`)",
         total_created, total_deduped, total_failed, base, args.workspace
     );
     Ok(if total_failed > 0 {

@@ -1,12 +1,12 @@
 # HAP
 
-HAP is the repository's **hybrid adaptive/metaheuristic planner**. Unlike EST/LST/multi-cursor, it is **not** implemented on top of the cursor engine.
+HAP is VIROLAI's adaptive/metaheuristic planner. It is separate from the cursor engine used by EST, LST, and multi-cursor scheduling.
 
-## Mental model
+## Model
 
-HAP builds schedules through planner rounds and CRU-based repair/search rather than through a cursor-frontier beam search.
+HAP builds schedules through planner rounds and CRU-based repair/search rather than cursor-frontier beam search.
 
-At the lab/sweep level, the resolved run configuration is:
+The resolved experiment configuration includes:
 
 - `iota_max`
 - `rho`
@@ -15,57 +15,21 @@ At the lab/sweep level, the resolved run configuration is:
 - `survivor_cap`
 - `seed`
 
-## Planner configuration
-
-### `iota_max`
-
-Maximum CRU task-scheduling iterations.
-
-### `rho`
-
-Stochastic candidate-window range used by the CRU-S selector.
-
-### `population_size`
-
-Number of candidate schedules explored per block at the planner level.
-
-### `survivor_mode`
-
-How schedules survive into the next planner round:
-
-- `greedy_one`
-- `elitist_top_k`
-- `pareto_front`
-
-### `survivor_cap`
-
-Cap applied to survivor modes that need one.
-
-### `seed`
-
-Deterministic master RNG seed. Reusing the same full HAP config, including `seed`, reproduces the same stochastic decisions.
-
-## How HAP differs from cursor-engine algorithms
-
-| Cursor-engine family | HAP |
-|---|---|
-| Beam search | Planner / CRU search |
-| One or more cursor frontiers | Population of candidate schedules |
-| EST ordering helpers | CRU selector + planner survivor logic |
-| `soft_constraint` / `future_flexibility` rank beam states | HAP uses its own planner fitness logic |
+`iota_max` limits CRU task-scheduling iterations. `rho` controls the stochastic candidate-window range. `population_size` controls how many candidate schedules are explored. `survivor_mode` determines which schedules continue to the next round, and `survivor_cap` limits the survivor set. `seed` provides deterministic stochastic runs.
 
 ## CLI example
 
-The raw single-run CLI exposes the simpler HAP knobs:
-
 ```bash
-cargo run -p lab --bin phd -- run data/isdc_n.json --algorithm hap \
-  --hap-num-crus 8 --hap-cru-iterations 128 --hap-rho 3 --hap-seed 42
+cargo run -p lab --bin virolai -- run \
+  data/isdc_n.json \
+  --algorithm hap \
+  --hap-num-crus 8 \
+  --hap-cru-iterations 128 \
+  --hap-rho 3 \
+  --hap-seed 42
 ```
 
-For sweeps, use the richer experiment-spec shape below.
-
-## Sweep-spec example
+## Sweep example
 
 ```json
 {
@@ -81,11 +45,13 @@ For sweeps, use the richer experiment-spec shape below.
 }
 ```
 
-## Invariants
+## Relation to cursor-engine algorithms
 
-HAP still produces ordinary validated schedules. Its search policy differs from the cursor engine, but schedule validity remains independent of ranking heuristics.
+| Cursor-engine family | HAP |
+| --- | --- |
+| Beam search | Planner and CRU search |
+| One or more cursor frontiers | Population of candidate schedules |
+| Cursor candidate ordering | CRU selector and survivor logic |
+| Beam-state FOMs | HAP planner fitness logic |
 
-## Limitations
-
-- The raw standalone CLI exposes a narrower HAP configuration surface than the sweep runner.
-- Multi-cursor docs do not apply to HAP because it does not use the cursor engine.
+HAP produces the same validated schedule model as the other algorithms. Its search policy is independent of schedule validity.

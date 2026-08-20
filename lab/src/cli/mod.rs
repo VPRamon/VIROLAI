@@ -1,8 +1,6 @@
 //! `lab` binary entry point.
 //!
-//! The binary has two top-level responsibilities:
-//! - `run`: execute a sweep specification into the SQLite registry.
-//! - `registry`: query, rank, inspect, and export registry rows.
+//! The binary executes experiment matrices and queries the SQLite registry.
 
 mod registry;
 mod run;
@@ -16,7 +14,7 @@ use std::process::ExitCode;
 #[command(
     name = "lab",
     version,
-    about = "Run parameter-sweep lab jobs against the PhD schedulers library"
+    about = "Run VIROLAI parameter sweeps and query the experiment registry"
 )]
 struct Cli {
     #[command(subcommand)]
