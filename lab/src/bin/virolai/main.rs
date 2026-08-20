@@ -1,4 +1,4 @@
-//! `phd` - unified user-facing CLI for the PhD scheduling workspace.
+//! `virolai` - user-facing CLI for VIROLAI workflows.
 
 mod process;
 mod publish;
@@ -9,13 +9,13 @@ use publish::PublishArgs;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-const PHD_VERSION: &str = env!("CARGO_PKG_VERSION");
+const VIROLAI_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[derive(Parser, Debug)]
 #[command(
-    name = "phd",
+    name = "virolai",
     version,
-    about = "PhD scheduling CLI - run simulations, publish to the webapp",
+    about = "VIROLAI resource scheduling CLI for experiments and result publishing",
     long_about = None,
 )]
 struct Cli {
@@ -60,7 +60,7 @@ enum Cmd {
         #[arg(long = "override")]
         override_existing: bool,
     },
-    /// Dataset utilities.
+    /// Dataset utilities and format adapters.
     Dataset {
         #[command(subcommand)]
         cmd: DatasetCmd,
@@ -71,7 +71,7 @@ enum Cmd {
 
 #[derive(Subcommand, Debug)]
 enum DatasetCmd {
-    /// CTA-O dataset adapter (delegates to `lab-ctao-adapter`).
+    /// Run the optional CTAO dataset adapter (delegates to `lab-ctao-adapter`).
     #[command(
         disable_help_flag = true,
         allow_hyphen_values = true,
@@ -85,7 +85,7 @@ fn main() -> ExitCode {
     match dispatch(cli.cmd) {
         Ok(code) => code,
         Err(e) => {
-            eprintln!("phd: error: {e}");
+            eprintln!("virolai: error: {e}");
             ExitCode::FAILURE
         }
     }
@@ -109,6 +109,6 @@ fn dispatch(cmd: Cmd) -> Result<ExitCode, String> {
 }
 
 #[allow(dead_code)]
-fn phd_version() -> &'static str {
-    PHD_VERSION
+fn virolai_version() -> &'static str {
+    VIROLAI_VERSION
 }

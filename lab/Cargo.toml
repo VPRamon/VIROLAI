@@ -2,7 +2,7 @@
 name = "lab"
 version = "0.1.0"
 edition = "2024"
-description = "Experiment runner and PhD scheduling lab CLI for parameter sweeps, manifests, publishing, and dataset adapters."
+description = "VIROLAI experiment runner for resource scheduling, parameter sweeps, manifests, publishing, and dataset adapters."
 
 [lib]
 name = "lab"
@@ -13,8 +13,8 @@ name = "lab"
 path = "src/main.rs"
 
 [[bin]]
-name = "phd"
-path = "src/bin/phd/main.rs"
+name = "virolai"
+path = "src/bin/virolai/main.rs"
 
 [[bin]]
 name = "lab-ctao-adapter"

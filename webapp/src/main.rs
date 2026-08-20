@@ -17,7 +17,7 @@ use phd_tsi_adapter::phd_schedule_import_adapter;
 
 /// Validator for EST algorithm traces.
 ///
-/// Lives in the PhD integrator (not in TSI) so the core remains
+/// Lives in the VIROLAI integrator (not in TSI) so the core remains
 /// algorithm-agnostic. Rejects trace summaries that do not declare the
 /// EST-specific knobs the analytics UI relies on.
 struct EstTraceValidator;
@@ -48,7 +48,7 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     info!(
-        "Starting PhD-TSI server (extension contract v{})",
+        "Starting VIROLAI-TSI server (extension contract v{})",
         EXTENSION_CONTRACT_VERSION
     );
 

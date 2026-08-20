@@ -1,18 +1,16 @@
 # EST
 
-EST is **single-forward cursor scheduling over the full horizon**.
+EST is single-forward cursor scheduling over the full horizon.
 
-## Mental model
+## Model
 
-There is one cursor starting at the horizon start and moving forward. At each step it tries the earliest feasible placements first, with endangered-task protection and beam pruning.
+One cursor starts at the horizon start and moves forward. At each step, it evaluates earliest feasible placements with endangered-task protection and beam pruning.
 
-## Implementation path
+Production EST follows this path:
 
-Production EST is implemented as:
+`EstScheduler` -> `MultiCursorConfig::single_forward(...)` -> cursor engine
 
-`EstScheduler` → `MultiCursorConfig::single_forward(...)` → cursor engine
-
-`EstScheduler` remains the public API, but the beam-search execution lives in the shared cursor engine.
+`EstScheduler` remains the public API. Beam-search execution is implemented by the shared cursor engine.
 
 ## Candidate ordering
 
@@ -26,41 +24,31 @@ EST ordering is deterministic:
 6. higher soft priority
 7. lower task id
 
-The endangered-promotion rule delays a non-endangered task when it would block an endangered task whose EST falls inside its occupied interval.
+The endangered rule delays a non-endangered task when placing it would block an endangered task whose EST falls inside the occupied interval.
 
-## Configuration knobs
+## Configuration
 
-### `endangered_threshold`
+`endangered_threshold` uses residual flexibility. A value of `0` disables endangered protection.
 
-This threshold is based on **residual flexibility**, not on a count of scheduling blocks.
+`k_beams` controls the number of partial schedules retained after each round.
 
-- `0` disables endangered protection
-- a task is endangered when `flexibility < endangered_threshold`
+`branching_factor` controls the number of candidate actions explored from each beam state.
 
-### `k_beams`
-
-Beam width: how many partial schedules survive each round.
-
-### `branching_factor`
-
-How many candidate actions are explored from one beam state in a round.
-
-### `fom`
-
-Beam ranking function. Current user-facing options are:
-
-- `soft_constraint`
-- `future_flexibility`
+`fom` selects the beam ranking function. Current options include `soft_constraint` and `future_flexibility`.
 
 See [figures-of-merit.md](figures-of-merit.md).
 
 ## CLI example
 
 ```bash
-cargo run -p lab --bin phd -- run data/isdc_n.json --algorithm est --est-k 4 --est-b 2
+cargo run -p lab --bin virolai -- run \
+  data/isdc_n.json \
+  --algorithm est \
+  --est-k 4 \
+  --est-b 2
 ```
 
-## Sweep-spec example
+## Sweep example
 
 ```json
 {
@@ -78,20 +66,9 @@ cargo run -p lab --bin phd -- run data/isdc_n.json --algorithm est --est-k 4 --e
 
 EST inherits the cursor-engine invariants:
 
-- no duplicate task
-- no overlap
-- placements stay in the active region
+- a task is placed at most once
+- placements do not overlap
+- placements stay inside the active region
 - scheduling-block dependencies are enforced
 
-## Limitations
-
-- EST is single-frontier by design; use `multi_cursor` when you want several coordinated frontiers.
-- The raw standalone CLI exposes EST directly, but not arbitrary multi-cursor layouts.
-
-## Relevant tests
-
-- `est_wrapper_matches_multicursor_single_forward_basic`
-- `est_wrapper_matches_multicursor_single_forward_endangered`
-- `est_wrapper_matches_multicursor_single_forward_beam`
-- `est_wrapper_matches_multicursor_single_forward_soft_constraints`
-- `single_forward_constructor_matches_est`
+Use `multi_cursor` when several coordinated scheduling frontiers are required.

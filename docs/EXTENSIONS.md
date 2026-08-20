@@ -1,31 +1,14 @@
-# TSI Extension Guide
+# TSI extension guide
 
-TSI (Telescope Scheduling Intelligence) is intentionally **algorithm
-agnostic**: nothing in the `tsi-rust` backend or the TSI React frontend
-should know about EST, HAP, or any other scheduling algorithm. Algorithm
-specific code lives in *integrator packs* such as `webapp/phd-extensions/`
-(frontend) and `webapp/src/phd_tsi_*.rs` (backend), wired together
-through the public extension contracts described below.
+TSI is intentionally algorithm-agnostic. Algorithm-specific integration code lives outside the core TSI backend and frontend and is connected through public extension contracts.
 
-The PhD/EST integrator is the worked example used throughout this
-document.
+VIROLAI's in-tree integration is an example of that boundary. Historical source paths still use names such as `webapp/phd-extensions/` and `webapp/src/phd_tsi_adapter.rs`; new user-facing documentation refers to the integration as VIROLAI-TSI.
 
 ## Contract versioning
 
-Both contracts expose a numeric `EXTENSION_CONTRACT_VERSION` constant.
-Integrators **must** assert against it at startup so a mismatched build
-fails loudly:
+Both backend and frontend contracts expose `EXTENSION_CONTRACT_VERSION`. Integrators should verify the expected version at startup so incompatible builds fail early.
 
-* Backend: `tsi_rust::http::EXTENSION_CONTRACT_VERSION` (currently `1`).
-* Frontend: `EXTENSION_CONTRACT_VERSION` exported from
-  `tsi-extensions-pack` (currently `1`).
-
-Bumping either constant signals a breaking change to the surface and
-every integrator must review the diff before upgrading.
-
-## Backend extension surface
-
-The backend exposes its contract from `tsi_rust::http::extensions`:
+Backend:
 
 ```rust
 use tsi_rust::http::{
@@ -34,76 +17,31 @@ use tsi_rust::http::{
 };
 ```
 
-Integrators may contribute:
+Frontend extensions use the corresponding contract exported by `tsi-extensions-pack`.
 
-1. **Extra axum routes** — mounted under `/v1` alongside the built-in
-   handlers. Path collisions are the integrator's responsibility; pick a
-   prefix you own (e.g. `/v1/est/...`).
-2. **Algorithm trace validators** — a `Send + Sync + 'static` struct
-   implementing `AlgorithmTraceValidator`. The trait is keyed by an
-   algorithm identifier (the `algorithm` field embedded in trace
-   summaries). When a schedule is uploaded with an
-   `algorithm_trace_jsonl` payload the registered validator for that
-   algorithm receives the parsed summary and may reject the upload by
-   returning `Err(...)`. Uploads tagged with an algorithm that has no
-   registered validator are accepted unchanged.
+## Backend extension surface
 
-Extensions **may not** mutate the core repository contract or intercept
-built-in handlers. If you need that level of integration, fork TSI.
+Integrators may provide additional axum routes and algorithm trace validators. Extensions do not mutate the core repository contract or intercept built-in handlers.
 
-The PhD integrator (see `webapp/src/webapp.rs`) demonstrates
-the full setup: build a `BackendExtensions` with
-`BackendExtensions::builder().with_trace_validator(EstTraceValidator).build()`
-and pass it to `create_router_with_extensions(state, extensions)`.
+The VIROLAI backend uses `BackendExtensions` to attach workspace routes and EST trace validation while leaving the TSI core algorithm-agnostic.
 
 ## Frontend extension surface
 
-The frontend contract is re-exported from
-`webapp/TSI/frontend/src/extensions.ts`. Vite resolves
-`tsi-extensions-pack` through the `VITE_TSI_EXTENSIONS_PATH` env var so
-external packs do not need to edit `vite.config.ts`:
+The TSI frontend resolves an external extension pack through `VITE_TSI_EXTENSIONS_PATH`:
 
 ```bash
 VITE_TSI_EXTENSIONS_PATH=../../my-pack npm run build
 ```
 
-The default value (`../../phd-extensions`) reproduces the behaviour the
-in-tree PhD/EST extension expects.
+A pack exports the contract version and a `TsiExtensions` object containing optional routes, navigation items, and algorithm-specific panels.
 
-A pack must export the `EXTENSION_CONTRACT_VERSION` constant matching
-the value baked into the TSI build it targets, plus a default-export
-object containing:
+The current in-tree pack remains under `webapp/phd-extensions/` for source compatibility. Its directory name is not part of the VIROLAI public CLI or scheduler model.
 
-* `routes` — extra React Router routes injected into the app shell.
-* `navItems` — sidebar navigation entries for the routes above.
-* `algorithms` — algorithm-specific tab descriptors used by the
-  schedule-analysis page (lazy-loaded via `React.lazy`).
+## Integration rules
 
-The PhD pack at `webapp/phd-extensions/` ships the EST
-algorithm-comparator, including the EST-specific trace iteration types,
-SchedDropZone integrations, and run-matrix UI. None of that code lives
-inside `tsi-rust` or the TSI frontend tree.
+- Keep validators inexpensive because they run on upload paths.
+- Keep algorithm-specific code outside TSI core.
+- Lazy-load large frontend panels.
+- Use extension routes for additive integration rather than rewriting built-in TSI behavior.
 
-## Performance notes for integrators
-
-* Keep validators cheap — they run on the upload hot path. The PhD/EST
-  validator only checks for required summary keys.
-* Backend integrators should call `tsi_rust::configure_rayon_thread_pool()`
-  in `main()` to cap rayon's worker pool to `num_cpus - 1` and avoid
-  oversubscribing alongside the tokio runtime and Diesel connection
-  pool.
-* Frontend packs should lazy-load heavy panels (Plotly, large data
-  grids) so the core TSI bundle stays small.
-
-## When NOT to use extensions
-
-Extensions are for *adding* algorithm-specific surface area. They are
-**not** the right tool when you want to:
-
-* change the schedule data model or repository contract,
-* intercept or rewrite built-in TSI responses,
-* ship core schema migrations.
-
-For any of the above you should fork TSI and submit a PR upstream. The
-extension contract is deliberately narrow so TSI can keep evolving
-without breaking integrator packs.
+Fork or modify TSI itself only when a change requires a different core data model, repository contract, response behavior, or schema migration.

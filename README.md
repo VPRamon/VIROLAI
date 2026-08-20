@@ -1,226 +1,171 @@
-<div align="center">
+# VIROLAI
 
-# PhD Scheduler
+**Versatile Infrastructure for Resource Optimization Leveraging Artificial Intelligence**
 
-Rust tooling for astronomical observation scheduling — CTAO dataset adaptation,
-cursor-engine scheduling (`est`, `lst`, and `multi_cursor`), HAP planning,
-DB-backed parameter sweeps, and an adapted TSI web application for interactive
-result inspection.
+VIROLAI is a Rust infrastructure for resource scheduling and optimization. It provides scheduling algorithms, experiment sweeps, a result registry, dataset adapters, and a web interface for comparing runs.
 
-</div>
+The scheduling engine consumes a generic `scheduling_problem.json` model. Astronomy datasets, including CTAO datasets, are bundled integrations and evaluation cases; they are not assumptions of the scheduler architecture.
 
-[Quick Start](#quick-start) | [The `phd` CLI](#the-phd-cli) | [Algorithms](docs/algorithms/README.md) | [Sweep Workflow](#sweep-workflow-end-to-end) | [Web App](#web-app) | [Data Model](#data-model) | [QA](#qa)
+## Quick start
 
----
-
-## Quick Start
+Build the workspace:
 
 ```bash
-# 1. Build everything
 cargo build --release
+```
 
-# 2. Run a sweep experiment (multiple datasets × algorithm configurations).
-#    Results are stored in a SQLite registry (DB-only workflow).
-cargo run -p lab --bin phd --release -- sweep \
+Run an experiment sweep and store the results in SQLite:
+
+```bash
+cargo run -p lab --bin virolai --release -- sweep \
   --spec lab/est_sweep.json \
   --run-db .lab/runs.sqlite
+```
 
-# 3. Export the schedules you want from the registry
+Inspect or export selected runs:
+
+```bash
+cargo run -p lab --bin lab --release -- registry list \
+  --run-db .lab/runs.sqlite
+
 cargo run -p lab --bin lab --release -- registry export \
   --out-dir out/my-sweep \
   --run-db .lab/runs.sqlite
-
-# 4. Start the web app
-./webapp/setup.sh -d          # Docker (frontend + backend + postgres)
-
-# 5. Publish the exported schedules to a workspace
-cargo run -p lab --bin phd --release -- publish \
-  --workspace my-sweep --create-workspace --dir out/my-sweep
 ```
 
----
+Start the web application:
 
-## Prerequisites
-
-- **Rust toolchain** (`cargo`) — see [rustup.rs](https://rustup.rs)
-- **Docker with Compose** — required for the full web stack
-- **Dataset files** under `data/` — the repository ships example files; see
-  [Datasets](#datasets)
-
----
-
-## Repository Layout
-
-| Path | Contents |
-|---|---|
-| `schedulers/src/` | Scheduler library and `schedulers` binary |
-| `lab/src/bin/phd/` | The `phd` unified CLI |
-| `lab/src/bin/lab_ctao_adapter/` | CTAO -> `scheduling_problem.json` adapter |
-| `schemas/` | Modular JSON schemas (problem, block, algorithm, metrics, schedule, manifest) |
-| `data/` | Example datasets (`isdc_n.json`, `lst_2024.json`, …) |
-| `lab/` | Ready-to-run sweep specs |
-| `webapp/` | TSI integration: Docker stack and PhD adapter server |
-| `siderust/` | Local astronomy / time / coordinate utilities crate |
-
----
-
-## The `phd` CLI
-
-`phd` is the single entry point for all research workflows.
-
+```bash
+./webapp/setup.sh -d
 ```
-cargo run -p lab --bin phd -- <COMMAND> [OPTIONS]
+
+Publish exported schedules to a workspace:
+
+```bash
+cargo run -p lab --bin virolai --release -- publish \
+  --workspace my-sweep \
+  --create-workspace \
+  --dir out/my-sweep
+```
+
+## Repository layout
+
+| Path | Purpose |
+| --- | --- |
+| `schedulers/` | Scheduling library and standalone scheduler binary |
+| `lab/` | Experiment runner, registry, dataset adapters, and VIROLAI CLI |
+| `schemas/` | JSON schemas for problems, schedules, metrics, and manifests |
+| `docs/algorithms/` | Algorithm reference |
+| `webapp/` | Result inspection and TSI integration |
+| `scripts/` | QA and operational helpers |
+| `siderust/` | Astronomy, time, and coordinate utilities used by current integrations |
+
+## CLI
+
+`virolai` is the user-facing workflow CLI:
+
+```text
+virolai <COMMAND> [OPTIONS]
 ```
 
 | Command | Purpose |
-|---|---|
-| `sweep` | Run a parameter sweep and store results in the SQLite registry (primary workflow) |
-| `matrix` | Lower-level alias — delegates directly to the `lab` binary |
-| `run` | Run a single scheduling problem (delegates to `schedulers`) |
-| `dataset adapt` | Convert a CTAO dataset directory into `scheduling_problem.json` |
-| `publish` | Upload schedule JSONs from a directory to a webapp workspace |
+| --- | --- |
+| `run` | Run one scheduling problem through the `schedulers` binary |
+| `sweep` | Execute an experiment matrix and store results in SQLite |
+| `matrix` | Forward lower-level matrix commands to `lab` |
+| `dataset adapt` | Run an available external-dataset adapter |
+| `publish` | Upload exported schedules to a webapp workspace |
 
-Registry inspection and schedule export are provided by the `lab` binary under
-`lab registry …` (see [The run registry](#the-run-registry)).
+Registry queries and exports remain under `lab registry`.
 
----
-
-### `phd sweep`
-
-```
-phd sweep --spec <FILE> [--run-db <PATH>] [--parallel <N>] [--override]
-```
-
-Runs the full experiment matrix described in `<FILE>` and stores every
-successful run in a SQLite registry (default `.lab/runs.sqlite`). This is a
-**DB-only** workflow: no schedule files, manifests, or run directories are
-written. Schedules are materialised on demand with
-[`lab registry export`](#exporting-schedules).
-
-> Note: `phd sweep` invokes the sibling `lab` binary from
-> `target/debug/lab` or `target/release/lab`. If you encounter
-> `failed to spawn lab: No such file or directory`, build it first with:
->
-> ```bash
-> cargo build -p lab --bin lab
-> ```
-
-| Flag | Required | Description |
-|---|---|---|
-| `--spec <FILE>` | ✅ | Path to the experiment spec JSON (see [Spec Format](#spec-format)) |
-| `--run-db <PATH>` | — | Registry SQLite path (default `.lab/runs.sqlite`) |
-| `--parallel <N>` | — | Override worker threads (defaults to the spec's `max_parallel` or the CPU count) |
-| `--override` | — | Re-execute cells already present in the registry and refresh their rows |
-
-Each stored run keeps its own identity, configuration, metrics, and schedule
-metadata. Semantically identical schedules produced by different configurations
-are **deduplicated**: the invariant schedule body is stored once, while each run
-keeps its own metadata and metrics. See [The run registry](#the-run-registry).
-
----
-
-### The run registry
-
-The registry is a SQLite database (`.lab/runs.sqlite` by default) with two
-tables:
-
-- `runs` — one row per unique run identity. Holds `identity_json`,
-  `config_json`, `metrics_json`, the run-specific `metadata_json`
-  (`schedule_metadata` body), `source_cell_id`, indexed metric columns, and a
-  `schedule_hash` foreign key.
-- `schedules` — one row per **semantically unique** schedule, keyed by
-  `schedule_hash` (a content hash of the placements only). Stores just the
-  *invariant* schedule body (the problem annotated with placements). Run-specific
-  `schedule_metadata` / `schedule_metrics` are **not** stored here, so multiple
-  runs can safely share a single schedule body.
-
-`lab registry` exposes read-only queries over this database:
-
-```
-lab registry list     [--dataset <ID>] [--algorithm <NAME>] [--sort <metric:dir>] [--format json|table]
-lab registry inspect  --run <KEY|PREFIX>
-lab registry best     --dataset <ID> [--algorithm <NAME>]
-lab registry export   …            # see below
-lab registry doctor                # referential-integrity check
-```
-
-`lab registry doctor` reports runs with a `NULL` schedule hash, runs pointing to
-a missing schedule, orphan schedules, and legacy rows lacking stored metadata; it
-exits non-zero when a real inconsistency is found.
-
-#### Exporting schedules
-
-`registry export` reconstructs a complete, run-specific schedule artifact by
-recombining the shared invariant body with that run's own `schedule_metadata`
-and `schedule_metrics`:
+### Single run
 
 ```bash
-# Single run -> single file
-lab registry export --run <KEY|PREFIX> --out out/best.json [--force] [--run-db <PATH>]
-
-# Filtered set -> directory (one file per run)
-lab registry export --out-dir out/my-sweep \
-  [--dataset <ID>] [--algorithm <NAME>] [--sort <metric:dir>] [--limit <N>] \
-  [--force] [--run-db <PATH>]
+cargo run -p lab --bin virolai -- run \
+  data/isdc_n.json \
+  --algorithm est \
+  --est-k 4 \
+  --est-b 2
 ```
 
-Because the body is deduplicated but metadata/metrics live on the run row, two
-runs that share a schedule still export their **own** metadata and metrics — no
-export ever inherits them from another run.
-
-> Migrating an old database: registries created before schedule deduplication
-> store run-specific fields inside the shared body and lack `metadata_json`.
-> Upgrade such a file once with the standalone tool
-> (`cargo run -p lab --bin lab-migrate-schedule-dedup -- .lab/runs.sqlite`), or
-> simply re-run the sweep with `--override`.
-
-### `phd dataset adapt`
-
-```
-phd dataset adapt <dataset_dir> [output_json]
-```
-
-Converts a CTAO `*_internalSDC.json` directory into `scheduling_problem.json`.
-
-Shorthand names `CTA-N` and `CTA-S` are resolved automatically under `data/`:
+### Sweep
 
 ```bash
-cargo run -p lab --bin phd -- dataset adapt CTA-N
-cargo run -p lab --bin phd -- dataset adapt CTA-S
-cargo run -p lab --bin phd -- dataset adapt data/my_site data/my_site/scheduling_problem.json
+virolai sweep --spec <FILE> [--run-db <PATH>] [--parallel <N>] [--override]
 ```
 
----
+Sweeps are DB-only. Successful runs are written to the SQLite registry, and schedule files are created only when requested through `lab registry export`.
 
-### `phd run` (single run)
+The registry separates run-specific metadata from deduplicated schedule bodies. Runs that produce the same placement set can share one schedule body while keeping independent configuration and metrics.
 
-Delegates directly to the `schedulers` binary. Useful for one-off experiments.
+## Scheduling model
 
-```bash
-cargo run -p lab --bin phd -- run data/isdc_n.json --algorithm est --est-k 4 --est-b 2
+The scheduler operates on a problem description containing resources, a scheduling horizon, scheduling blocks, tasks, dependencies, hard constraints, and soft constraints. The engine does not require CTAO-specific identifiers or dataset formats.
+
+A simplified problem has this shape:
+
+```json
+{
+  "resources": [
+    {
+      "id": 0,
+      "name": "resource-0",
+      "location": {
+        "longitude_deg": -17.89,
+        "latitude_deg": 28.76,
+        "height_m": 2396.0
+      },
+      "hard_constraints": {}
+    }
+  ],
+  "schedule_time_window": {
+    "start_mjd_utc": 61710.0,
+    "end_mjd_utc": 62076.0
+  },
+  "scheduling_blocks": [
+    {
+      "id": 1,
+      "tasks": [
+        {
+          "id": 1,
+          "name": "task-1",
+          "requested_duration_sec": 1200.0,
+          "hard_constraints": {},
+          "soft_constraints": { "priority": 5.0 }
+        }
+      ],
+      "dependencies": []
+    }
+  ]
+}
 ```
 
-See `phd run --help` or the [scheduler options](#scheduler-options) section for full
-flag details.
+The complete schema is in [`schemas/scheduling_problem/scheduling_problem.schema.json`](schemas/scheduling_problem/scheduling_problem.schema.json).
 
----
+## Algorithms
 
-## Spec Format
+VIROLAI currently includes two scheduler families:
 
-A sweep spec is a JSON file that defines the experiment: which datasets to use,
-which algorithms and parameter combinations to run, and which registry rows to
-create.
+- Cursor-engine algorithms: EST, LST, and multi-cursor layouts.
+- HAP: a separate adaptive/metaheuristic planner.
 
-### Minimal spec
+EST and LST are single-cursor configurations of the shared cursor engine. Multi-cursor experiments run several coordinated cursors over one schedule. HAP has its own planner pipeline.
+
+See [`docs/algorithms/README.md`](docs/algorithms/README.md) for the algorithm reference and [`docs/algorithms/sweep-configuration.md`](docs/algorithms/sweep-configuration.md) for experiment configuration.
+
+## Experiment specifications
+
+A sweep specification describes datasets, algorithms, and parameter axes. For example:
 
 ```json
 {
   "name": "my-experiment",
+  "max_parallel": 8,
   "datasets": [
     {
-      "id": "isdc_n",
+      "id": "sample",
       "path": "data/isdc_n.json",
-      "label": "SDC North"
+      "label": "Sample dataset"
     }
   ],
   "algorithms": [
@@ -236,484 +181,53 @@ create.
 }
 ```
 
-This produces `1 dataset × (2 × 2 × 2 EST cells) = 8` registry rows.
+The Cartesian product of the configured axes defines the experiment cells. Each successful cell is recorded in the registry with its configuration, metrics, and schedule reference.
 
-### Full spec reference
+## CTAO integration
 
-```json
-{
-  "name":         "Experiment display name",
-  "output_dir":   "out/my-experiment",
-  "max_parallel": 8,
+CTAO support is an optional dataset integration. The scheduler itself works with the generic scheduling problem schema described above.
 
-  "datasets": [
-    {
-      "id":    "isdc_n",
-      "path":  "data/isdc_n.json",
-      "label": "SDC North",
-      "horizon_override": {
-        "start_mjd": 61771.0,
-        "end_mjd":   61781.0
-      }
-    }
-  ],
-
-  "algorithms": [
-    {
-      "kind": "est",
-      "axes": {
-        "endangered_thresholds": [0, 1, 2, 4, 8],
-        "k_beams":               [1, 2, 4, 8],
-        "branching_factors":     [1, 2, 4]
-      }
-    },
-    {
-      "kind": "hap",
-      "axes": {
-        "iota_max_values":  [64, 128],
-        "rho_values":       [3, 5],
-        "population_sizes": [4, 8],
-        "survivor_modes":   ["elitist_top_k"],
-        "survivor_caps":    [4],
-        "seeds":            [0, 1, 2]
-      }
-    }
-  ]
-}
-```
-
-| Field | Type | Default | Description |
-|---|---|---|---|
-| `name` | string | — | Human-readable name (used in manifest `producer` metadata) |
-| `output_dir` | string | — | Legacy field retained for older specs; ignored by the DB-only `phd sweep` workflow |
-| `max_parallel` | int | CPU count | Number of parallel worker threads |
-| `datasets[].id` | string | — | Short identifier used in registry cell IDs |
-| `datasets[].path` | string | — | Path to `scheduling_problem.json` |
-| `datasets[].label` | string | `id` | Human-readable label embedded in manifests |
-| `datasets[].horizon_override` | object | null | Override the problem's scheduling window (MJD UTC) |
-
-For the full reference, including `lst`, `multi_cursor`, HAP, and the DB-only
-workflow, see [docs/algorithms/sweep-configuration.md](docs/algorithms/sweep-configuration.md).
-
-#### EST/LST algorithm axes
-
-Each `est` or `lst` cell is the cartesian product of all axes.
-
-| Axis | Key | Description |
-|---|---|---|
-| Endangered threshold | `endangered_thresholds` | Residual-flexibility threshold below which a task is considered "endangered" (`--est-e`) |
-| K-beams | `k_beams` | Beam width — number of partial schedules kept at each step (`--est-k`) |
-| Branching factor | `branching_factors` | Candidates considered per block per beam (`--est-b`) |
-
-#### HAP algorithm axes
-
-| Axis | Key | Description |
-|---|---|---|
-| Iota max | `iota_max_values` | Max repair iterations per CRU run (`--hap-cru-iterations`) |
-| Rho | `rho_values` | Stochastic window range (`--hap-rho`) |
-| Population size | `population_sizes` | Number of CRU attempts and survivor cap (`--hap-num-crus`) |
-| Survivor mode | `survivor_modes` | `"elitist_top_k"` or `"pareto_front"` |
-| Survivor cap | `survivor_caps` | Hard cap on the survivor pool between rounds |
-| Seeds | `seeds` | RNG seeds for reproducible stochastic runs |
-
-#### Multi-cursor algorithm axes
-
-The `multi_cursor` algorithm generalises EST/LST into several cursors that share
-one schedule, each owning a sub-region ("territory") of the horizon. Territories
-can be **fixed** (Plan A) or **dynamic** (Plan B), where a cursor boundary
-follows another cursor's live position. See
-[Scheduling model](#scheduling-model) for the conceptual background.
-
-```json
-{
-  "kind": "multi_cursor",
-  "axes": {
-    "layouts":               ["est_lst_split", "four_quarter_forward"],
-    "endangered_thresholds": [1],
-    "k_beams":               [4],
-    "branching_factors":     [2]
-  }
-}
-```
-
-| Axis | Key | Description |
-|---|---|---|
-| Layouts | `layouts` | Cursor arrangement: fixed `"est_lst_split"` / `"start_mid_forward"` / `"four_quarter_forward"`, or dynamic `"dynamic_est_lst_meet"` / `"dynamic_start_mid_forward"` |
-| Endangered threshold | `endangered_thresholds` | Same semantics as EST |
-| K-beams | `k_beams` | Beam width |
-| Branching factor | `branching_factors` | Candidates explored per beam per round |
-| FOMs | `foms` | Figure-of-merit variants (default `soft_constraint`) |
-
-Each multi-cursor cell is the cartesian product of all axes. The cell slug
-encodes the layout and distinguishes fixed from dynamic layouts, e.g.
-`est_lst_split-e1-k4-b2` vs `dynamic_est_lst_meet-e1-k4-b2`.
-
-> Plain single-cursor EST and LST keep their dedicated `est` / `lst` algorithm
-> kinds; `multi_cursor` is only for genuinely multi-cursor layouts.
-> `future_flexibility` is now multi-cursor-aware, but like every FOM it only
-> affects beam ranking, never schedule validity.
-
----
-
-## Scheduling model
-
-The formal beam-search engine is the shared **cursor engine**
-(`schedulers::scheduler::cursor`):
-
-- **EST** is a single forward cursor over the full horizon
-- **LST** is a single backward cursor over the full horizon
-- **Multi-cursor** runs several cursors over one shared schedule, with either
-  fixed territories (Plan A) or live cursor-relative boundaries (Plan B)
-
-Backward behavior is handled inside the shared engine through
-`CursorFrame::Mirrored`, so there is no separate production LST fast path.
-
-Use the algorithm reference for the full model:
-
-- [Algorithm overview](docs/algorithms/README.md)
-- [Cursor engine](docs/algorithms/cursor-engine.md)
-- [EST](docs/algorithms/est.md)
-- [LST](docs/algorithms/lst.md)
-- [Multi-cursor](docs/algorithms/multi-cursor.md)
-- [HAP](docs/algorithms/hap.md)
-- [Figures of merit](docs/algorithms/figures-of-merit.md)
-
----
-
-## Scheduler Options
-
-For one-off runs via `phd run` or the raw `schedulers` binary:
-
-```
-schedulers <input_json> [horizon_start_mjd horizon_end_mjd]
-          [--algorithm est|lst|hap]
-          [--output <path>]
-          [EST options]
-          [HAP options]
-```
-
-#### EST options
-
-| Flag | Default | Description |
-|---|---|---|
-| `--est-fom soft_constraint` | `soft_constraint` | Figure-of-merit function |
-| `--est-e <u32>` | `1` | Endangered threshold |
-| `--est-k <usize>` | `1` | K-beams (beam width) |
-| `--est-b <usize>` | `1` | Branching factor |
-
-Aliases: `--est-endangered-threshold`, `--est-schedule-states`, `--est-branching-factor`.
-Short flags `-e`, `-k`, and `-b` are not supported; use `--est-e`, `--est-k`, and `--est-b`.
-
-#### HAP options
-
-| Flag | Default | Description |
-|---|---|---|
-| `--hap-num-crus <usize>` | `4` | CRU attempts and survivor cap |
-| `--hap-cru-iterations <usize>` | `128` | Max repair iterations per CRU |
-| `--hap-rho <usize>` | `3` | Candidate window pool size |
-| `--hap-seed <u64>` | `0` | Master RNG seed |
-
----
-
-## Sweep Workflow (End-to-End)
-
-This section walks through the complete workflow: **run many configurations into
-the registry → export the schedules you want → upload to the webapp**.
-
-### Step 1 — Prepare your experiment spec
-
-Copy one of the bundled examples from `lab/` and edit it:
+The repository includes `lab-ctao-adapter` to convert supported CTAO `*_internalSDC.json` datasets into `scheduling_problem.json`:
 
 ```bash
-cp lab/est_sweep.json lab/my_sweep.json
+cargo run -p lab --bin virolai -- dataset adapt CTA-N
+cargo run -p lab --bin virolai -- dataset adapt CTA-S
 ```
 
-Edit `my_sweep.json` to point at your datasets and set the parameter ranges.
+The astronomy datasets shipped with the repository are useful for experiments and regression testing, but they do not define the scheduler's scope.
 
-### Step 2 — Run the sweep (DB-only)
+## Web application
 
-```bash
-cargo run -p lab --bin phd --release -- sweep \
-  --spec lab/my_sweep.json \
-  --run-db .lab/runs.sqlite
-```
-
-- `--release` is recommended for large sweeps (significantly faster).
-- Every successful run is stored in the SQLite registry; no files are written.
-- Re-running is cheap: cells already present are skipped (use `--override` to
-  recompute and refresh their rows).
-- Progress is logged to stderr; each cell runs in parallel.
-
-### Step 3 — Inspect and export schedules from the registry
-
-```bash
-# Browse stored runs
-cargo run -p lab --bin lab -- registry list --run-db .lab/runs.sqlite
-
-# Export a filtered set to a directory (one self-contained JSON per run)
-cargo run -p lab --bin lab -- registry export \
-  --out-dir out/my-sweep \
-  --run-db .lab/runs.sqlite
-
-# Or export a single run by key/prefix
-cargo run -p lab --bin lab -- registry export \
-  --run 9f3a7c --out out/best.json \
-  --run-db .lab/runs.sqlite
-```
-
-Each exported JSON is self-contained: the invariant schedule body recombined
-with that run's own `schedule_metadata` and `schedule_metrics`.
-
-### Step 4 — Start the web app
-
-Using Docker (recommended):
+The webapp provides result storage, comparison, and schedule inspection. Start the Docker stack with:
 
 ```bash
 ./webapp/setup.sh -d
 ```
 
-Or locally (without Docker):
+Default endpoints:
 
-```bash
-PHD_WORKSPACES_DIR=./workspaces cargo run -p webapp --bin webapp
-```
+| Service | Address |
+| --- | --- |
+| Frontend | `http://localhost:3000` |
+| Backend | `http://localhost:8080` |
+| PostgreSQL | `localhost:5432` |
 
-Wait for the backend health endpoint to respond:
+Useful environment variables include `BACKEND_PORT`, `FRONTEND_PORT`, `POSTGRES_PORT`, `RUST_LOG`, and `VIROLAI_WORKSPACES_DIR`. The legacy `PHD_WORKSPACES_DIR` name remains accepted for compatibility.
 
-```bash
-curl http://localhost:8080/health
-```
+`virolai publish` reads `VIROLAI_WEBAPP_URL` and `VIROLAI_WEBAPP_TOKEN`. The previous `PHD_WEBAPP_URL` and `PHD_WEBAPP_TOKEN` names remain accepted as fallbacks.
 
-### Step 5 — Create a result workspace
+## Quality checks
 
-Open `http://localhost:3000/workspace` in your browser.
-
-Scroll to the **Algorithm Results** section at the bottom of the page and click
-**+ New result workspace**. Give it a name (e.g. `EST k/b sweep — SDC North`) and
-press **Create**.
-
-### Step 6 — Upload results to the workspace
-
-Inside the newly created workspace card a drop zone appears. You can:
-
-- **Drag and drop** any number of `.manifest.json` or self-contained schedule `.json`
-  files directly onto it.
-- Click **browse files** to open a file picker (multi-select supported).
-- Click **browse folder** to select an entire directory — all `.json` files in the
-  directory tree are picked up automatically.
-
-The drop zone **auto-detects the file type**:
-
-| File type | How detected | Backend route |
-|---|---|---|
-| Manifest JSON | `manifest_schema_version` field present | `POST /v1/workspaces/{id}/manifests` |
-| Schedule JSON | No `manifest_schema_version` field | `POST /v1/workspaces/{id}/schedules` (server builds the manifest) |
-
-For each file the status updates inline:
-
-| Status | Meaning |
-|---|---|
-| ⏳ uploading | Upload in progress |
-| ✅ created | New result stored |
-| ♻️ duplicate | Already present (idempotent — safe to re-upload) |
-| ❌ error | Upload failed — hover to see the error message |
-
-After uploading, click **Clear uploaded** to hide the completed entries.
-
-> **Tip:** A fast workflow is `lab registry export --out-dir out/my-sweep`
-> followed by drag-and-drop of the entire `out/my-sweep/` folder onto the drop
-> zone. Self-contained schedule JSONs are converted to manifests server-side.
-
----
-
-## Web App
-
-### Docker Stack
-
-```bash
-./webapp/setup.sh          # foreground (logs in terminal)
-./webapp/setup.sh -d       # detached (runs in background)
-./webapp/teardown.sh       # stop all services
-./webapp/teardown.sh --purge-db   # stop and delete the database volume
-```
-
-Services:
-
-| Service | URL | Notes |
-|---|---|---|
-| Frontend | `http://localhost:3000` | React UI |
-| Backend | `http://localhost:8080` | PhD adapter + TSI API |
-| PostgreSQL | `localhost:5432` | Schedule/environment storage |
-
-#### Optional environment variables
-
-| Variable | Default | Description |
-|---|---|---|
-| `BACKEND_PORT` | `8080` | Backend listen port |
-| `FRONTEND_PORT` | `3000` | Frontend listen port |
-| `POSTGRES_PORT` | `5432` | PostgreSQL port |
-| `POSTGRES_USER` | `tsi` | Database user |
-| `POSTGRES_PASSWORD` | `tsi` | Database password |
-| `POSTGRES_DB` | `tsi` | Database name |
-| `RUST_LOG` | `info` | Tracing filter for the backend |
-| `PHD_WORKSPACES_DIR` | `./workspaces` | Directory for manifest/workspace storage (local backend) |
-
-### Local Backend (without Docker)
-
-Run only the backend server:
-
-```bash
-PHD_WORKSPACES_DIR=./workspaces \
-cargo run -p webapp --bin webapp
-```
-
-Listens on `http://localhost:8080` by default. Adjust with `HOST` and `PORT`
-environment variables.
-
-### Webapp Sections
-
-| Section | Location | Purpose |
-|---|---|---|
-| Schedule Management | `/schedules` | Browse and manage all uploaded schedules |
-| Workspace | `/workspace` | Group runs by cohort, compare manifests, drill down into schedules |
-
-**Workspace page** is the single home for comparable runs. Each workspace
-contains uploaded **manifests** (lightweight, canonical exchange format)
-and optionally the **full schedules** they reference. Results are grouped
-by cohort — `(dataset, observatory, period, block_pool_hash)` — so the
-summary table works on manifest metrics alone, while the per-block table
-appears only when at least one schedule has been persisted.
-
-The upload area accepts mixed batches of `manifest.json` and self-contained
-`schedule.json` files (drag-and-drop a folder). Standalone
-`schedule_metrics.json` files are rejected; metrics live inside the
-manifest envelope.
-
----
-
-## Data Model
-
-### Scheduling Problem (`scheduling_problem.json`)
-
-Described by [`schemas/scheduling_problem/scheduling_problem.schema.json`](schemas/scheduling_problem/scheduling_problem.schema.json).
-
-```json
-{
-  "resources": [
-    {
-      "id": 0,
-      "name": "CTA-N",
-      "location": { "longitude_deg": -17.89, "latitude_deg": 28.76, "height_m": 2396.0 },
-      "hard_constraints": {
-        "night_time": { "twilight": "Nautical" },
-        "moon_altitude": { "min_deg": -90.0, "max_deg": 0.0 }
-      }
-    }
-  ],
-  "schedule_time_window": { "start_mjd_utc": 61710.0, "end_mjd_utc": 62076.0 },
-  "scheduling_blocks": [
-    {
-      "id": 1,
-      "tasks": [
-        {
-          "id": 1,
-          "name": "target-1",
-          "requested_duration_sec": 1200.0,
-          "target": { "ra_deg": 83.8, "dec_deg": 22.0 },
-          "hard_constraints": {},
-          "soft_constraints": { "priority": 5.0 }
-        }
-      ],
-      "dependencies": []
-    }
-  ]
-}
-```
-
-### Schedule Output
-
-Each schedule JSON exported from the registry (`lab registry export`) embeds:
-
-- `schedule_metadata` — algorithm id, config, dataset id/label, scheduling horizon
-- `schedule_metrics` — completion rates, priority statistics, gap analysis,
-  fragmentation metrics
-- The original problem structure annotated with `scheduled`, `scheduled_start_mjd_utc`,
-  `scheduled_end_mjd_utc` per task
-
-### Manifest
-
-A manifest is a lightweight result record that references a schedule run. It is the
-primary exchange artifact between the CLI and the webapp's Algorithm Results section.
-Described by [`schemas/scheduling_statistics/manifest.schema.json`](schemas/scheduling_statistics/manifest.schema.json).
-
-Key fields:
-
-```json
-{
-  "manifest_schema_version": "1.0.0",
-  "manifest_id": "<uuid>",
-  "created_at": "<rfc3339>",
-  "producer":   { "name": "phd", "version": "..." },
-  "dataset":    { "id": "isdc_n", "name": "SDC North", ... },
-  "algorithm":  { "id": "est", "label": "EST", "config": { ... } },
-  "run":        { "run_id": "...", "kind": "matrix_cell", "status": "completed" },
-  "horizon":    { "start_mjd_utc": 61771.0, "end_mjd_utc": 62137.0 },
-  "metrics":    { ... }
-}
-```
-
----
-
-## Datasets
-
-The repository ships ready-to-use scheduling problem files under `data/`:
-
-| File | Observatory | Period |
-|---|---|---|
-| `data/isdc_n.json` | SDC North (CTAO-N) | Full year |
-| `data/isdc_s.json` | SDC South (CTAO-S) | Full year |
-| `data/lst_2024.json` | LST | 2024 |
-| `data/lst_2025.json` | LST | 2025 |
-| `data/lst_2026.json` | LST | 2026 |
-
-To convert a raw CTAO dataset directory:
-
-```bash
-cargo run -p lab --bin phd -- dataset adapt CTA-N
-cargo run -p lab --bin phd -- dataset adapt CTA-S
-# or with explicit paths:
-cargo run -p lab --bin phd -- dataset adapt data/my_ctao_dir data/my_ctao_dir/scheduling_problem.json
-```
-
----
-
-## QA
-
-```bash
-cargo clippy --workspace --exclude tsi-rust --all-targets -- -D warnings
-cargo fmt --all -- --check
-cargo test --workspace --exclude tsi-rust --all-features
-```
-
-Shortcut:
+Run the repository QA pipeline before merging changes:
 
 ```bash
 ./scripts/qa-pipeline.sh
 ```
 
-Auto-fix formatting:
+Equivalent commands:
 
 ```bash
-cargo fmt --all
-```
-
----
-
-#### Export a schedule from the registry
-
-```bash
-cargo run -p lab --bin lab -- registry export \
-  --run-db .lab/runs.sqlite \
-  --run 9f3a7c \
-  --out out/best-density.json
+cargo clippy --workspace --exclude tsi-rust --all-targets -- -D warnings
+cargo fmt --all -- --check
+cargo test --workspace --exclude tsi-rust --all-features
 ```
